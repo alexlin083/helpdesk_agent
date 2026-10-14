@@ -1,0 +1,10 @@
+# EB CLI 部署包忽略規則；有此檔案時不再使用 .gitignore。
+.env
+.env.*
+!.env.example
+node_modules/
+.git/
+.elasticbeanstalk/
+tests/
+*.log
+.DS_Store

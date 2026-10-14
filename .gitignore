@@ -1,0 +1,10 @@
+# Dependencies in any directory
+node_modules/
+
+# Environment variables and secrets in any directory
+.env
+.env.*
+
+# Safe templates may be committed; never put real secrets in these files
+!.env.example
+!.env.sample
