@@ -58,12 +58,67 @@ GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 
 ## 本機與 AWS 環境參數
 
+### 登入、限流與配額
+
+帳號為 `admin1`～`admin10`，對應 `user-admin1`～`user-admin10`；預設密碼皆為 `123456`，只在後端比對，可用 `DEMO_PASSWORD` 覆寫。前端不再保存或比對密碼。登入成功簽發 HS256 JWT，預設兩小時有效，對話與用量查詢需要 Bearer 憑證。
+
+| 環境參數 | 預設 | 用途 |
+| --- | --- | --- |
+| `AUTH_SECRET` | 本機隨機、production 必填 | 至少 32 bytes 的隨機簽章金鑰，多個 instance 必須相同 |
+| `AUTH_TTL_SECONDS` | 7200 | 憑證有效秒數 |
+| `DEMO_PASSWORD` | 123456 | 十個帳號共用的課堂密碼 |
+| `CHAT_COOLDOWN_SECONDS` | 10 | 帳號獲准執行後的冷卻秒數 |
+| `USER_DAILY_LIMIT` | 30 | 每帳號每日可獲准執行次數 |
+| `GLOBAL_DAILY_LIMIT` | 100 | 所有帳號共用的每日上限，不因帳號增為十個而自動增加 |
+| `GLOBAL_CONCURRENCY` | 2 | 全站同時處理上限，每帳號固定同時一筆 |
+| `LOGIN_FAILURE_LIMIT` | 10 | 每 IP 在視窗內可失敗次數 |
+| `LOGIN_WINDOW_SECONDS` | 900 | 登入失敗視窗；達上限後即使正確帳密也需等待 |
+| `LIMIT_STORE` | 本機 memory、production dynamodb | 限制狀態儲存，production 拒絕 memory |
+| `LIMIT_TABLE` | 無 | DynamoDB 表格名稱 |
+| `AWS_REGION` | 無 | DynamoDB 所在區域；亦可用 AWS_DEFAULT_REGION |
+| `TRUST_PROXY` | 不信任代理 | 依實際代理鏈填可信任 IP、網段或 hop 數，勿盲目填 true |
+
+冷卻、並行與每日用量皆在呼叫 Gemini 前檢查。帳號與全站每日配額一起預扣，獲准後的上游錯誤也計入，不退額；拒絕或輸入／身分驗證失敗不扣額。台北午夜重置每日計數，但不清除執行中租約或冷卻。這是 Agent 次數上限，不是金額或 token 保證，一次 Agent 可包含多個上游 API 呼叫。
+
+本機記憶體模式只適用單一程序，重啟會歸零。未設定 AUTH_SECRET 時本機使用暫時金鑰，重啟後需重新登入。要在本機保留相同簽章金鑰，可自行產生隨機值放入 `.env`；勿提交或分享：
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+登出只清除前端分頁憑證，舊 JWT 到期前仍有效，沒有逐筆撤銷清單。修改 DEMO_PASSWORD 不會撤銷已簽發憑證；需要使全部憑證失效時更換 AUTH_SECRET 並重新部署所有 instance。
+
+### AWS 配額儲存設定
+
+上雲前需另外建立 DynamoDB 表格，設定 **partition key `pk`（String），不設 sort key**。本次程式變更沒有建立或部署任何 AWS 資源。
+
+在 EB 設定 `NODE_ENV=production`、`LIMIT_STORE=dynamodb`、`LIMIT_TABLE=<表格名稱>`、`AWS_REGION=<表格區域>`、`AUTH_SECRET=<隨機金鑰>`，以及既有 Gemini、CORS 設定。所有 instance 使用相同表格與簽章金鑰；每個獨立部署請使用各自的表格，避免共用配額。
+
+讓 EB EC2 instance profile 具有該表格的 `dynamodb:GetItem` 與 `dynamodb:PutItem` 權限。使用 AWS SDK 的預設憑證鏈，不把 AWS access key 放進原始碼。範例 IAM policy（替換 region、account-id、table-name）：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+    "Resource": "arn:aws:dynamodb:<region>:<account-id>:table/<table-name>"
+  }]
+}
+```
+
+儲存器使用強一致讀取與單項目的版本條件寫入，原子性更新帳號配額、全站配額、冷卻、並行租約與登入失敗計數。版本競爭最多重算八次；其他儲存錯誤回傳 503，不自動降級放行。寫入結果不明時可能保守消耗配額，但不呼叫 Gemini。此單項目設計適合本課堂規模，並非高流量架構；資料不依賴 TTL 刪除來判定重置。[AWS 版本控制說明](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_ImplementingVersionControl.html)
+
+並行租約為 180 秒，成功或失敗會以租約 ID 釋放；程序崩潰後可於到期復原，舊請求不會釋放新租約。Agent 各上游階段目前逾時 30 秒；若日後增加重試、排隊或更長的執行階段，需一起調整租約與測試。
+
+IP 登入保護只相信 Express 判定的 req.ip。EB 的負載平衡器與反向代理需依實際拓撲設定 TRUST_PROXY，並確保無繞過代理的公開路徑；同一學校 NAT 的同學可能共用 IP，帳號聊天配額則以驗證後身分分開。[Express 代理設定](https://expressjs.com/en/guide/behind-proxies/)
+
 所有業務程式透過 `config/env.js` 的 `env` 取得設定：
 
 - 本機（預設 `development`）：使用固定路徑載入 `backend/.env`，從其他目錄啟動也適用。
 - 已存在於 `process.env` 的環境參數優先於 `.env`，不會被覆寫。
 - `NODE_ENV=production`：完全不讀取 `.env`，只使用平台環境參數。
-- production 缺少 `GEMINI_API_KEY` 或 `CORS_ORIGIN` 時立即停止啟動，錯誤只顯示參數名稱。
+- production 缺少 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`、DynamoDB 表格或區域設定時停止啟動，錯誤不輸出金鑰值。
 
 請將 `NODE_ENV` 設在 shell 或平台上，而非 `.env`，讓程式在載入檔案前決定模式。
 Gemini 金鑰只供 backend 使用，不應放在 frontend 的任何設定中。
@@ -102,19 +157,60 @@ Elastic Beanstalk 本身不收額外服務費，但 EC2、儲存與其他資源�
 能否免費取決於帳號的 Free Tier／額度與實際資源使用。
 [AWS 費用說明](https://aws.amazon.com/elasticbeanstalk/faqs/)
 
-## API
+## 日誌與 Gemini 串接排查
+
+後端以單行 JSON 輸出日誌。預設 `LOG_LEVEL=info`；需要詳細診斷時，在 `backend/.env` 加入
+`LOG_LEVEL=debug` 並重新啟動。也可從 shell 暫時啟用：
+
+```bash
+cd backend
+LOG_LEVEL=debug npm start
+```
+
+可用等級為 `debug`、`info`、`warn`、`error`、`silent`。正式環境使用平台環境變數。
+設定不會修改 `.env` 的真實金鑰；debug 亦不輸出問題、文件、回答原文、原始 SDK 錯誤或金鑰。
+
+排查順序：
+
+1. 啟動後查看 `server.started`：確認 `credentialsConfigured=true`、`model`、`embeddingModel`、port 及 CORS origin。這只代表已設定金鑰，不代表金鑰有效或 Gemini 已連線。
+2. 前端送出問題後，找出 `http.request.started`，用相同 `requestId` 追蹤後續日誌。
+3. `gemini.embedding.started` 的 `taskType=RETRIEVAL_DOCUMENT` 是首次建立文件索引，`RETRIEVAL_QUERY` 是問題向量；`gemini.generate.started` 才是推理呼叫。
+4. 遇到 `gemini.embedding.failed` 或 `agent.failed`，查看 `stage`、`upstreamStatus`、`reason`、`hint`、`model`。若檢索先失敗，本次不會進入推理呼叫。
+5. 成功時會看到 `agent.completed` 及 HTTP 200；debug 另有索引快取、向量維度、回應長度與 token 使用量。`gemini.generate.completed` 只表示上游呼叫完成，仍須通過解析與驗證。
+
+| 診斷原因 | 排查方向 |
+| --- | --- |
+| `API_KEY_INVALID`／`MISSING_API_KEY` | 後端金鑰是否有效、環境參數是否覆蓋 `.env`、是否已重新啟動 |
+| `MODEL_NOT_FOUND` | 失敗階段所用模型是否存在、支援該 API 且可由目前專案存取 |
+| `ACCESS_DENIED` | 金鑰限制、API 啟用、權限與地區限制 |
+| `RATE_LIMIT_OR_QUOTA` | 專案配額、速率限制及計費狀態 |
+| `INVALID_ARGUMENT` | embedding 參數或推理結構化輸出 schema 與模型是否相容 |
+| `NETWORK_ERROR`／`TIMEOUT` | DNS、代理、防火牆、TLS 與連線品質；有可辨識的網路代碼時顯示 `networkCode` |
+| `INVALID_EMBEDDING`／`INVALID_AI_RESPONSE` | API 回傳內容未通過向量、JSON 或欄位驗證 |
+| `UPSTREAM_UNAVAILABLE`／`UNKNOWN` | 上游服務狀態；未知錯誤保留為未知，不以猜測當成根因 |
+
+前端仍遵守既有 API 錯誤格式，不接收供應商內部錯誤。若需分享排查資訊，可提供失敗事件的安全日誌，不必提供 `.env`。
+
+## API 端點
 
 | 方法 | 路徑 | 用途 |
 | --- | --- | --- |
 | GET | `/api/health` | 檢查伺服器是否運作，不檢查 Gemini 連線 |
+| POST | `/api/auth/login` | 驗證十組帳號並取得登入憑證 |
+| GET | `/api/agent/usage` | 以 Bearer 憑證查詢剩餘配額，不消耗 Agent 次數 |
 | POST | `/api/agent/chat` | Top-3 檢索、意圖辨識、信心評估與工單分流 |
 | OPTIONS | `/api/agent/chat` | CORS 預檢，由 middleware 處理 |
 
 ```bash
 curl http://localhost:3000/api/health
+curl -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin1","password":"123456"}'
+# 將登入回應的 token 填入下方，勿提交實際 token。
 curl -X POST http://localhost:3000/api/agent/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"請問如何重設密碼？"}'
+  -H 'Authorization: Bearer <token>' \
+  -d '{"message":"請問如何重設密碼？","userID":"user-admin1"}'
 ```
 
 `message` 必須是非空白字串，去除首尾空白後最長 500 個 Unicode code points；JSON 本文上限 16 KB。
@@ -139,9 +235,8 @@ curl -X POST http://localhost:3000/api/agent/chat \
 ```
 
 對話成功直接回傳規格書的物件，不包 `success` 或 `data`。
-錯誤使用 400 `INVALID_PAYLOAD`、429 `RATE_LIMIT_EXCEEDED`、500 `SERVER_ERROR`。
-另外保留未知路由 404 與超過 JSON 大小限制的 413；429 回應附 `Retry-After: 10`。
-目前 429 來自 Gemini 推理或 embedding 限流，尚未實作後端使用者流量限制。
+錯誤包含 400 輸入無效、401 未登入／登入失敗、403 身分不符、429 冷卻／每日配額／處理中、503 全站忙碌／儲存故障，以及原有上游錯誤。完整代碼以專案 API 規格書為準。
+保留未知路由 404 與 JSON 大小限制 413；有等待期限時回傳 `Retry-After` 與 `error.retry_after`（秒），不是固定十秒。對話成功回應另有 `X-User-Remaining`、`X-Global-Remaining` 標頭，CORS 已公開供前端讀取。
 
 ## Agent 與知識庫
 
@@ -211,8 +306,7 @@ GitHub Pages 前端應呼叫已實際配置 HTTPS 的後端網址。
 `router.use('/knowledge', knowledgeRoutes)`，將請求處理放在 `controllers/knowledgeController.js`。
 需要業務邏輯時再建立 service；工單資料已包含於 chat 回應，不需獨立建立工單 API。
 
-此版本供本機開發，尚未加入登入驗證與流量限制。CORS 只控制瀏覽器跨來源讀取，
-不會阻擋其他客戶端；公開對話 API 前應加入驗證與流量限制，以控制 Gemini 使用額度。
+目前已加入後端登入驗證與限制。CORS 只控制瀏覽器跨來源讀取，不代替身分驗證；正式部署須完成上述簽章金鑰、DynamoDB 與代理設定。
 
 SDK 與錯誤處理參考：[Gemini SDK](https://googleapis.github.io/js-genai/release_docs/classes/types.GenerateContentResponse.html)、
 [Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)。

@@ -3,6 +3,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { env } from '../config/env.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { createKnowledgeRetriever } from './knowledgeService.js';
+import { logger, diagnoseError } from '../utils/logger.js';
 
 export const INTENTS = ['IT_SUPPORT', 'HR_POLICY', 'HARDWARE_FACILITY', 'UNKNOWN'];
 const LEVELS = ['P1_URGENT', 'P2_HIGH', 'P3_NORMAL'];
@@ -88,17 +89,44 @@ export function buildAgentDecision(result, documents, message) {
 }
 
 let client;
+/**
+ * 延遲建立並重用 Gemini SDK client，不在啟動時呼叫外部服務。
+ * @returns {GoogleGenAI} 已設定後端金鑰的 client。
+ * @throws {HttpError} 未設定金鑰時拒絕執行對話。
+ */
 function getClient() {
   if (!env.geminiApiKey) throw new HttpError(500, 'SERVER_ERROR', '尚未設定 Gemini API 金鑰');
   client ??= new GoogleGenAI({ apiKey: env.geminiApiKey });
   return client;
 }
 
+/**
+ * 建立可注入依賴的 Agent，依序執行檢索、推理、解析與後端決策驗證。
+ * @param {object} [options={}] Agent 設定。
+ * @param {Function} [options.getAI=getClient] SDK client 取得函式。
+ * @param {Function} [options.retrieve] 文件檢索函式。
+ * @param {string} [options.model=env.geminiModel] 推理模型名稱。
+ * @returns {(message: string) => Promise<object>} 單次問答處理函式。
+ */
 export function createHelpdeskAgent({ getAI = getClient, retrieve = createKnowledgeRetriever(), model = env.geminiModel } = {}) {
-  return async (message) => {
+  /**
+   * 執行單次問答並記錄每一階段；日誌只包含長度、模型、耗時及分類，不包含原文。
+   * @param {string} message 經 controller 驗證的使用者問題。
+   * @returns {Promise<object>} 符合 API 合約的決策結果。
+   * @throws {HttpError} 保留既有 429／500 錯誤合約，詳細診斷僅記於伺服器。
+   */
+  return async function runAgent(message) {
+    const started = Date.now();
+    let stage = 'client.initialize';
+    logger('info', 'agent.started', { model, inputLength: Array.from(message).length });
     try {
       const ai = getAI();
+      stage = 'knowledge.retrieve';
       const documents = await retrieve(message, ai);
+      stage = 'gemini.generate';
+      const inferenceStarted = Date.now();
+      logger('info', 'gemini.generate.started', { model, documentCount: documents.length });
+      logger('debug', 'gemini.generate.config', { temperature: 0.2, maxOutputTokens: 4096, timeoutMs: 30000, responseMimeType: 'application/json' });
       const response = await ai.models.generateContent({
         model,
         contents: JSON.stringify({ user_message: message, retrieved_contexts: documents }),
@@ -107,10 +135,32 @@ export function createHelpdeskAgent({ getAI = getClient, retrieve = createKnowle
           temperature: 0.2, maxOutputTokens: 4096, httpOptions: { timeout: 30000 },
         },
       });
+      logger('info', 'gemini.generate.completed', { model, durationMs: Date.now() - inferenceStarted });
+      logger('debug', 'gemini.generate.metadata', {
+        candidateCount: response.candidates?.length ?? 0,
+        inputUsage: response.usageMetadata?.promptTokenCount,
+        candidateUsage: response.usageMetadata?.candidatesTokenCount,
+        totalUsage: response.usageMetadata?.totalTokenCount,
+        hasOutput: typeof response.text === 'string' && response.text.length > 0,
+        outputLength: response.text?.length ?? 0,
+      });
+      stage = 'response.parse';
       let result;
       try { result = JSON.parse(response.text); } catch { throw invalidOutput(); }
-      return buildAgentDecision(result, documents, message);
+      stage = 'response.validate';
+      const decision = buildAgentDecision(result, documents, message);
+      logger('info', 'agent.completed', { durationMs: Date.now() - started, intent: decision.intent,
+        confidence: decision.confidence_score, route: decision.action_route });
+      return decision;
     } catch (error) {
+      const diagnostic = diagnoseError(error);
+      if (error instanceof HttpError) {
+        delete diagnostic.upstreamStatus;
+        diagnostic.reason = stage === 'client.initialize' ? 'MISSING_API_KEY' : 'INVALID_AI_RESPONSE';
+        diagnostic.hint = stage === 'client.initialize' ? '請設定後端 GEMINI_API_KEY 後重新啟動。'
+          : '檢查 response.parse／response.validate 階段與 debug 回應長度；AI 輸出未通過 JSON 或欄位驗證。';
+      }
+      logger('error', 'agent.failed', { stage, model, durationMs: Date.now() - started, ...diagnostic });
       if (error instanceof HttpError) throw error;
       if (error?.status === 429) throw new HttpError(429, 'RATE_LIMIT_EXCEEDED', '系統繁忙中，請稍後 10 秒再試');
       // 不輸出供應商錯誤原文，避免洩漏金鑰與使用者內容。

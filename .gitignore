@@ -8,3 +8,15 @@ node_modules/
 # Safe templates may be committed; never put real secrets in these files
 !.env.example
 !.env.sample
+
+# Local system files, logs, and private credentials
+.DS_Store
+*.log
+*.log.*
+.aws/
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+coverage/

@@ -18,7 +18,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 * **基礎 API 網址 (Base URL)**：`https://<aws-beanstalk-domain>.elasticbeanstalk.com`
 * **資料傳輸格式 (Content-Type)**：`application/json; charset=utf-8`
-* **跨網域存取控制 (CORS)**：後端必須允許來源網域 `https://<github-username>.github.io`，並開放 `POST` 與 `OPTIONS` 請求方法。
+* **跨網域存取控制 (CORS)**：後端必須允許來源網域 `https://<github-username>.github.io`，並開放 `GET`、`POST` 與 `OPTIONS` 請求方法。
 * **環境變數管理**：敏感資訊如 `GEMINI_API_KEY` 嚴禁包含於前端代碼或程式庫中，統一交由 AWS Elastic Beanstalk 後端環境變數進行管理。
 
 ---
@@ -39,6 +39,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | --- | --- | --- |
 | `Content-Type` | `application/json` | 指定請求主體格式為 JSON |
 | `Accept` | `application/json` | 指定預期接收之回應格式為 JSON |
+| `Authorization` | `Bearer <token>` | 對話與用量端點必填，token 由後端登入核發 |
 
 ### 請求主體 (Request Body)
 
@@ -47,6 +48,60 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | 欄位名稱 (Field) | 資料型別 (Type) | 必填 (Required) | 說明與限制 (Description & Constraints) |
 | --- | --- | --- | --- |
 | `message` | `string` | 是 | 使用者輸入之提問文字，長度介於 1 至 500 字元之間 |
+| `userID` | `string` | 是 | 固定識別碼，例如 `user-admin1`；必須與驗證後憑證身分相同，配額以憑證身分計算 |
+
+### 課堂展示登入與 userID
+
+前端首頁為登入頁 `index.html`，後端驗證成功後導向 `chat.html`。帳號限定 `admin1`～`admin10`，預設密碼皆為 `123456`（可由後端 `DEMO_PASSWORD` 覆寫）。其他帳號顯示「查無使用者」，已知帳號密碼不符顯示「密碼錯誤」。
+
+| 帳號 | 固定 userID |
+| --- | --- |
+| `admin1` | `user-admin1` |
+| `admin2` | `user-admin2` |
+| `admin3` | `user-admin3` |
+| `admin4` | `user-admin4` |
+| `admin5` | `user-admin5` |
+| `admin6` | `user-admin6` |
+| `admin7` | `user-admin7` |
+| `admin8` | `user-admin8` |
+| `admin9` | `user-admin9` |
+| `admin10` | `user-admin10` |
+
+`POST /api/auth/login` 接收 `{ "username": "admin1", "password": "123456" }`，成功回傳 `{ "token": "<JWT>", "expiresAt": 1790000000000, "user": { "username": "admin1", "userID": "user-admin1" } }`；`expiresAt` 是 epoch 毫秒，範例數值僅示意。JWT 以 HS256 簽署，預設兩小時有效，驗證簽章、期限、發行者與受眾。
+
+前端只在 sessionStorage 保存後端核發的憑證、期限及身分，不保存密碼、不在前端比對密碼。對話與用量 API 必須傳送 `Authorization: Bearer <token>`；對話本文另傳 `userID`，與憑證不符時回傳 403。前端登出清除本分頁憑證，不代表伺服器撤銷；舊憑證在期限內仍有效。變更簽章金鑰會使既有憑證失效。
+
+### 限流與配額
+
+| 項目 | 預設限制 | 環境參數 |
+| --- | --- | --- |
+| 帳號冷卻 | 每次獲准執行後至少 10 秒 | `CHAT_COOLDOWN_SECONDS` |
+| 帳號並行 | 同時 1 筆 | 固定 |
+| 全站並行 | 同時 2 筆 | `GLOBAL_CONCURRENCY` |
+| 帳號每日配額 | 30 次 | `USER_DAILY_LIMIT` |
+| 全站每日配額 | 100 次，十組帳號共同使用 | `GLOBAL_DAILY_LIMIT` |
+| 登入失敗 | 每 IP 每 15 分鐘最多 10 次，封鎖後正確帳密也需等待 | `LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS` |
+
+後端先驗證憑證、輸入及 userID，再原子性檢查冷卻／並行／配額並預扣一次 Agent 用量，之後才呼叫 Gemini。被拒絕的請求不扣額；獲准後的上游錯誤仍計入用量，不自動重送。一次 Agent 包含多個上游 API 呼叫，次數配額不等同金額或 token 上限。每天台北時間 00:00 重置每日計數，跨午夜仍保留冷卻與執行中租約。
+
+記憶體模式僅供本機單一程序，重啟會歸零。production 強制要求 DynamoDB，透過同一項目的版本條件寫入，同時更新帳號／全站配額與租約，避免多 instance 超額。儲存故障時回傳 503，不退回記憶體放行。程序崩潰的租約最多保留 180 秒；失敗的配額不退還。此單項目方案適用本課堂規模，不作高流量用途。
+
+前端送出後保留至少十秒倒數；請求完成後依用量 API 的剩餘冷卻更新。後端拒絕請求時提供實際等待時間；每日額度耗盡僅顯示午夜重置提示，不啟動數萬秒倒數。重新整理或多分頁也受到後端限制。
+
+`GET /api/agent/usage` 需登入，不扣 Agent 配額、不呼叫 Gemini，回傳：
+
+```json
+{
+  "userDailyLimit": 30,
+  "userRemaining": 29,
+  "globalDailyLimit": 100,
+  "globalRemaining": 99,
+  "resetAt": "2026-10-15T16:00:00.000Z",
+  "cooldownSeconds": 8
+}
+```
+
+對話成功 JSON 維持既有欄位，另以 `X-User-Remaining`、`X-Global-Remaining` 回應標頭提供預扣後剩餘次數。CORS 允許 `Authorization`，並公開 `Retry-After` 與上述兩個用量標頭給前端讀取。
 
 ---
 
@@ -119,7 +174,8 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 #### 請求 JSON (Request)
 ```json
 {
-  "message": "VPN 連不上如何排查？"
+  "message": "VPN 連不上如何排查？",
+  "userID": "user-admin1"
 }
 ```
 
@@ -153,7 +209,8 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 #### 請求 JSON (Request)
 ```json
 {
-  "message": "辦公室螢幕狂閃冒煙了！"
+  "message": "辦公室螢幕狂閃冒煙了！",
+  "userID": "user-admin2"
 }
 ```
 
@@ -228,9 +285,15 @@ Rule: If information in retrieved context is insufficient or query indicates eme
 | --- | --- | --- | --- |
 | `200 OK` | N/A | 請求處理成功，順利回傳 Agent 對話與決策資料 | 正常解構 JSON 並更新對話與戰情室 UI |
 | `400 Bad Request` | `INVALID_PAYLOAD` | 請求格式非合法 JSON 或 `message` 欄位空白 | 彈出警告訊息提醒使用者輸入有效文字 |
-| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED` | Gemini API 免費層或後端流量超出限制 | 提示使用者「系統繁忙中，請稍後 10 秒再試」 |
+| `401 Unauthorized` | `UNAUTHORIZED`、`USER_NOT_FOUND`、`INVALID_CREDENTIALS` | 憑證無效或登入失敗 | 提示錯誤；對話憑證失效時回登入頁 |
+| `403 Forbidden` | `USER_ID_MISMATCH` | 本文 userID 與憑證不符 | 不送往 Gemini |
+| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | 冷卻、處理中、登入失敗過多或 Gemini 限流 | 依 `retry_after` 與 `Retry-After` 等待 |
+| `429 Too Many Requests` | `DAILY_QUOTA_EXCEEDED`、`GLOBAL_QUOTA_EXCEEDED` | 帳號或全站今日額度耗盡 | 顯示台北午夜重置提示 |
+| `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE` | 全站並行滿載或限制儲存無法使用 | 稍後重試，不自動重送 |
 | `500 Internal Error` | `SERVER_ERROR` | 後端向量計算失敗或 Gemini API 服務異常 | 顯示系統維護提示，並解除前端傳送按鈕鎖定 |
 
 
 
-###### tags: `中原資管碩` `人工智慧與流程自動化實務研討` 
+###### tags: `中原資管碩` `人工智慧與流程自動化實務研討`
+
+有限制等待時間的錯誤會在 `error` 增加 `retry_after`（整數秒），並回傳相同的 `Retry-After` 標頭；Gemini 上游 429 未提供本地等待值時使用十秒。

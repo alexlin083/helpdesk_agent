@@ -35,7 +35,7 @@ test('production 忽略 .env，使用平台參數及 PORT', () => {
   withFixture((envFile) => {
     const config = loadEnv({
       environment: {
-        NODE_ENV: 'production', GEMINI_API_KEY: 'fake-cloud-key',
+        NODE_ENV: 'production', GEMINI_API_KEY: 'fake-cloud-key', AUTH_SECRET: 'a'.repeat(32), LIMIT_TABLE: 'test', AWS_REGION: 'us-east-1',
         CORS_ORIGIN: 'https://example.github.io', PORT: '8080', GEMINI_MODEL: 'test-model',
       },
       envFile,

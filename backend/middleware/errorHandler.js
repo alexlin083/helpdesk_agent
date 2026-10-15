@@ -1,3 +1,5 @@
+import { logger } from '../utils/logger.js';
+
 export class HttpError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -10,6 +12,14 @@ export function notFound(req, res, next) {
   next(new HttpError(404, 'NOT_FOUND', '找不到此 API'));
 }
 
+/**
+ * 將例外轉成統一 JSON，限流提供實際重試時間；不輸出憑證與供應商錯誤。
+ * @param {Error} error 捕捉的例外。
+ * @param {import('express').Request} req 請求。
+ * @param {import('express').Response} res 回應。
+ * @param {import('express').NextFunction} next 標頭已傳送時交給 Express。
+ * @returns {void}
+ */
 export function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
 
@@ -31,6 +41,8 @@ export function errorHandler(error, req, res, next) {
     console.error('未預期的伺服器錯誤');
   }
 
-  if (status === 429) res.set('Retry-After', '10');
-  res.status(status).json({ error: { code, message } });
+  const retryAfter = error.retryAfter || (status === 429 ? 10 : undefined);
+  logger(status >= 500 ? 'error' : 'warn', 'http.request.rejected', { status, code, retryAfter });
+  if (retryAfter) res.set('Retry-After', String(retryAfter));
+  res.status(status).json({ error: { code, message, ...(retryAfter ? { retry_after: retryAfter } : {}) } });
 }

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="登入企業智慧服務台課堂展示。">
+    <title>登入 · 企業智慧服務台</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/login.js"></script>
+  </head>
+  <body class="login-page">
+    <main class="login-card">
+      <span class="brand-icon" aria-hidden="true">✦</span>
+      <span class="eyebrow">HELPDESK AGENT</span>
+      <h1>登入企業智慧服務台</h1>
+      <p class="login-intro">使用課堂帳號登入，開始詢問工作上的疑問。</p>
+      <form id="login-form" class="login-form">
+        <label for="username">帳號</label>
+        <input id="username" name="username" autocomplete="username" placeholder="請輸入帳號" required autofocus>
+        <label for="password">密碼</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="請輸入密碼" required>
+        <p id="login-error" class="login-error" role="alert"></p>
+        <button class="send-button" type="submit">登入服務台 ↗</button>
+      </form>
+      <p class="login-footnote">企業知識庫檢索 · Gemini 智慧回覆</p>
+    </main>
+  </body>
+</html>

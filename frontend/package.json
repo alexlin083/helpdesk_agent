@@ -1,0 +1,9 @@
+{
+  "name": "helpdesk-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --bind localhost",
+    "test": "node --test"
+  }
+}
