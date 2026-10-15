@@ -51,6 +51,8 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
   const limitTable = environment.LIMIT_TABLE || '';
   const awsRegion = environment.AWS_REGION || environment.AWS_DEFAULT_REGION || '';
   if (limitStore === 'dynamodb' && (!limitTable || !awsRegion)) throw new Error('dynamodb 需要 LIMIT_TABLE 與 AWS_REGION');
+  const demoPassword = environment.DEMO_PASSWORD;
+  if (typeof demoPassword !== 'string' || !demoPassword.trim()) throw new Error('缺少必要環境參數：DEMO_PASSWORD');
 
   /**
    * 讀取正整數限制參數，拒絕無效值以防啟動後保護失效。
@@ -67,7 +69,7 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
 
   return Object.freeze({
     authSecret, limitStore, limitTable, awsRegion,
-    demoPassword: environment.DEMO_PASSWORD || '123456',
+    demoPassword,
     authTtlSeconds: positive('AUTH_TTL_SECONDS', 7200),
     chatCooldownSeconds: positive('CHAT_COOLDOWN_SECONDS', 10),
     userDailyLimit: positive('USER_DAILY_LIMIT', 30),

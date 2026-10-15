@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.NODE_ENV = 'test';
+process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 const { buildAgentDecision, createHelpdeskAgent } = await import('../services/geminiAgent.js');
 const { createKnowledgeRetriever, cosineSimilarity } = await import('../services/knowledgeService.js');

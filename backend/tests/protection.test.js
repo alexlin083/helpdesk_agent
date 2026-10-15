@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
+process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.LIMIT_STORE = 'memory';
 process.env.GEMINI_API_KEY = '';
 process.env.LOG_LEVEL = 'silent';
@@ -19,7 +20,7 @@ async function signedIdentity(context) {
   const auth = createAuthService({ ...env, authSecret: 'test-only-secret'.repeat(4), authTtlSeconds: 2 });
   for (let index = 1; index <= 10; index += 1) {
     const user = accountFor(`admin${index}`);
-    assert.deepEqual(auth.credentials(user.username, '123456'), user);
+    assert.deepEqual(auth.credentials(user.username, 'test-only-password'), user);
     const session = await auth.issue(user);
     assert.deepEqual(await auth.verify(session.token), user);
     await assert.rejects(auth.verify(`${session.token}tampered`), { status: 401 });

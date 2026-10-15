@@ -5,13 +5,33 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.NODE_ENV = 'test';
+process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 const { loadEnv } = await import('../config/env.js');
 
+/**
+ * 確認登入密碼必須由環境提供，不再悄悄回退至公開的預設密碼。
+ * @returns {void}
+ */
+function requireConfiguredPassword() {
+  /** 嘗試缺少密碼的設定。@returns {object} 設定。@throws {Error} 必填參數缺少。 */
+  function missing() { return loadEnv({ environment: {}, envFile: '/nonexistent/helpdesk/.env' }); }
+  /** 嘗試空白密碼。@returns {object} 設定。@throws {Error} 密碼不可空白。 */
+  function blank() { return loadEnv({ environment: { DEMO_PASSWORD: '  ' }, envFile: '/nonexistent/helpdesk/.env' }); }
+  assert.throws(missing, /DEMO_PASSWORD/);
+  assert.throws(blank, /DEMO_PASSWORD/);
+}
+test('登入密碼必填且無公開預設值', requireConfiguredPassword);
+
+/**
+ * 建立包含假密碼的隔離環境檔並於測試結束後清除，不讀取真實登入資訊。
+ * @param {Function} run 接收測試環境檔路徑的操作。
+ * @returns {void}
+ */
 function withFixture(run) {
   const directory = mkdtempSync(join(tmpdir(), 'helpdesk-env-'));
   const envFile = join(directory, '.env');
-  writeFileSync(envFile, 'GEMINI_API_KEY=fake-local-key\nPORT=3456\nCORS_ORIGIN=http://localhost:5173\n');
+  writeFileSync(envFile, 'DEMO_PASSWORD=test-only-password\nGEMINI_API_KEY=fake-local-key\nPORT=3456\nCORS_ORIGIN=http://localhost:5173\n');
   try {
     run(envFile);
   } finally {
@@ -35,7 +55,7 @@ test('production 忽略 .env，使用平台參數及 PORT', () => {
   withFixture((envFile) => {
     const config = loadEnv({
       environment: {
-        NODE_ENV: 'production', GEMINI_API_KEY: 'fake-cloud-key', AUTH_SECRET: 'a'.repeat(32), LIMIT_TABLE: 'test', AWS_REGION: 'us-east-1',
+        NODE_ENV: 'production', DEMO_PASSWORD: 'test-only-password', GEMINI_API_KEY: 'fake-cloud-key', AUTH_SECRET: 'a'.repeat(32), LIMIT_TABLE: 'test', AWS_REGION: 'us-east-1',
         CORS_ORIGIN: 'https://example.github.io', PORT: '8080', GEMINI_MODEL: 'test-model',
       },
       envFile,
@@ -52,7 +72,7 @@ test('production 忽略 .env，使用平台參數及 PORT', () => {
 });
 
 test('沒有 .env 時仍可使用平台參數；非法 PORT 被拒絕', () => {
-  const config = loadEnv({ environment: { GEMINI_API_KEY: 'fake-key' }, envFile: '/nonexistent/helpdesk/.env' });
+  const config = loadEnv({ environment: { GEMINI_API_KEY: 'fake-key', DEMO_PASSWORD: 'test-only-password' }, envFile: '/nonexistent/helpdesk/.env' });
   assert.equal(config.geminiApiKey, 'fake-key');
   assert.equal(config.port, 3000);
   for (const port of ['abc', '0', '65536', '1.5']) {

@@ -60,13 +60,13 @@ GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 
 ### 登入、限流與配額
 
-帳號為 `admin1`～`admin10`，對應 `user-admin1`～`user-admin10`；預設密碼皆為 `123456`，只在後端比對，可用 `DEMO_PASSWORD` 覆寫。前端不再保存或比對密碼。登入成功簽發 HS256 JWT，預設兩小時有效，對話與用量查詢需要 Bearer 憑證。
+帳號為 `admin1`～`admin10`，對應 `user-admin1`～`user-admin10`；登入密碼必須透過後端 `DEMO_PASSWORD` 設定，沒有內建預設值，也不在文件記錄實際密碼。前端不再保存或比對密碼。登入成功簽發 HS256 JWT，預設兩小時有效，對話與用量查詢需要 Bearer 憑證。
 
 | 環境參數 | 預設 | 用途 |
 | --- | --- | --- |
 | `AUTH_SECRET` | 本機隨機、production 必填 | 至少 32 bytes 的隨機簽章金鑰，多個 instance 必須相同 |
 | `AUTH_TTL_SECONDS` | 7200 | 憑證有效秒數 |
-| `DEMO_PASSWORD` | 123456 | 十個帳號共用的課堂密碼 |
+| `DEMO_PASSWORD` | 必填，無預設值 | 十個帳號共用的課堂密碼，僅存於未追蹤的 .env 或平台環境參數 |
 | `CHAT_COOLDOWN_SECONDS` | 10 | 帳號獲准執行後的冷卻秒數 |
 | `USER_DAILY_LIMIT` | 30 | 每帳號每日可獲准執行次數 |
 | `GLOBAL_DAILY_LIMIT` | 100 | 所有帳號共用的每日上限，不因帳號增為十個而自動增加 |
@@ -92,7 +92,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 上雲前需另外建立 DynamoDB 表格，設定 **partition key `pk`（String），不設 sort key**。本次程式變更沒有建立或部署任何 AWS 資源。
 
-在 EB 設定 `NODE_ENV=production`、`LIMIT_STORE=dynamodb`、`LIMIT_TABLE=<表格名稱>`、`AWS_REGION=<表格區域>`、`AUTH_SECRET=<隨機金鑰>`，以及既有 Gemini、CORS 設定。所有 instance 使用相同表格與簽章金鑰；每個獨立部署請使用各自的表格，避免共用配額。
+在 EB 設定 `DEMO_PASSWORD=<私下提供的密碼>`、`NODE_ENV=production`、`LIMIT_STORE=dynamodb`、`LIMIT_TABLE=<表格名稱>`、`AWS_REGION=<表格區域>`、`AUTH_SECRET=<隨機金鑰>`，以及既有 Gemini、CORS 設定。所有 instance 使用相同表格與簽章金鑰；每個獨立部署請使用各自的表格，避免共用配額。
 
 讓 EB EC2 instance profile 具有該表格的 `dynamodb:GetItem` 與 `dynamodb:PutItem` 權限。使用 AWS SDK 的預設憑證鏈，不把 AWS access key 放進原始碼。範例 IAM policy（替換 region、account-id、table-name）：
 
@@ -201,11 +201,13 @@ LOG_LEVEL=debug npm start
 | POST | `/api/agent/chat` | Top-3 檢索、意圖辨識、信心評估與工單分流 |
 | OPTIONS | `/api/agent/chat` | CORS 預檢，由 middleware 處理 |
 
+以下 `<PASSWORD>`、`<token>` 為佔位文字，請自行替換，勿提交實際值。
+
 ```bash
 curl http://localhost:3000/api/health
 curl -X POST http://localhost:3000/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin1","password":"123456"}'
+  -d '{"username":"admin1","password":"<PASSWORD>"}'
 # 將登入回應的 token 填入下方，勿提交實際 token。
 curl -X POST http://localhost:3000/api/agent/chat \
   -H 'Content-Type: application/json' \

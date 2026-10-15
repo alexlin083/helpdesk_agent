@@ -52,7 +52,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ### 課堂展示登入與 userID
 
-前端首頁為登入頁 `index.html`，後端驗證成功後導向 `chat.html`。帳號限定 `admin1`～`admin10`，預設密碼皆為 `123456`（可由後端 `DEMO_PASSWORD` 覆寫）。其他帳號顯示「查無使用者」，已知帳號密碼不符顯示「密碼錯誤」。
+前端首頁為登入頁 `index.html`，後端驗證成功後導向 `chat.html`。帳號限定 `admin1`～`admin10`，登入密碼由後端 `DEMO_PASSWORD` 提供，沒有內建預設值，並由授課者私下提供給使用者。其他帳號顯示「查無使用者」，已知帳號密碼不符顯示「密碼錯誤」。
 
 | 帳號 | 固定 userID |
 | --- | --- |
@@ -67,7 +67,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | `admin9` | `user-admin9` |
 | `admin10` | `user-admin10` |
 
-`POST /api/auth/login` 接收 `{ "username": "admin1", "password": "123456" }`，成功回傳 `{ "token": "<JWT>", "expiresAt": 1790000000000, "user": { "username": "admin1", "userID": "user-admin1" } }`；`expiresAt` 是 epoch 毫秒，範例數值僅示意。JWT 以 HS256 簽署，預設兩小時有效，驗證簽章、期限、發行者與受眾。
+`POST /api/auth/login` 接收 `{ "username": "admin1", "password": "<PASSWORD>" }`，成功回傳 `{ "token": "<JWT>", "expiresAt": 1790000000000, "user": { "username": "admin1", "userID": "user-admin1" } }`；`expiresAt` 是 epoch 毫秒，範例數值僅示意。JWT 以 HS256 簽署，預設兩小時有效，驗證簽章、期限、發行者與受眾。
 
 前端只在 sessionStorage 保存後端核發的憑證、期限及身分，不保存密碼、不在前端比對密碼。對話與用量 API 必須傳送 `Authorization: Bearer <token>`；對話本文另傳 `userID`，與憑證不符時回傳 403。前端登出清除本分頁憑證，不代表伺服器撤銷；舊憑證在期限內仍有效。變更簽章金鑰會使既有憑證失效。
 

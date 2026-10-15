@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 process.env.NODE_ENV = 'test';
+process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 process.env.LOG_LEVEL = 'debug';
 const { createLogger, diagnoseError, requestContext } = await import('../utils/logger.js');
@@ -162,8 +163,8 @@ test('HTTP 完成日誌保留 requestId 且只記錄一次', verifyRequestComple
  */
 function verifyLogLevelConfig() {
   const envFile = '/nonexistent/helpdesk-logger/.env';
-  assert.equal(loadEnv({ environment: {}, envFile }).logLevel, 'info');
-  assert.equal(loadEnv({ environment: { LOG_LEVEL: ' DEBUG ' }, envFile }).logLevel, 'debug');
+  assert.equal(loadEnv({ environment: { DEMO_PASSWORD: 'test-only-password' }, envFile }).logLevel, 'info');
+  assert.equal(loadEnv({ environment: { LOG_LEVEL: ' DEBUG ', DEMO_PASSWORD: 'test-only-password' }, envFile }).logLevel, 'debug');
   /**
    * 嘗試載入不支援的日誌等級，供錯誤斷言檢查。
    * @returns {object} 有效時才回傳設定。

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 
 process.env.NODE_ENV = 'test';
+process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 process.env.CORS_ORIGIN = 'http://localhost:5173';
 process.env.LIMIT_STORE = 'memory';
@@ -48,7 +49,7 @@ async function publicRoutes() {
     assert.equal(options.headers.get('access-control-allow-headers'), 'Content-Type,Accept,Authorization');
     assert.equal((await fetch(`${base}/api/missing`)).status, 404);
     assert.equal((await fetch(`${base}/api/agent/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"test","userID":"user-admin1"}' })).status, 401);
-    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"admin10","password":"123456"}' });
+    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"admin10","password":"test-only-password"}' });
     assert.equal(login.status, 200);
     const session = await login.json();
     assert.equal(session.user.userID, 'user-admin10');
@@ -76,7 +77,7 @@ async function publicRoutes() {
       assert.equal(failed.status, 401);
       assert.equal((await failed.json()).error.code, index === 0 ? 'USER_NOT_FOUND' : 'INVALID_CREDENTIALS');
     }
-    const blocked = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"admin1","password":"123456"}' });
+    const blocked = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"admin1","password":"test-only-password"}' });
     assert.equal(blocked.status, 429);
     assert.equal((await blocked.json()).error.code, 'LOGIN_RATE_LIMITED');
   }

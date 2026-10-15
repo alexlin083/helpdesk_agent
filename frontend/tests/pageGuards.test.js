@@ -12,7 +12,7 @@ async function pageFlow(context) {
   const original = { fetch: globalThis.fetch, window: globalThis.window, document: globalThis.document, sessionStorage: globalThis.sessionStorage };
   const store = new Map();
   const redirects = [];
-  const fields = { username: { value: 'unknown' }, password: { value: '123456' } };
+  const fields = { username: { value: 'unknown' }, password: { value: 'test-only-password' } };
   const error = { textContent: '' };
   const pageEvents = new Map();
   let submit;
@@ -58,7 +58,7 @@ async function pageFlow(context) {
   async function loginFetch(url, options) {
     const { username, password } = JSON.parse(options.body);
     if (username !== 'admin2') return Response.json({ error: { message: '查無使用者' } }, { status: 401 });
-    if (password !== '123456') return Response.json({ error: { message: '密碼錯誤' } }, { status: 401 });
+    if (password !== 'test-only-password') return Response.json({ error: { message: '密碼錯誤' } }, { status: 401 });
     return Response.json({ user: { username, userID: 'user-admin2' }, token: 'test-token', expiresAt: Date.now() + 60000 });
   }
   globalThis.fetch = loginFetch;
@@ -75,7 +75,7 @@ async function pageFlow(context) {
   fields.password.value = 'wrong';
   await submit({ preventDefault });
   assert.equal(error.textContent, '密碼錯誤');
-  fields.password.value = '123456';
+  fields.password.value = 'test-only-password';
   await submit({ preventDefault });
   assert.equal(redirects.pop(), './chat.html');
   assert.equal(fields.password.value, '');

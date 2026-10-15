@@ -6,7 +6,7 @@ const originalFetch = globalThis.fetch;
 async function loginFetch(url, options) {
   const { username, password } = JSON.parse(options.body);
   if (!/^admin(?:[1-9]|10)$/.test(username)) return Response.json({ error: { message: '查無使用者' } }, { status: 401 });
-  if (password !== '123456') return Response.json({ error: { message: '密碼錯誤' } }, { status: 401 });
+  if (password !== 'test-only-password') return Response.json({ error: { message: '密碼錯誤' } }, { status: 401 });
   return Response.json({ user: { username, userID: `user-${username}` }, token: 'signed-test-token', expiresAt: Date.now() + 60000 });
 }
 /** 安裝登入端點替身。@returns {void} */
@@ -45,10 +45,10 @@ async function validAccounts() {
     const storage = memoryStorage();
     const auth = createAuthService({ storage });
     const expected = { username: `admin${index}`, userID: `user-admin${index}` };
-    assert.deepEqual(await auth.login(`admin${index}`, '123456'), expected);
+    assert.deepEqual(await auth.login(`admin${index}`, 'test-only-password'), expected);
     assert.deepEqual(createAuthService({ storage }).getCurrentUser(), expected);
     assert.ok(isKnownUserID(expected.userID));
-    assert.ok(!JSON.stringify([...storage.data.values()]).includes('123456'));
+    assert.ok(!JSON.stringify([...storage.data.values()]).includes('test-only-password'));
     ids.add(expected.userID);
     auth.logout();
     assert.equal(auth.getCurrentUser(), null);
@@ -65,16 +65,16 @@ async function invalidCredentials() {
   const auth = createAuthService({ storage: memoryStorage() });
   for (const name of ['admin', 'admin0', 'admin11', 'Admin1', 'constructor', '__proto__', '']) {
     /** 嘗試不存在的帳號。@returns {object} 成功身分。@throws {Error} 查無使用者。 */
-    function unknownLogin() { return auth.login(name, '123456'); }
+    function unknownLogin() { return auth.login(name, 'test-only-password'); }
     await assert.rejects(unknownLogin, { message: '查無使用者' });
     assert.equal(auth.getCurrentUser(), null);
   }
-  for (const password of ['wrong', '', '123456 ']) {
+  for (const password of ['wrong', '', 'test-only-password ']) {
     /** 嘗試不正確密碼。@returns {object} 成功身分。@throws {Error} 密碼錯誤。 */
     function wrongPassword() { return auth.login('admin1', password); }
     await assert.rejects(wrongPassword, { message: '密碼錯誤' });
   }
-  assert.equal((await auth.login(' admin1 ', '123456')).userID, 'user-admin1');
+  assert.equal((await auth.login(' admin1 ', 'test-only-password')).userID, 'user-admin1');
 }
 test('其他帳號顯示查無使用者，密碼錯誤不建立登入', invalidCredentials);
 
@@ -86,7 +86,7 @@ async function invalidSessions() {
   const storage = memoryStorage();
   const auth = createAuthService({ storage });
   assert.equal(auth.getCurrentUser(), null);
-  await auth.login('admin1', '123456');
+  await auth.login('admin1', 'test-only-password');
   const key = [...storage.data.keys()][0];
   for (const value of ['bad-json', 'null', '{}', '{"username":"admin1","userID":"user-admin2"}', '{"username":"admin6","userID":"user-admin6"}']) {
     storage.setItem(key, value);

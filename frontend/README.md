@@ -19,7 +19,7 @@ npm run dev
 ```
 
 瀏覽器開啟 **http://localhost:5173**，請勿直接雙擊 HTML 使用 `file://`。
-首頁為登入畫面，使用 `admin1`～`admin10`，密碼皆為 `123456`。登入後進入 `chat.html`，右上角顯示帳號與 userID 並提供登出。
+首頁為登入畫面，使用 `admin1`～`admin10`，密碼由授課者另行提供，不在 Git 文件記錄。登入後進入 `chat.html`，右上角顯示帳號與 userID 並提供登出。
 後端預設 CORS 來源即為此網址；若變更前端網址，同步設定後端 `CORS_ORIGIN` 並重新啟動。
 
 ## 架構與設定
