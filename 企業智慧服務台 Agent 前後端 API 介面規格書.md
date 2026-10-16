@@ -10,9 +10,24 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ---
 
+
+## 文件適用範圍與實作狀態
+
+本次依據 [知識庫提交指南](backend/data/knowledge-submissions/README.md)、[單筆填寫範本](backend/data/knowledge-submissions/單筆資料填寫範本.md) 與三部門範例，補充來源卡片的擴充契約。本次僅更新規格文件，未變更後端、前端或執行中的知識庫。
+
+| 項目 | 目前程式 | 本文件的擴充目標 |
+| --- | --- | --- |
+| 知識庫輸入 | 讀取 `backend/data/knowledgeBase.json`，主要使用 doc_name、content | 審核後整合 MD 主資料的十一個欄位 |
+| MD 與驗證情境 | 不自動載入，也不作為聊天請求本文 | MD 是資料交付來源，驗證情境獨立作為測試依據 |
+| retrieved_sources | 每筆只回傳 doc_name、relevance | 加入段落 ID、分類、摘要、部門、版本、日期、來源連結與資料狀態 |
+| 右側來源卡片 | 文件名與相似度 | 顯示第 3 節定義的來源資訊與狀態標示 |
+| 登入、userID、配額與錯誤 | 已實作後端驗證及限制 | 保留現有端點與既有成功回應頂層欄位 |
+
+第 3 節的擴充來源欄位、第 5 節的擴充 JSON 範例及對應畫面需求是後續實作契約，**不是目前 API 已回傳的內容**。串接現有後端時仍以第 3.1 節為準。擴充完成後維持 `/api/agent/chat`，以新增來源欄位的方式演進，不在本次新增版本端點。
+
 ## 1. 系統概觀與傳輸規範
 
-前後端通訊採用標準 RESTful API 架構，傳輸層全面實施 HTTPS 加密。為配合前端託管於 GitHub Pages 且後端部署於 AWS Elastic Beanstalk 之跨網域環境，後端必須妥善設定跨來源資源共享（CORS）標頭。
+前後端通訊採用標準 RESTful API 架構，正式部署的傳輸層使用 HTTPS；本機開發可使用 HTTP。為配合前端託管於 GitHub Pages 且後端部署於 AWS Elastic Beanstalk 之跨網域環境，後端必須妥善設定跨來源資源共享（CORS）標頭。
 
 通訊基礎設定規格如下：
 
@@ -43,7 +58,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ### 請求主體 (Request Body)
 
-請求主體包含使用者輸入之查詢字串。前端於發送請求前應進行基礎去空白處理。
+請求主體只需使用者問題與登入帳號 userID。前端先去除問題首尾空白，後端再次驗證 1～500 個 Unicode code points，JSON 本文上限 16 KB。不要將知識庫十一個欄位、來源相似度或驗證情境中的 expected_* 傳入聊天請求。
 
 | 欄位名稱 (Field) | 資料型別 (Type) | 必填 (Required) | 說明與限制 (Description & Constraints) |
 | --- | --- | --- | --- |
@@ -105,160 +120,286 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ---
 
-## 3. 回應資料字典與結構說明
+## 3. 回應資料字典與來源擴充契約
 
-後端於完成 RAG 檢索與 LLM 信心度評估後，統一回傳 HTTP 200 OK 狀態碼與 JSON 回應物件。回應結構劃分為四大核心區塊：意圖識別、檢索引據、信心與路由、以及工單轉派實體。
+### 3.1 現行成功回應
 
-### 回應主體欄位定義
+成功使用 HTTP 200，直接回傳決策物件，不包 success 或 data。頂層維持以下六個欄位；本次不新增由前端指定分類、分流或工單等級的參數。
 
-下表詳細定義回應 JSON 物件中各欄位的型別、可能值與用途說明：
-
-| 欄位名稱 (Field) | 資料型別 (Type) | 可能值 / 範例 | 說明 (Description) |
-| --- | --- | --- | --- |
-| `intent` | `string` | `IT_SUPPORT`, `HR_POLICY`, `HARDWARE_FACILITY`, `UNKNOWN` | 經由 LLM 識別之問題意圖分類標籤 |
-| `retrieved_sources` | `array[object]` | 檢索文檔陣列 | 本地向量知識庫中相似度最高之 Top-3 規章段落卡片資訊 |
-| `retrieved_sources[].doc_name` | `string` | `VPN連線故障排查手冊.md` | 引據之內部規章或 SOP 文件名稱 |
-| `retrieved_sources[].relevance` | `number` | `0.52` ~ `0.95` | 向量 Cosine Similarity 相似度分數（介於 0.00 至 1.00 之間） |
-| `confidence_score` | `number` | `0` ~ `100` | LLM 自主評估之解答信心分數，為整數型態 |
-| `action_route` | `string` | `AUTO_REPLY`, `ESCALATE_TICKET` | 系統決策分流代碼 |
-| `reply_text` | `string` | 對話文字 | 直接呈現於左側對話框之 Agent 對話解答或指引文字 |
-| `ticket_payload` | `object` \| `null` | 工單物件或 `null` | 當 `action_route` 為 `ESCALATE_TICKET` 時產出之結構化工單；自動秒回時為 `null` |
-
-### 結構化工單物件 (Ticket Payload Schema)
-
-當信心分數不足或判定為需要人工處置之疑難與緊急案件時，`ticket_payload` 欄位將包含以下細部屬性：
-
-| 工單屬性 (Attribute) | 資料型別 (Type) | 說明 (Description) |
+| 欄位 | 型別 | 規則 |
 | --- | --- | --- |
-| `ticket_id` | `string` | 系統自動生成之唯一工單編號（格式如 `TK-98214` 或 `TICK-YYYYMM-XXXX`） |
-| `level` | `string` | 工單緊急程度（如 `P1_URGENT`, `P2_HIGH`, `P3_NORMAL`） |
-| `department` | `string` | 自動指派處置之權責部門（如 `總務與硬體組`, `IT資訊服務台`, `HR人力資源部`） |
-| `action_required` | `string` | 建議派工執行動作或現場處理摘述 |
+| `intent` | string | 本次問題意圖，僅限 IT_SUPPORT、HR_POLICY、HARDWARE_FACILITY、UNKNOWN |
+| `retrieved_sources` | array of object | 相似度排序的最多三個段落，沒有文件時為空陣列；現行每筆僅含 doc_name、relevance |
+| `confidence_score` | integer | 0～100；為模型評估，非經校準的正確率，也不是來源相似度 |
+| `action_route` | string | 僅限 AUTO_REPLY、ESCALATE_TICKET |
+| `reply_text` | string | 非空白回答或人工處理說明，前端以純文字呈現 |
+| `ticket_payload` | object 或 null | 自動回答為 null；轉派時必須為完整工單物件 |
 
----
+現行來源物件的最小格式如下。以下數值為格式示例，不代表固定檢索結果：
 
-## 4. 動態決策分流與信心度評估機制
-
-後端 Agent 決策管線的核心邏輯在於「知道自己是否具備足夠資訊回答問題」。後端整合 RAG 檢索到的文檔切片與 LLM 推理結果，計算出綜合信心分數（`confidence_score`），並依據設定之門檻進行雙軌自動化分流：
-
-```
-[使用者提問] ➔ [Cosine Similarity 檢索 Top-3] ➔ [Gemini LLM 評估] ➔ confidence_score
-                                                                     │
-                         ┌───────────────────────────────────────────┴───────────────────────────────────────────┐
-                         ▼                                                                                       ▼
-         confidence_score >= 75                                                                  confidence_score < 75
-    【自動秒回 AUTO_REPLY】                                                                 【轉派工單 ESCALATE_TICKET】
- - 直接輸出高信心知識庫解答                                                               - 回傳急救說明並建置結構化工單
- - ticket_payload 設為 null                                                              - 產出包含 level/department 之 ticket_payload
-```
-
-分流門檻與處置規則詳細說明：
-
-* **高信心度常規解答 (`confidence_score >= 75`)**：
-  * **決策標籤**：`AUTO_REPLY`（自動秒回）
-  * **前端渲染**：右側戰情室 Step 3 顯示綠色成功標籤，左側對話框輸出平滑打字機完整解答。`ticket_payload` 欄位為 `null`。
-* **低信心度/疑難工單轉派 (`confidence_score < 75`)**：
-  * **決策標籤**：`ESCALATE_TICKET`（轉派工單）
-  * **前端渲染**：右側戰情室 Step 3 顯示紅色/黃色警告標籤，並於右側面板下方展開 `ticket_payload` 之 JSON 結構預覽卡片，左側對話框顯示緊急應變提示與已自動立案通知。
-
----
-
-## 5. 前後端溝通情境範例 JSON
-
-為使成員 A 與成員 B 能進行獨立模組測試與 Mock Data 開發，以下提供兩種典型業務情境之 Request/Response JSON 範例。
-
-### 情境一：高信心度常規查詢 (AUTO_REPLY)
-
-使用者詢問 VPN 設定排查，知識庫包含完整標準 SOP，系統觸發自動秒回。
-
-#### 請求 JSON (Request)
 ```json
 {
-  "message": "VPN 連不上如何排查？",
+  "doc_name": "VPN連線故障排查手冊.md",
+  "relevance": 0.89
+}
+```
+
+### 3.2 知識庫主資料與 API 欄位對應
+
+MD 中每筆主資料提供十一個 key。整理者審核後才整合至 knowledgeBase.json；目前沒有 Markdown 匯入端點，也沒有自動載入此資料夾的機制。
+
+| MD 主資料欄位 | 型別與約束 | 擴充後的 API 位置／用途 |
+| --- | --- | --- |
+| `id` | 非空白 string，全資料庫唯一，如 IT-001 | retrieved_sources[].id，識別段落與追蹤版本 |
+| `category` | 固定 INTENTS 之一 | retrieved_sources[].category，來源段落的分類 |
+| `doc_name` | 非空白 string；同文件多段可重複 | retrieved_sources[].doc_name，文件名稱 |
+| `section_title` | 非空白 string | retrieved_sources[].section_title，引用段落標題 |
+| `content` | 非空白 string，含適用條件、步驟、例外與人工處理條件 | 後端建立向量並提供 Gemini 的完整依據；來源卡片採 summary，不在此擴充回應預設傳送全文 |
+| `summary` | 非空白 string，一至兩句且不增加正文沒有的規則 | retrieved_sources[].summary，來源卡片摘要 |
+| `department` | 固定部門名稱，依第 3.4 節對應 | retrieved_sources[].department，來源流程權責部門 |
+| `version` | 非空白 string，如 1.0 | retrieved_sources[].version，原樣顯示，不當數字計算 |
+| `updated_at` | YYYY-MM-DD 的有效日期 | retrieved_sources[].updated_at，最後整理／核對日期，前端直接顯示日期字串 |
+| `source_url` | HTTP／HTTPS 網址或 JSON null | retrieved_sources[].source_url，原始文件連結；無法提供或無權公開時為 null |
+| `data_status` | OFFICIAL、PENDING_REVIEW、SIMULATED | retrieved_sources[].data_status，區分正式、待確認與模擬來源 |
+
+擴充來源回應另加 `relevance`（number，0～1，由後端計算，顯示至四位小數），不屬於組員手填的主資料。主資料中的其餘十個欄位直接由選中的本地段落取得，不讓 Gemini 重新撰寫或捏造。全文 content 可供內部檢索與推理，但不因加入前端來源卡片而重複回傳。
+
+`category` 是某個來源段落的主題；頂層 `intent` 是本次提問的分類，兩者不要求相等。例如一個問題可能同時檢索到不同類別的段落。來源 department 也不等於本次工單 department，前端需分別標示「來源部門」與「建議處理部門」。
+
+### 3.3 擴充相容規則與前端呈現
+
+| 欄位／狀態 | 顯示與處理方式 |
+| --- | --- |
+| doc_name、section_title | 文件名稱與段落標題分開呈現；同文件多段可同時出現，不以文件名去重 |
+| id | 作為來源卡片識別碼；舊資料沒有 id 時，暫以該次結果順序識別，不回寫假編號 |
+| summary | 顯示簡短摘要，不拿 reply_text 假冒文件摘要 |
+| category、department | 顯示來源類別與權責部門，固定值對應第 3.4 節 |
+| version、updated_at | 顯示版本及整理／核對日期；日期不代表企業已審核或規章生效日 |
+| source_url | 非 null 且為有效 HTTP／HTTPS 才提供「查看原始文件」連結；開新分頁使用 noopener／noreferrer；null 時不顯示可點擊連結，不組出本機檔案路徑 |
+| OFFICIAL | 顯示「正式資料」，僅代表資料已按交付規則確認來源，不代表 AI 回答保證正確 |
+| PENDING_REVIEW | 顯示「待確認」，不得顯示為正式規章 |
+| SIMULATED | 明顯標示「課堂模擬資料」，不作為真實企業政策或法律依據 |
+| relevance | 顯示 0～1 的向量餘弦相似度與進度條，不標成回答信心 |
+
+新主資料提交時十一個欄位均需提供，只有 source_url 可填 null。相容舊資料時，API 的 doc_name、relevance 仍必填；新增 metadata 欄位在遷移期間可省略。前端缺少摘要、版本等資訊時隱藏該列或顯示「待補資料」，不得猜測、將缺值填成 OFFICIAL，或用今天日期補上 updated_at。null 不作為其他字串欄位的替代值。
+
+後端現階段沒有依 data_status 自動篩選來源，整合者仍須人工審核。資料篩選或核准流程若需自動化，另訂需求；本規格不宣稱已有該功能。擴充完成前，現有前端驗證器仍只檢查 doc_name、relevance，額外欄位不會自動產生來源卡片畫面。
+
+### 3.4 固定分類與工單格式
+
+| INTENTS／category | departments 對應 |
+| --- | --- |
+| `IT_SUPPORT` | `IT資訊服務台` |
+| `HR_POLICY` | `HR人力資源部` |
+| `HARDWARE_FACILITY` | `總務與硬體組` |
+| `UNKNOWN` | `IT資訊服務台` |
+
+ROUTES 只允許 AUTO_REPLY、ESCALATE_TICKET；LEVELS 只允許 P1_URGENT、P2_HIGH、P3_NORMAL，不增加其他值。
+
+| 工單欄位 | 型別 | 規則 |
+| --- | --- | --- |
+| `ticket_id` | string | 後端生成 TK- 加 UUID，模型或提交者不決定正式編號 |
+| `level` | string | P1_URGENT（緊急）、P2_HIGH（高優先）、P3_NORMAL（一般）；需依本次情境與依據判斷 |
+| `department` | string | 目標契約限定為上表中本次 intent 對應部門，不代表已派送 |
+| `action_required` | string | 非空白的建議處理事項，不承諾已執行 |
+
+AUTO_REPLY 的 ticket_payload 欄位仍必須存在，值為 null，此時沒有工單內部欄位；ESCALATE_TICKET 必須提供上述四個欄位，不能將 level 或 department 設為 null。
+
+實作差異：現有後端已驗證 intent、level、route 與非空白欄位，但一般工單的 department 仍可來自模型字串，尚未完整強制上表映射；明確危險字詞才強制 HARDWARE_FACILITY／總務與硬體組。後續實作必須補齊此映射驗證，不能僅修改文件就視為已完成。
+
+---
+
+## 4. 分流與知識庫驗證情境
+
+### 4.1 執行時決策
+
+後端先檢索最多三個段落，再將段落內容與本次問題交給 Gemini。回應經後端檢查後，confidence_score 至少 75 時使用 AUTO_REPLY，低於 75 時使用 ESCALATE_TICKET。無文件、模型要求轉派或明確危險字詞時採保守轉派，不能僅因來源相似度高就自動認定可回答。
+
+有流程文件不代表 AI 可以執行該流程。例如：詢問「如何申請權限」可說明 SOP；要求「直接開通權限」則涉及人工核准，需產生工單資料。UNKNOWN 由 IT 初步受理，不作其他專業領域的通用解答。
+
+前端自動回答顯示綠色標籤；需人工處理顯示警告標籤與工單四欄及 JSON。緊急情境提供既有安全提示：遠離危險、避免接觸、聯絡現場負責人，僅在安全且可行時斷電。所有工單均為資料展示，不宣稱已立案、派送、通知真人、核准或完成處理。
+
+### 4.2 驗證資料不屬於聊天合約
+
+MD 的驗證情境是離線測試資料，與十一個主資料欄位分開。只將 message 作為問題送入對話 API，測試工具另提供登入憑證與 userID；不得把 expected_* 放入知識庫正文或要求模型照預期答案回傳。
+
+| 驗證情境欄位 | 與執行時回應的關係 |
+| --- | --- |
+| message | 對話請求的 message |
+| expected_intent | 比對頂層 intent，固定四種選項 |
+| expected_action_route | 比對頂層 action_route，固定兩種選項 |
+| expected_level | AUTO_REPLY 為 null；轉派時比對 ticket_payload.level |
+| expected_department | AUTO_REPLY 為 null；轉派時比對 ticket_payload.department |
+| expected_reply_points | 檢查 reply_text 是否涵蓋重點，不要求逐字相等 |
+
+relevance、confidence_score、ticket_id 不由組員手填。範例回應中的數值及 UUID 只用於說明格式，不是測試必須完全相同的答案。以下情境矩陣來自三部門 MD，須在資料整合及程式擴充後再實測：
+
+| 主資料 ID | 情境摘要 | 預期 intent | 預期 route | 預期 level | 預期工單部門 |
+| --- | --- | --- | --- | --- | --- |
+| IT-001 | VPN 一般連線排查 | IT_SUPPORT | AUTO_REPLY | null | null |
+| IT-002 | 專案共享資料夾無存取權限 | IT_SUPPORT | ESCALATE_TICKET | P2_HIGH | IT資訊服務台 |
+| IT-003 | 缺少問題主題或必要資訊 | UNKNOWN | ESCALATE_TICKET | P3_NORMAL | IT資訊服務台 |
+| HR-001 | 一般請假申請步驟 | HR_POLICY | AUTO_REPLY | null | null |
+| HR-002 | 忘記打卡的補正申請 | HR_POLICY | ESCALATE_TICKET | P3_NORMAL | HR人力資源部 |
+| HR-003 | 當期薪資明細疑似差異 | HR_POLICY | ESCALATE_TICKET | P2_HIGH | HR人力資源部 |
+| FAC-001 | 投影機與會議設備借用流程 | HARDWARE_FACILITY | AUTO_REPLY | null | null |
+| FAC-002 | 投影設備無法顯示且影響當日會議 | HARDWARE_FACILITY | ESCALATE_TICKET | P2_HIGH | 總務與硬體組 |
+| FAC-003 | 設備冒煙或起火的初步受理 | HARDWARE_FACILITY | ESCALATE_TICKET | P1_URGENT | 總務與硬體組 |
+
+---
+
+## 5. 擴充後的前後端串接範例
+
+以下範例使用 MD 主資料的實際 key 與內容；**尚未載入 knowledgeBase.json，新增來源 metadata 也尚未由 API 回傳**。每個來源物件的 metadata 由後端從本地文件取得，只有 relevance 是本次檢索計算的數值。
+
+以下各次呼叫都需 `POST /api/agent/chat`、`Content-Type: application/json` 與 `Authorization: Bearer <token>`。為方便閱讀，來源陣列只示意一筆；實際回傳最多三筆，不能把範例當成固定數量、排名或分數。
+
+### 5.1 一般排查自動回答
+
+請求本文：
+
+```json
+{
+  "message": "我已經有 VPN 權限，但今天連不上，先檢查什麼？",
   "userID": "user-admin1"
 }
 ```
 
-#### 回應 JSON (Response HTTP 200)
+目標成功回應：
+
 ```json
 {
   "intent": "IT_SUPPORT",
   "retrieved_sources": [
     {
-      "doc_name": "VPN連線故障排查手冊.md",
+      "id": "IT-001",
+      "category": "IT_SUPPORT",
+      "doc_name": "遠端連線操作手冊",
+      "section_title": "VPN 一般連線排查",
+      "summary": "VPN 無法連線時，依序確認網路、用戶端、憑證與帳號狀態。",
+      "department": "IT資訊服務台",
+      "version": "1.0",
+      "updated_at": "2026-10-16",
+      "source_url": null,
+      "data_status": "SIMULATED",
       "relevance": 0.89
-    },
-    {
-      "doc_name": "企業遠端工作資安規範.md",
-      "relevance": 0.74
     }
   ],
   "confidence_score": 88,
   "action_route": "AUTO_REPLY",
-  "reply_text": "請先檢查 Cisco AnyConnect 用戶端是否已更新至最新版本。排查步驟如下：1. 確認網路連線正常；2. 檢查雙重驗證 (2FA) 認證碼；3. 切換至備用 VPN 伺服器通道。",
+  "reply_text": "請先確認一般網頁可正常開啟，再確認 VPN 用戶端與公司憑證是否有效，以及帳號是否顯示過期或鎖定。不要停用防火牆或略過憑證檢查；若仍無法連線，請提供錯誤代碼、時間及裝置類型供 IT 確認。",
   "ticket_payload": null
 }
 ```
 
----
+### 5.2 需人工核准的高優先工單
 
-### 情境二：低信心度與緊急報修 (ESCALATE_TICKET)
+請求本文：
 
-使用者回報辦公室設備冒煙異常，屬於高風險硬體事件，知識庫無直接維修說明，系統觸發自動開立 P1 工單並指派總務組。
-
-#### 請求 JSON (Request)
 ```json
 {
-  "message": "辦公室螢幕狂閃冒煙了！",
-  "userID": "user-admin2"
+  "message": "我們專案組今天都打不開共享資料夾，請直接幫我們開權限。",
+  "userID": "user-admin1"
 }
 ```
 
-#### 回應 JSON (Response HTTP 200)
+目標成功回應：
+
+```json
+{
+  "intent": "IT_SUPPORT",
+  "retrieved_sources": [
+    {
+      "id": "IT-002",
+      "category": "IT_SUPPORT",
+      "doc_name": "資訊權限申請辦法",
+      "section_title": "專案共享資料夾無存取權限",
+      "summary": "共享資料夾權限需資料擁有者與主管核准，再由 IT 人工設定。",
+      "department": "IT資訊服務台",
+      "version": "1.0",
+      "updated_at": "2026-10-16",
+      "source_url": null,
+      "data_status": "SIMULATED",
+      "relevance": 0.86
+    }
+  ],
+  "confidence_score": 62,
+  "action_route": "ESCALATE_TICKET",
+  "reply_text": "權限變更需要資料擁有者及直屬主管確認，AI 無法直接開通。請提供資料夾名稱、工作用途與需要的存取範圍，不要提供密碼。已產生工單資料，可於右側查看。",
+  "ticket_payload": {
+    "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000",
+    "level": "P2_HIGH",
+    "department": "IT資訊服務台",
+    "action_required": "人工核對多人共享資料夾存取問題及核准紀錄"
+  }
+}
+```
+
+### 5.3 緊急設備事件
+
+請求本文：
+
+```json
+{
+  "message": "辦公室螢幕冒煙了，我現在該怎麼辦？",
+  "userID": "user-admin1"
+}
+```
+
+目標成功回應：
+
 ```json
 {
   "intent": "HARDWARE_FACILITY",
   "retrieved_sources": [
     {
-      "doc_name": "總務資產報修流程.md",
+      "id": "FAC-003",
+      "category": "HARDWARE_FACILITY",
+      "doc_name": "設備異常緊急通報流程",
+      "section_title": "設備冒煙或起火的初步受理",
+      "summary": "設備冒煙等危險情況應先遠離並聯絡現場負責人，產生 P1 緊急工單資料。",
+      "department": "總務與硬體組",
+      "version": "1.0",
+      "updated_at": "2026-10-16",
+      "source_url": null,
+      "data_status": "SIMULATED",
       "relevance": 0.52
     }
   ],
   "confidence_score": 42,
   "action_route": "ESCALATE_TICKET",
-  "reply_text": "偵測到硬體嚴重異常狀況，請先拔除電源以確保安全！系統已自動為您開立緊急硬體報修工單並指派總務組處理。",
+  "reply_text": "請先遠離危險設備，避免接觸；僅在安全且可行時切斷電源，並立即聯絡現場負責人。已產生緊急報修工單資料，可於工單資料區查看。",
   "ticket_payload": {
-    "ticket_id": "TK-98214",
+    "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000",
     "level": "P1_URGENT",
     "department": "總務與硬體組",
-    "action_required": "現場硬體檢測與更換"
+    "action_required": "請現場負責人確認安全並安排設備檢測"
   }
 }
 ```
 
 ---
 
-## 6. Gemini LLM 內部 JSON Structured Output 規範
+## 6. Gemini 內部輸出與後續實作範圍
 
-為確保 Node.js 後端呼叫 Google Gemini API（`gemini-1.5-flash` 或 `gemini-2.0-flash`）時能穩定解析模型輸出，後端必須於 API 呼叫設定中啟用 `responseMimeType: "application/json"`，並於 System Instruction 帶入以下約束綱要。
+### 6.1 模型輸出與對外回應的邊界
 
-### 後端送至 Gemini API 之 System Instruction 範本
+推理模型由後端 GEMINI_MODEL 設定，不在 API 契約綁定舊模型名稱。呼叫時使用 responseMimeType 為 application/json 與 responseSchema，模型輸出 intent、confidence_score、action_route、reply_text 及 ticket_payload。
 
-```text
-You are an Enterprise Helpdesk AI Agent. Analyze the user query alongside the provided Top-3 retrieved knowledge base contexts.
-You must output ONLY a valid JSON object matching the schema below without any markdown formatting wrappers or conversational introductory text.
+retrieved_sources 由後端檢索結果組成，不能由模型提供或覆寫。新增來源 metadata 不需要增加模型輸出的同名欄位。現有 schema 仍要求模型轉派時提供完整 ticket_payload（含 ticket_id），但最終對外 ticket_id 由後端重新生成 UUID；模型編號不得直接當正式編號。
 
-Schema constraint:
-{
-  "intent": "IT_SUPPORT" | "HR_POLICY" | "HARDWARE_FACILITY" | "UNKNOWN",
-  "confidence_score": integer (0 to 100),
-  "action_route": "AUTO_REPLY" | "ESCALATE_TICKET",
-  "reply_text": "string (the answer to display to user)",
-  "ticket_payload": object or null (must contain ticket_id, level, department, action_required if action_route is ESCALATE_TICKET)
-}
+### 6.2 擴充實作清單
 
-Rule: If information in retrieved context is insufficient or query indicates emergency hardware/personnel issues, set confidence_score < 75 and action_route to ESCALATE_TICKET.
-```
+| 檔案／範圍 | 後續需要的調整 | 現況 |
+| --- | --- | --- |
+| knowledgeBase.json | 人工審核 MD 主資料後整合十一欄，驗證唯一 ID、日期、資料狀態及分類／部門映射 | 仍為三筆舊展示資料；MD 九筆未匯入 |
+| knowledgeService.js | 保留段落 metadata；檢索依 doc_name、content 建向量，維持排序與 Top-3，不用 expected_* 作為依據 | 已會保留輸入物件欄位，但未驗證新增欄位 |
+| geminiAgent.js | 將本地來源 metadata 明確映射到 retrieved_sources，維持 relevance 來自後端；補齊一般工單部門映射驗證 | 現行回應來源只映射 doc_name、relevance |
+| frontend/src/services/agentService.js | 驗證擴充欄位型別／選項及 source_url，保留舊來源格式相容性 | 尚未驗證新增 metadata |
+| frontend/src/components/DecisionPanel.js | 顯示第 3.3 節的來源卡片資訊，維持純文字、安全連結及缺值處理 | 來源卡片僅顯示文件名與相似度 |
+| 測試 | 驗證 metadata 不由模型捏造、空來源／舊來源相容、九筆驗證情境及固定選項 | 需隨上述實作新增相應測試 |
+
+本次不新增文件上傳、知識庫管理、來源全文查詢或工單派送端點。資料擴充不改變登入、userID、每日配額及冷卻規則。
 
 ---
 
@@ -292,8 +433,5 @@ Rule: If information in retrieved context is insufficient or query indicates eme
 | `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE` | 全站並行滿載或限制儲存無法使用 | 稍後重試，不自動重送 |
 | `500 Internal Error` | `SERVER_ERROR` | 後端向量計算失敗或 Gemini API 服務異常 | 顯示系統維護提示，並解除前端傳送按鈕鎖定 |
 
-
-
-###### tags: `中原資管碩` `人工智慧與流程自動化實務研討`
 
 有限制等待時間的錯誤會在 `error` 增加 `retry_after`（整數秒），並回傳相同的 `Retry-After` 標頭；Gemini 上游 429 未提供本地等待值時使用十秒。
