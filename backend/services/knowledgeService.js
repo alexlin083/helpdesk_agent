@@ -35,10 +35,11 @@ export function createKnowledgeRetriever({ documents = knowledgeBase, model = en
    * @param {object} ai SDK client。
    * @param {string[]} contents 待向量化文字，原文不寫入日誌。
    * @param {string} taskType 文件或查詢用途。
+   * @param {AbortSignal} [signal] 查詢專用取消訊號；共用文件索引不綁定單一請求。
    * @returns {Promise<number[][]>} 通過數量與數值驗證的向量。
    * @throws {Error} 上游失敗或回傳向量異常；日誌記錄固定原因與排查提示。
    */
-  async function embed(ai, contents, taskType) {
+  async function embed(ai, contents, taskType, signal) {
     const started = Date.now();
     let stage = 'api';
     logger('info', 'gemini.embedding.started', { model, taskType, itemCount: contents.length });
@@ -46,7 +47,7 @@ export function createKnowledgeRetriever({ documents = knowledgeBase, model = en
     try {
       const response = await ai.models.embedContent({
         model, contents,
-        config: { taskType, outputDimensionality: 768, httpOptions: { timeout: 30000 } },
+        config: { taskType, outputDimensionality: 768, httpOptions: { timeout: 30000 }, abortSignal: signal },
       });
       stage = 'validate';
       const vectors = [];
@@ -79,10 +80,12 @@ export function createKnowledgeRetriever({ documents = knowledgeBase, model = en
    * 取得文件向量後建立查詢向量，依相似度降冪排序並回傳最多三筆資料。
    * @param {string} message 單次使用者問題。
    * @param {object} ai SDK client。
+   * @param {object} [options={}] 單次查詢控制設定。
+   * @param {AbortSignal} [options.signal] Agent 總期限訊號，不會取消其他請求共用的索引。
    * @returns {Promise<Array<object>>} 帶有相似度的文件段落；無文件時回傳空陣列。
    * @throws {Error} embedding 或向量計算失敗。
    */
-  return async function retrieve(message, ai) {
+  return async function retrieve(message, ai, { signal } = {}) {
     const started = Date.now();
     if (!documents.length) return [];
     // 共用 Promise 避免同時重複建立記憶體索引，失敗可重試。
@@ -93,7 +96,9 @@ export function createKnowledgeRetriever({ documents = knowledgeBase, model = en
       indexPromise = embed(ai, contents, 'RETRIEVAL_DOCUMENT').catch(resetIndex);
     }
     const vectors = await indexPromise;
-    const [query] = await embed(ai, [message], 'RETRIEVAL_QUERY');
+    signal?.throwIfAborted();
+    const [query] = await embed(ai, [message], 'RETRIEVAL_QUERY', signal);
+    signal?.throwIfAborted();
     const ranked = [];
     for (const [index, doc] of documents.entries()) ranked.push({ ...doc, relevance: cosineSimilarity(query, vectors[index]) });
     /**

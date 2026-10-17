@@ -8,3 +8,10 @@ node_modules/
 tests/
 *.log
 .DS_Store
+.aws/
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+coverage/

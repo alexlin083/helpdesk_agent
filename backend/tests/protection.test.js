@@ -89,7 +89,7 @@ async function dailyQuota() {
 test('帳號及全站配額一起扣除，台北午夜重置且保留並行保護', dailyQuota);
 
 /**
- * 驗證 IP 十次失敗後需等待十五分鐘，與程序中斷後的租約到期復原。
+ * 驗證 IP 一百次失敗後需等待十五分鐘，與程序中斷後的租約到期復原。
  * @returns {Promise<void>}
  */
 async function failureWindows() {
@@ -97,7 +97,7 @@ async function failureWindows() {
   /** 提供測試時間。@returns {number} epoch 毫秒。 */
   function clock() { return now; }
   const usage = createUsageService({ store: createMemoryLimitStore(), clock });
-  for (let index = 0; index < 10; index += 1) await usage.loginAttempt('127.0.0.1', false);
+  for (let index = 0; index < 100; index += 1) await usage.loginAttempt('127.0.0.1', false);
   await assert.rejects(usage.loginAttempt('127.0.0.1', true), { code: 'LOGIN_RATE_LIMITED', retryAfter: 900 });
   await usage.loginAttempt('127.0.0.2', true);
   await usage.reserve('user-admin1');

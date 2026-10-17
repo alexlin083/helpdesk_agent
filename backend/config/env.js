@@ -8,8 +8,8 @@ const defaultEnvFile = fileURLToPath(new URL('../.env', import.meta.url));
  * @param {object} [options={}] 載入選項。
  * @param {object} [options.environment=process.env] 環境變數來源。
  * @param {string} [options.envFile] 本機 .env 的絕對路徑。
- * @returns {Readonly<object>} 包含模型、連線及日誌等級的設定。
- * @throws {Error} 連接埠、日誌等級無效或正式環境缺少必要設定。
+ * @returns {Readonly<object>} 包含模型、連線、日誌、HTTP 頻率、登入失敗視窗、Agent 總期限及關機緩衝的設定。
+ * @throws {Error} 必填參數缺少、限制不是正整數、Agent 超過 120 秒或關機緩衝不足十秒。
  */
 export function loadEnv({ environment = process.env, envFile = defaultEnvFile } = {}) {
   // 先依平台參數決定模式；production 完全不讀取本機 .env。
@@ -67,16 +67,29 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
     return value;
   }
 
+  const agentTimeoutMs = positive('AGENT_TIMEOUT_MS', 60000);
+  const shutdownTimeoutMs = positive('SHUTDOWN_TIMEOUT_MS', 75000);
+  if (agentTimeoutMs > 120000) throw new Error('AGENT_TIMEOUT_MS 不可超過 120000，以保留 180 秒租約緩衝');
+  if (shutdownTimeoutMs < agentTimeoutMs + 10000) throw new Error('SHUTDOWN_TIMEOUT_MS 至少需比 AGENT_TIMEOUT_MS 多 10000 毫秒');
+
   return Object.freeze({
-    authSecret, limitStore, limitTable, awsRegion,
+    authSecret, limitStore, limitTable, awsRegion, agentTimeoutMs, shutdownTimeoutMs,
     demoPassword,
     authTtlSeconds: positive('AUTH_TTL_SECONDS', 7200),
     chatCooldownSeconds: positive('CHAT_COOLDOWN_SECONDS', 10),
     userDailyLimit: positive('USER_DAILY_LIMIT', 30),
     globalDailyLimit: positive('GLOBAL_DAILY_LIMIT', 100),
     globalConcurrency: positive('GLOBAL_CONCURRENCY', 2),
-    loginFailureLimit: positive('LOGIN_FAILURE_LIMIT', 10),
+    httpRateWindowSeconds: positive('HTTP_RATE_WINDOW_SECONDS', 60),
+    httpRateMaxKeys: positive('HTTP_RATE_MAX_KEYS', 2048),
+    httpApiLimit: positive('HTTP_API_LIMIT', 300),
+    httpLoginLimit: positive('HTTP_LOGIN_LIMIT', 120),
+    httpChatLimit: positive('HTTP_CHAT_LIMIT', 12),
+    httpUsageLimit: positive('HTTP_USAGE_LIMIT', 30),
+    loginFailureLimit: positive('LOGIN_FAILURE_LIMIT', 100),
     loginWindowSeconds: positive('LOGIN_WINDOW_SECONDS', 900),
+    loginAccountFailureLimit: positive('LOGIN_ACCOUNT_FAILURE_LIMIT', 5),
+    loginAccountWindowSeconds: positive('LOGIN_ACCOUNT_WINDOW_SECONDS', 300),
     trustProxy: /^\d+$/.test(environment.TRUST_PROXY || '') ? Number(environment.TRUST_PROXY) : environment.TRUST_PROXY?.trim() || false,
     logLevel,
     nodeEnv,

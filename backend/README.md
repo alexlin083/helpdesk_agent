@@ -20,7 +20,7 @@ backend/
 │   └── knowledgeBase.json   # 展示用知識庫段落
 ├── config/
 │   └── env.js               # 載入 backend/.env 與設定預設值
-├── middleware/
+├── middleware/              # 含 rateLimiter.js：入口 IP 與驗證後帳號 HTTP 保護
 │   └── errorHandler.js      # 統一錯誤格式與 404
 ├── tests/                  # API、Agent、檢索與環境參數測試
 ├── .env                    # 本機設定，不提交 Git
@@ -33,7 +33,7 @@ Agent 先呼叫 `knowledgeService.js` 檢索 Top-3 文件，再送往 Gemini 取
 
 ## 啟動
 
-需 Node.js 20 以上。若使用 nvm，可在 backend 目錄執行 `nvm use`（未安裝時先 `nvm install`）。
+需 Node.js 22.x。若使用 nvm，可在 backend 目錄執行 `nvm use`（未安裝時先 `nvm install`）。
 
 ```bash
 cd helpdesk_agent/backend
@@ -48,7 +48,8 @@ npm run dev
 ```dotenv
 PORT=3000
 CORS_ORIGIN=http://localhost:5173
-GEMINI_API_KEY=你的金鑰
+GEMINI_API_KEY=<請填入自己的金鑰>
+DEMO_PASSWORD=<請填入私下提供的登入密碼>
 GEMINI_MODEL=gemini-2.5-flash
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 ```
@@ -71,8 +72,16 @@ GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 | `USER_DAILY_LIMIT` | 30 | 每帳號每日可獲准執行次數 |
 | `GLOBAL_DAILY_LIMIT` | 100 | 所有帳號共用的每日上限，不因帳號增為十個而自動增加 |
 | `GLOBAL_CONCURRENCY` | 2 | 全站同時處理上限，每帳號固定同時一筆 |
-| `LOGIN_FAILURE_LIMIT` | 10 | 每 IP 在視窗內可失敗次數 |
-| `LOGIN_WINDOW_SECONDS` | 900 | 登入失敗視窗；達上限後即使正確帳密也需等待 |
+| `LOGIN_FAILURE_LIMIT` | 100 | 每 IP／IPv6 /64 在視窗內可失敗次數，成功登入不清除 |
+| `LOGIN_WINDOW_SECONDS` | 900 | IP 整體登入失敗視窗；達上限後正確帳密也需等待 |
+| `LOGIN_ACCOUNT_FAILURE_LIMIT` | 5 | 已知帳號＋IP／IPv6 /64 的失敗次數上限 |
+| `LOGIN_ACCOUNT_WINDOW_SECONDS` | 300 | 帳號組合失敗視窗；達上限只封鎖該組合，除非 IP 整體也超限 |
+| `HTTP_RATE_WINDOW_SECONDS` | 60 | 四種 HTTP 限流各自使用的視窗秒數 |
+| `HTTP_RATE_MAX_KEYS` | 2048 | 每個 HTTP middleware 最多追蹤的識別碼；滿載拒絕新識別碼，不淘汰有效限制 |
+| `HTTP_API_LIMIT` | 300 | 每 IP／IPv6 /64 的 API 請求數 |
+| `HTTP_LOGIN_LIMIT` | 120 | 每 IP／IPv6 /64 的登入總請求數，包含成功與失敗 |
+| `HTTP_CHAT_LIMIT` | 12 | 每個驗證後 userID 的聊天 HTTP 請求數 |
+| `HTTP_USAGE_LIMIT` | 30 | 每個驗證後 userID 的用量查詢數 |
 | `LIMIT_STORE` | 本機 memory、production dynamodb | 限制狀態儲存，production 拒絕 memory |
 | `LIMIT_TABLE` | 無 | DynamoDB 表格名稱 |
 | `AWS_REGION` | 無 | DynamoDB 所在區域；亦可用 AWS_DEFAULT_REGION |
@@ -141,7 +150,7 @@ Gemini 金鑰只供 backend 使用，不應放在 frontend 的任何設定中。
 設定方式參考 [AWS 環境參數文件](https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/environments-cfg-softwaresettings.html)。
 
 部署以 **backend 目錄為應用程式根目錄**。已加入 `Procfile`，以 `npm start` 啟動；
-程式會監聽平台提供的 port。選擇 Node.js 20 以上、仍受支援的 EB 平台。
+程式會監聽平台提供的 port。選擇 Node.js 22.x、仍受支援的 EB 平台。
 可將健康檢查路徑設為 `/api/health`。
 [AWS Node.js 平台文件](https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/create_deploy_nodejs.container.html)
 
@@ -267,7 +276,7 @@ ID 由後端使用 UUID 生成。明確危險字詞會觸發 `HARDWARE_FACILITY`
 前端收到回應後依 `action_route` 處理：
 
 - `AUTO_REPLY`：顯示 `reply_text`，`ticket_payload` 為 `null`。
-- `ESCALATE_TICKET`：顯示 `reply_text`，並將 `ticket_payload` 的四個欄位呈現在另開新分頁的簡易工單 HTML。
+- `ESCALATE_TICKET`：顯示 `reply_text`，並將 `ticket_payload` 的四個欄位呈現在右側工單資料區。
 
 例如「建立工單」的回應片段（完整回應另含 intent、retrieved_sources、confidence_score）：
 
@@ -284,7 +293,7 @@ ID 由後端使用 UUID 生成。明確危險字詞會觸發 `HARDWARE_FACILITY`
 }
 ```
 
-工單 HTML 與開啟分頁由 frontend 實作，後端提供 JSON，不回傳 HTML。
+工單資料區由 frontend 呈現，後端提供 JSON，不回傳 HTML。
 程式維持單次推理，沒有對話歷史。
 
 結構化輸出與向量 API 參考：
@@ -312,3 +321,41 @@ GitHub Pages 前端應呼叫已實際配置 HTTPS 的後端網址。
 
 SDK 與錯誤處理參考：[Gemini SDK](https://googleapis.github.io/js-genai/release_docs/classes/types.GenerateContentResponse.html)、
 [Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)。
+
+## 本次後端可靠性調整
+
+執行版本為 Node.js 22.x。一般工單的 department 一律由後端依 intent 映射，模型不得覆寫。
+明確符合既有危險關鍵字時，通過登入及配額檢查後直接產生本地 P1 工單資料，不呼叫 Gemini；不代表已派送或通知。
+
+`AGENT_TIMEOUT_MS` 預設 60000，限制整次檢索與推理，最多允許 120000；逾時維持 HTTP 500／SERVER_ERROR，且不退還已預扣配額。
+每個上游呼叫另有 30 秒限制；總期限訊號會取消查詢 embedding 與推理的本地等待，不保證供應商停止執行或計費。
+共用文件索引不綁定單一請求的取消訊號，避免影響其他請求，仍有 30 秒呼叫限制；取消後不再開始該請求的下一階段。
+前端目前等待 100 秒，若調高總期限，須一併協調前端、反向代理及關機期限。
+
+`SHUTDOWN_TIMEOUT_MS` 預設 75000，必須至少比 Agent 總期限多 10000。
+關機先停止新對話，再等待 HTTP 連線及已追蹤對話（包含預扣與租約釋放）；成功回應也會在嘗試釋放租約後才送出。
+儲存服務故障仍依既有規則記錄失敗、等待租約到期，不保證故障時已成功清除。
+雲端程序管理器與代理的關機／請求期限需配合設定，否則平台仍可能提早中斷程序。
+
+已實作的 HTTP 限流、學校 Wi-Fi 注意事項及暫緩的 DynamoDB 工作，見 [後端保護與上雲待辦](後端保護與上雲待辦.md)。
+
+## HTTP 限流 middleware
+
+`middleware/rateLimiter.js` 使用 express-rate-limit，四個 middleware 各有獨立的有界記憶體儲存。
+`server.js` 掛載順序為日誌 → CORS → /api IP 粗限流 → POST 登入總請求限流 → JSON 解析 → 路由 → 錯誤處理。
+GET /api/health（含尾斜線）與 OPTIONS 不計入 HTTP 限流。
+`agentRoutes.js` 先 authenticate，再套用聊天／用量的 userID 限流，最後才呼叫 controller／用量儲存。
+驗證失敗仍計入入口 IP 請求數；帳號 middleware 只採 req.user.userID，不採本文的 userID。
+
+HTTP 超限維持 429／RATE_LIMIT_EXCEEDED 與既有 JSON，error.retry_after 與 Retry-After 是相同的實際剩餘整數秒。
+`http.rate_limit.blocked` 日誌標示 api／login／chat／usage，沒有原始 IP、帳密或 token。
+被 HTTP 限流拒絕不扣 Agent 額度；HTTP 計數包括成功及失敗，不等於每日 Agent 用量。
+每個 HTTP 儲存最多 HTTP_RATE_MAX_KEYS 筆，請求時清除到期項目；容量不足以 503／SERVICE_BUSY 拒絕新識別碼。
+
+登入失敗另外沿用 usageService 與 LIMIT_STORE 原子保存；已知帳號與來源組合達五次後，同 IP 其他帳號仍可登入，除非來源整體已達一百次。
+未達封鎖前成功登入只清除該帳號組合，不清除 IP 整體失敗；兩種視窗各自到期。
+未知帳號、無效格式只累積來源整體，不為任意 username 建桶；登入失敗狀態最多 512 筆，滿載保守拒絕。
+IPv6 入口與失敗計數皆以 /64 分組，避免切換同子網地址繞過；校園網段仍可能共用此限制，須依課堂實測調整。
+
+HTTP 計數不使用 DynamoDB，重啟歸零、多 instance 各自計數；production 的 Agent 配額與登入失敗仍強制 LIMIT_STORE=dynamodb。
+本次未啟用或驗證實際 AWS 服務。若現有 .env 或平台仍設定 LOGIN_FAILURE_LIMIT=10，會覆寫新預設；課堂設定應依同意的新規則改成 100。
