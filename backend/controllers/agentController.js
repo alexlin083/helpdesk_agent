@@ -1,6 +1,7 @@
 import { runHelpdeskAgent } from '../services/geminiAgent.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { usageService } from '../services/usageService.js';
+import { chatTasks } from '../services/chatTasks.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -17,7 +18,7 @@ export function createChatHandler(reply = runHelpdeskAgent, usage = usageService
    * @returns {Promise<void>}
    * @throws {HttpError} 未登入、格式錯誤、身分不符、限流或上游失敗。
    */
-  return async function chatHandler(req, res) {
+  async function chatHandler(req, res) {
     if (!req.user) throw new HttpError(401, 'UNAUTHORIZED', '請先登入');
     const message = req.body?.message;
     if (typeof message !== 'string' || !message.trim() || Array.from(message.trim()).length > 500) {
@@ -29,10 +30,21 @@ export function createChatHandler(reply = runHelpdeskAgent, usage = usageService
     res.set('X-User-Remaining', String(reservation.usage.userRemaining));
     res.set('X-Global-Remaining', String(reservation.usage.globalRemaining));
     logger('info', 'limits.reserved', { userID: req.user.userID, ...reservation.usage });
-    try {
-      const result = await reply(message.trim());
-      res.json(result);
-    } finally { await usage.release(req.user.userID, reservation.id); }
+    let result;
+    try { result = await reply(message.trim()); }
+    finally { await usage.release(req.user.userID, reservation.id); }
+    res.json(result);
+  }
+  /**
+   * 追蹤整次對話，包括配額預扣及租約釋放，供關機流程等待。
+   * @param {import('express').Request} req 請求。
+   * @param {import('express').Response} res 回應。
+   * @returns {Promise<void>} 完整處理結果。
+   */
+  return function trackedChatHandler(req, res) {
+    /** 執行本次請求的完整生命週期。@returns {Promise<void>} 對話與租約清理。 */
+    function executeChat() { return chatHandler(req, res); }
+    return chatTasks.run(executeChat);
   };
 }
 

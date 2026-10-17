@@ -35,7 +35,7 @@ async function withServer(application, run) {
 }
 
 /**
- * 驗證完整 app 的健康檢查、跨來源授權標頭、登入、未登入保護與輸入錯誤。
+ * 驗證完整 app 的健康檢查、跨來源授權標頭、登入、未登入保護與輸入錯誤；驗證共用 IP 的帳號隔離。
  * @returns {Promise<void>}
  */
 async function publicRoutes() {
@@ -71,7 +71,7 @@ async function publicRoutes() {
     const noKey = await fetch(`${base}/api/agent/chat`, { method: 'POST', headers, body: '{"message":"test","userID":"user-admin10"}' });
     assert.equal(noKey.status, 500);
     assert.equal((await noKey.json()).error.code, 'SERVER_ERROR');
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       const failed = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: index === 0 ? 'admin11' : 'admin1', password: 'wrong' }) });
       assert.equal(failed.status, 401);
@@ -80,6 +80,11 @@ async function publicRoutes() {
     const blocked = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"admin1","password":"test-only-password"}' });
     assert.equal(blocked.status, 429);
     assert.equal((await blocked.json()).error.code, 'LOGIN_RATE_LIMITED');
+    for (let index = 2; index <= 10; index += 1) {
+      const other = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: `admin${index}`, password: 'test-only-password' }) });
+      assert.equal(other.status, 200);
+    }
   }
   await withServer(app, check);
 }

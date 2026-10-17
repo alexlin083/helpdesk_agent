@@ -1,6 +1,6 @@
 # 智慧服務台前端
 
-使用原生 HTML、CSS、ES Modules，無需安裝前端依賴。需 Python 3 啟動靜態伺服器，Node.js 20 以上執行測試。
+使用原生 HTML、CSS、ES Modules，無需安裝前端依賴。需 Python 3 啟動靜態伺服器，Node.js 22.x 執行測試。
 
 ## 本機啟動
 

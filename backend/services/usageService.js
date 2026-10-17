@@ -3,6 +3,8 @@ import { env } from '../config/env.js';
 import { limitStore } from './limitStore.js';
 import { HttpError } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import { ipKeyGenerator } from 'express-rate-limit';
+import { accountFor } from './authService.js';
 
 /**
  * 計算台北日期與下一個午夜，不依主機時區或資料庫 TTL 決定重置。
@@ -87,7 +89,7 @@ export function createUsageService({ store = limitStore, config = env, clock = D
         state.total += 1;
         state.users[userID] = (state.users[userID] ?? 0) + 1;
         state.cooldowns[userID] = now + config.chatCooldownSeconds * 1000;
-        // 三個上游階段各 30 秒；180 秒租約提供故障復原與額外緩衝。
+        // Agent 總期限最多 120 秒；180 秒租約另留配額儲存與故障復原緩衝。
         state.leases[userID] = { id, until: now + 180000 };
         return { id, usage: summarize(state, userID, now) };
       }
@@ -107,23 +109,41 @@ export function createUsageService({ store = limitStore, config = env, clock = D
     /** 查詢目前用量。@param {string} userID 已驗證身分。@returns {Promise<object>} 額度。 */
     async usage(userID) { return summarize(await store.read(), userID, clock()); },
     /**
-     * 在單一原子操作中檢查 IP 失敗次數並更新；被封鎖時即使密碼正確也需等待。
+     * 原子檢查 IP 整體與已知帳號＋IP 的失敗視窗；被封鎖時正確帳密也需等待。
+     * 成功只清除該帳號組合，IP 失敗總數保留至到期；未知帳號不建立任意帳號桶。
      * @param {string} ip Express 依 trust proxy 取得的來源 IP，不信任任意標頭。
      * @param {boolean} valid 帳密是否有效。
+     * @param {string} [username] 已知帳號；服務再次核對十組固定帳號，未知值只計入 IP。
      * @returns {Promise<void>}
      * @throws {HttpError} 超過失敗上限或儲存故障。
      */
-    async loginAttempt(ip, valid) {
+    async loginAttempt(ip, valid, username) {
       const now = clock();
-      const key = createHash('sha256').update(ip).digest('hex');
-      /** 更新 IP 視窗，限制同時追蹤的來源以控制狀態大小。@param {object} state 狀態。@returns {void} */
+      // 與 HTTP IP 限制一致，IPv6 以 /64 分組，避免切換同網段地址繞過限制。
+      const source = createHash('sha256').update(ipKeyGenerator(ip, 64)).digest('hex');
+      const ipKey = `ip:${source}`;
+      const account = accountFor(username);
+      const accountKey = account ? `account:${source}:${account.username}` : null;
+      /**
+       * 檢查兩種限制後一起更新；最多 512 筆，容量不足時不淘汰仍生效的保護。
+       * @param {object} state 可修改的限制狀態。
+       * @returns {void}
+       * @throws {HttpError} 超限或計數容量滿載。
+       */
       function record(state) {
         prepare(state, now);
-        const entry = state.login[key];
-        if (entry?.count >= config.loginFailureLimit) throw blocked(429, 'LOGIN_RATE_LIMITED', '登入失敗次數過多，請稍後再試', (entry.resetAt - now) / 1000);
-        if (valid) { delete state.login[key]; return; }
-        if (!entry && Object.keys(state.login).length >= 512) throw blocked(503, 'SERVICE_BUSY', '登入服務忙碌，請稍後再試', 30);
-        state.login[key] = { count: (entry?.count ?? 0) + 1, resetAt: entry?.resetAt ?? now + config.loginWindowSeconds * 1000 };
+        const ipEntry = state.login[ipKey];
+        const accountEntry = accountKey ? state.login[accountKey] : undefined;
+        let waitUntil = 0;
+        if (ipEntry?.count >= config.loginFailureLimit) waitUntil = ipEntry.resetAt;
+        if (accountEntry?.count >= config.loginAccountFailureLimit) waitUntil = Math.max(waitUntil, accountEntry.resetAt);
+        if (waitUntil) throw blocked(429, 'LOGIN_RATE_LIMITED', '登入失敗次數過多，請稍後再試', (waitUntil - now) / 1000);
+        if (valid) { if (accountKey) delete state.login[accountKey]; return; }
+        const additions = Number(!ipEntry) + Number(Boolean(accountKey) && !accountEntry);
+        if (Object.keys(state.login).length + additions > 512) throw blocked(503, 'SERVICE_BUSY', '登入服務忙碌，請稍後再試', 30);
+        state.login[ipKey] = { count: (ipEntry?.count ?? 0) + 1, resetAt: ipEntry?.resetAt ?? now + config.loginWindowSeconds * 1000 };
+        if (accountKey) state.login[accountKey] = { count: (accountEntry?.count ?? 0) + 1,
+          resetAt: accountEntry?.resetAt ?? now + config.loginAccountWindowSeconds * 1000 };
       }
       await store.transact(record);
     },

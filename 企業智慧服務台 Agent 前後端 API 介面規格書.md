@@ -13,7 +13,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ## 文件適用範圍與實作狀態
 
-本次依據 [知識庫提交指南](backend/data/knowledge-submissions/README.md)、[單筆填寫範本](backend/data/knowledge-submissions/單筆資料填寫範本.md) 與三部門範例，補充來源卡片的擴充契約。本次僅更新規格文件，未變更後端、前端或執行中的知識庫。
+本次依據 [知識庫提交指南](backend/data/knowledge-submissions/README.md)、[單筆填寫範本](backend/data/knowledge-submissions/單筆資料填寫範本.md) 與三部門範例，補充來源卡片的擴充契約。來源 metadata 擴充仍屬後續契約，未變更執行中的知識庫。本次另完成後端固定部門映射、明確危險訊息本地轉派與總期限／關機處理；HTTP 層頻率保護已實作，DynamoDB 實際驗證暫緩。
 
 | 項目 | 目前程式 | 本文件的擴充目標 |
 | --- | --- | --- |
@@ -95,7 +95,18 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | 全站並行 | 同時 2 筆 | `GLOBAL_CONCURRENCY` |
 | 帳號每日配額 | 30 次 | `USER_DAILY_LIMIT` |
 | 全站每日配額 | 100 次，十組帳號共同使用 | `GLOBAL_DAILY_LIMIT` |
-| 登入失敗 | 每 IP 每 15 分鐘最多 10 次，封鎖後正確帳密也需等待 | `LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS` |
+| 登入失敗（來源整體） | 每 IP／IPv6 /64 每 15 分鐘最多 100 次，封鎖後正確帳密也需等待 | `LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS` |
+| 登入失敗（已知帳號＋來源） | 每組合每 5 分鐘最多 5 次；其他帳號不因該組合封鎖而連帶阻擋 | `LOGIN_ACCOUNT_FAILURE_LIMIT`、`LOGIN_ACCOUNT_WINDOW_SECONDS` |
+| HTTP API 入口 | 每 IP／IPv6 /64 每 60 秒 300 次；不含 GET 健康檢查及 OPTIONS | `HTTP_API_LIMIT`、`HTTP_RATE_WINDOW_SECONDS` |
+| HTTP 登入總請求 | 每 IP／IPv6 /64 每 60 秒 120 次，包含成功／失敗 | `HTTP_LOGIN_LIMIT` |
+| HTTP 聊天請求 | 每個驗證後 userID 每 60 秒 12 次，包含後續被業務規則拒絕的請求 | `HTTP_CHAT_LIMIT` |
+| HTTP 用量查詢 | 每個驗證後 userID 每 60 秒 30 次 | `HTTP_USAGE_LIMIT` |
+
+HTTP 入口先在 CORS 之後、JSON 解析之前套用 IP／IPv6 /64 粗限流及登入總請求限流；GET /api/health（含尾斜線）與 OPTIONS 排除。聊天與用量的帳號頻率限制置於憑證驗證之後、controller／儲存操作之前，只取 req.user.userID，不採信本文身分。所有 HTTP 頻率限制各自計數，包括失敗請求；超限回傳既有 429／RATE_LIMIT_EXCEEDED、error.retry_after 與相同 Retry-After，不進入 Agent 預扣。
+
+HTTP 計數目前各自使用有界單程序記憶體，HTTP_RATE_MAX_KEYS 預設每個 middleware 最多 2048 個識別碼，請求時清除到期項目，滿載回傳 503／SERVICE_BUSY，保留有效限制。重啟歸零，多 instance 不共享 HTTP 計數；不代表已實作跨 instance 的 HTTP 全站限流。
+
+登入失敗以 LIMIT_STORE 原子保存來源整體及已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待，等待時間取仍超限視窗的最晚結束時間。未封鎖前成功登入只清除該帳號組合，不清除來源整體失敗。未知帳號不建立任意 username 計數，只累積來源整體；狀態最多 512 筆，滿載回傳 503。兩種視窗各自到期，來源整體達一百次仍會影響共用出口的其他帳號。
 
 後端先驗證憑證、輸入及 userID，再原子性檢查冷卻／並行／配額並預扣一次 Agent 用量，之後才呼叫 Gemini。被拒絕的請求不扣額；獲准後的上游錯誤仍計入用量，不自動重送。一次 Agent 包含多個上游 API 呼叫，次數配額不等同金額或 token 上限。每天台北時間 00:00 重置每日計數，跨午夜仍保留冷卻與執行中租約。
 
@@ -200,12 +211,12 @@ ROUTES 只允許 AUTO_REPLY、ESCALATE_TICKET；LEVELS 只允許 P1_URGENT、P2_
 | --- | --- | --- |
 | `ticket_id` | string | 後端生成 TK- 加 UUID，模型或提交者不決定正式編號 |
 | `level` | string | P1_URGENT（緊急）、P2_HIGH（高優先）、P3_NORMAL（一般）；需依本次情境與依據判斷 |
-| `department` | string | 目標契約限定為上表中本次 intent 對應部門，不代表已派送 |
+| `department` | string | 後端強制使用上表中本次 intent 對應部門，忽略模型的部門字串，不代表已派送 |
 | `action_required` | string | 非空白的建議處理事項，不承諾已執行 |
 
 AUTO_REPLY 的 ticket_payload 欄位仍必須存在，值為 null，此時沒有工單內部欄位；ESCALATE_TICKET 必須提供上述四個欄位，不能將 level 或 department 設為 null。
 
-實作差異：現有後端已驗證 intent、level、route 與非空白欄位，但一般工單的 department 仍可來自模型字串，尚未完整強制上表映射；明確危險字詞才強制 HARDWARE_FACILITY／總務與硬體組。後續實作必須補齊此映射驗證，不能僅修改文件就視為已完成。
+已實作：後端驗證 intent、level、route 與必要非空白欄位；最終工單 department 一律依最終 intent 映射，不採用模型部門。明確危險字詞會強制 HARDWARE_FACILITY／總務與硬體組。
 
 ---
 
@@ -213,11 +224,17 @@ AUTO_REPLY 的 ticket_payload 欄位仍必須存在，值為 null，此時沒有
 
 ### 4.1 執行時決策
 
-後端先檢索最多三個段落，再將段落內容與本次問題交給 Gemini。回應經後端檢查後，confidence_score 至少 75 時使用 AUTO_REPLY，低於 75 時使用 ESCALATE_TICKET。無文件、模型要求轉派或明確危險字詞時採保守轉派，不能僅因來源相似度高就自動認定可回答。
+一般問題先檢索最多三個段落，再將段落內容與本次問題交給 Gemini。回應經後端檢查後，confidence_score 至少 75 時使用 AUTO_REPLY，低於 75 時使用 ESCALATE_TICKET。無文件、模型要求轉派或明確危險字詞時採保守轉派，不能僅因來源相似度高就自動認定可回答。
 
 有流程文件不代表 AI 可以執行該流程。例如：詢問「如何申請權限」可說明 SOP；要求「直接開通權限」則涉及人工核准，需產生工單資料。UNKNOWN 由 IT 初步受理，不作其他專業領域的通用解答。
 
 前端自動回答顯示綠色標籤；需人工處理顯示警告標籤與工單四欄及 JSON。緊急情境提供既有安全提示：遠離危險、避免接觸、聯絡現場負責人，僅在安全且可行時斷電。所有工單均為資料展示，不宣稱已立案、派送、通知真人、核准或完成處理。
+
+明確符合既有 `冒煙|起火|著火|觸電|電線裸露` 規則時，在登入、輸入與配額檢查後直接使用本地保守決策，不呼叫 Gemini；回傳 HTTP 200、HARDWARE_FACILITY、confidence_score=0、retrieved_sources=[]、ESCALATE_TICKET 與 P1_URGENT 工單。仍扣一次 Agent 用量，記錄 agent.emergency.local。此有限關鍵字規則不是完整的語意分類器；正常問題才以 agent.completed 驗證外部服務完整執行。
+
+一般問題的整次檢索及推理總期限由 AGENT_TIMEOUT_MS 設定，預設 60000，最多 120000；逾時回傳既有 HTTP 500／SERVER_ERROR，不自動重送、不退還預扣用量。SDK 取消僅代表本地等待結束，不保證上游停止計費。每個上游呼叫另有 30 秒限制，共用文件索引不因單一請求取消而中斷其他使用者。
+
+關機停止新對話並等待既有工作及租約清理，SHUTDOWN_TIMEOUT_MS 預設 75000，至少比 Agent 總期限多 10000；部署平台必須提供相容的終止寬限。HTTP 層限流與帳號＋來源登入失敗隔離已實作；共用 Wi-Fi 仍共同受較寬的來源整體限制。DynamoDB 尚未啟用、實際驗證暫緩，production 仍要求 DynamoDB。詳見 [後端保護與上雲待辦](backend/後端保護與上雲待辦.md)。
 
 ### 4.2 驗證資料不屬於聊天合約
 
@@ -394,7 +411,7 @@ retrieved_sources 由後端檢索結果組成，不能由模型提供或覆寫�
 | --- | --- | --- |
 | knowledgeBase.json | 人工審核 MD 主資料後整合十一欄，驗證唯一 ID、日期、資料狀態及分類／部門映射 | 仍為三筆舊展示資料；MD 九筆未匯入 |
 | knowledgeService.js | 保留段落 metadata；檢索依 doc_name、content 建向量，維持排序與 Top-3，不用 expected_* 作為依據 | 已會保留輸入物件欄位，但未驗證新增欄位 |
-| geminiAgent.js | 將本地來源 metadata 明確映射到 retrieved_sources，維持 relevance 來自後端；補齊一般工單部門映射驗證 | 現行回應來源只映射 doc_name、relevance |
+| geminiAgent.js | 將本地來源 metadata 明確映射到 retrieved_sources，維持 relevance 來自後端；一般工單部門映射已完成 | 現行回應來源只映射 doc_name、relevance，metadata 擴充未完成 |
 | frontend/src/services/agentService.js | 驗證擴充欄位型別／選項及 source_url，保留舊來源格式相容性 | 尚未驗證新增 metadata |
 | frontend/src/components/DecisionPanel.js | 顯示第 3.3 節的來源卡片資訊，維持純文字、安全連結及缺值處理 | 來源卡片僅顯示文件名與相似度 |
 | 測試 | 驗證 metadata 不由模型捏造、空來源／舊來源相容、九筆驗證情境及固定選項 | 需隨上述實作新增相應測試 |
@@ -428,10 +445,10 @@ retrieved_sources 由後端檢索結果組成，不能由模型提供或覆寫�
 | `400 Bad Request` | `INVALID_PAYLOAD` | 請求格式非合法 JSON 或 `message` 欄位空白 | 彈出警告訊息提醒使用者輸入有效文字 |
 | `401 Unauthorized` | `UNAUTHORIZED`、`USER_NOT_FOUND`、`INVALID_CREDENTIALS` | 憑證無效或登入失敗 | 提示錯誤；對話憑證失效時回登入頁 |
 | `403 Forbidden` | `USER_ID_MISMATCH` | 本文 userID 與憑證不符 | 不送往 Gemini |
-| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | 冷卻、處理中、登入失敗過多或 Gemini 限流 | 依 `retry_after` 與 `Retry-After` 等待 |
+| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | HTTP 請求頻率、冷卻、處理中、登入失敗過多或 Gemini 限流 | 依 `retry_after` 與 `Retry-After` 等待 |
 | `429 Too Many Requests` | `DAILY_QUOTA_EXCEEDED`、`GLOBAL_QUOTA_EXCEEDED` | 帳號或全站今日額度耗盡 | 顯示台北午夜重置提示 |
-| `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE` | 全站並行滿載或限制儲存無法使用 | 稍後重試，不自動重送 |
-| `500 Internal Error` | `SERVER_ERROR` | 後端向量計算失敗或 Gemini API 服務異常 | 顯示系統維護提示，並解除前端傳送按鈕鎖定 |
+| `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE` | 全站並行滿載、保護計數容量不足或限制儲存無法使用 | 稍後重試，不自動重送 |
+| `500 Internal Error` | `SERVER_ERROR` | 後端向量計算失敗、Gemini API 異常或 Agent 超過總期限 | 顯示系統維護提示，並解除前端傳送按鈕鎖定 |
 
 
 有限制等待時間的錯誤會在 `error` 增加 `retry_after`（整數秒），並回傳相同的 `Retry-After` 標頭；Gemini 上游 429 未提供本地等待值時使用十秒。

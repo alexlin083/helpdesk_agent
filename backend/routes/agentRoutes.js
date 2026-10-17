@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { chat } from '../controllers/agentController.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { usageService } from '../services/usageService.js';
+import { chatRateLimiter, usageRateLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
 router.use(authenticate);
-router.post('/chat', chat);
-router.get('/usage', usage);
+router.post('/chat', chatRateLimiter, chat);
+router.get('/usage', usageRateLimiter, usage);
 
 /**
  * 查詢當前憑證身分的剩餘配額，不呼叫 Gemini、不消耗配額。
