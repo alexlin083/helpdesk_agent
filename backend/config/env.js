@@ -8,8 +8,8 @@ const defaultEnvFile = fileURLToPath(new URL('../.env', import.meta.url));
  * @param {object} [options={}] 載入選項。
  * @param {object} [options.environment=process.env] 環境變數來源。
  * @param {string} [options.envFile] 本機 .env 的絕對路徑。
- * @returns {Readonly<object>} 包含模型、連線、日誌、HTTP 頻率、登入失敗視窗、Agent 總期限及關機緩衝的設定。
- * @throws {Error} 必填參數缺少、限制不是正整數、Agent 超過 120 秒或關機緩衝不足十秒。
+ * @returns {Readonly<object>} 包含模型、連線、日誌、HTTP 頻率、登入失敗視窗、關機緩衝、限制儲存與需求單 JSON 檔路徑的設定。
+ * @throws {Error} 必填參數缺少、限制不是正整數或關機緩衝不足 25 秒。
  */
 export function loadEnv({ environment = process.env, envFile = defaultEnvFile } = {}) {
   // 先依平台參數決定模式；production 完全不讀取本機 .env。
@@ -51,6 +51,8 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
   const limitTable = environment.LIMIT_TABLE || '';
   const awsRegion = environment.AWS_REGION || environment.AWS_DEFAULT_REGION || '';
   if (limitStore === 'dynamodb' && (!limitTable || !awsRegion)) throw new Error('dynamodb 需要 LIMIT_TABLE 與 AWS_REGION');
+  // 需求單資料（含狀態與簽核紀錄）保存在單一 JSON 檔；可用 TICKETS_FILE 指定其他絕對路徑。
+  const ticketsFile = environment.TICKETS_FILE?.trim() || fileURLToPath(new URL('../data/tickets.json', import.meta.url));
   const demoPassword = environment.DEMO_PASSWORD;
   if (typeof demoPassword !== 'string' || !demoPassword.trim()) throw new Error('缺少必要環境參數：DEMO_PASSWORD');
 
@@ -67,14 +69,13 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
     return value;
   }
 
-  const agentTimeoutMs = positive('AGENT_TIMEOUT_MS', 60000);
+  // 需求單判斷的單次上游逾時為 15 秒；關機至少再保留 10 秒等待租約與記錄寫入完成。
   const shutdownTimeoutMs = positive('SHUTDOWN_TIMEOUT_MS', 75000);
-  if (agentTimeoutMs > 120000) throw new Error('AGENT_TIMEOUT_MS 不可超過 120000，以保留 180 秒租約緩衝');
-  if (shutdownTimeoutMs < agentTimeoutMs + 10000) throw new Error('SHUTDOWN_TIMEOUT_MS 至少需比 AGENT_TIMEOUT_MS 多 10000 毫秒');
+  if (shutdownTimeoutMs < 25000) throw new Error('SHUTDOWN_TIMEOUT_MS 至少需要 25000 毫秒');
 
   return Object.freeze({
-    authSecret, limitStore, limitTable, awsRegion, agentTimeoutMs, shutdownTimeoutMs,
-    demoPassword,
+    authSecret, limitStore, limitTable, awsRegion, shutdownTimeoutMs,
+    demoPassword, ticketsFile,
     authTtlSeconds: positive('AUTH_TTL_SECONDS', 7200),
     chatCooldownSeconds: positive('CHAT_COOLDOWN_SECONDS', 10),
     userDailyLimit: positive('USER_DAILY_LIMIT', 30),
@@ -84,8 +85,9 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
     httpRateMaxKeys: positive('HTTP_RATE_MAX_KEYS', 2048),
     httpApiLimit: positive('HTTP_API_LIMIT', 300),
     httpLoginLimit: positive('HTTP_LOGIN_LIMIT', 120),
-    httpChatLimit: positive('HTTP_CHAT_LIMIT', 12),
-    httpUsageLimit: positive('HTTP_USAGE_LIMIT', 30),
+    httpTicketLimit: positive('HTTP_TICKET_LIMIT', 12),
+    httpDepartmentsLimit: positive('HTTP_DEPARTMENTS_LIMIT', 30),
+    httpQueryLimit: positive('HTTP_QUERY_LIMIT', 60),
     loginFailureLimit: positive('LOGIN_FAILURE_LIMIT', 100),
     loginWindowSeconds: positive('LOGIN_WINDOW_SECONDS', 900),
     loginAccountFailureLimit: positive('LOGIN_ACCOUNT_FAILURE_LIMIT', 5),
@@ -97,7 +99,6 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
     corsOrigin: corsOrigin || 'http://localhost:5173',
     geminiApiKey,
     geminiModel: environment.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
-    geminiEmbeddingModel: environment.GEMINI_EMBEDDING_MODEL?.trim() || 'gemini-embedding-001',
   });
 }
 

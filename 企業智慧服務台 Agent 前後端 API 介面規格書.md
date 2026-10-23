@@ -6,449 +6,322 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 # 企業智慧服務台 Agent 前後端 API 介面規格書
 
-本規格書為成員 A（後端與架構主導）與成員 B（前端與 UI/UX 設計）之間的標準介面合約（API Contract），旨在規範 GitHub Pages 前端網頁與部署於 AWS Elastic Beanstalk 之 Node.js Express 後端 API 服務間的通訊協定、JSON 資料綱要、動態決策路由邏輯與錯誤處理機制。
+本規格書為成員 A（後端與架構主導）與成員 B（前端與 UI/UX 設計）之間的標準介面合約（API Contract），旨在規範 GitHub Pages 前端網頁與部署於 AWS Elastic Beanstalk 之 Node.js Express 後端 API 服務間的通訊協定、JSON 資料綱要、分流邏輯與錯誤處理機制。
 
 ---
-
 
 ## 文件適用範圍與實作狀態
 
-本次依據 [知識庫提交指南](backend/data/knowledge-submissions/README.md)、[單筆填寫範本](backend/data/knowledge-submissions/單筆資料填寫範本.md) 與三部門範例，補充來源卡片的擴充契約。來源 metadata 擴充仍屬後續契約，未變更執行中的知識庫。本次另完成後端固定部門映射、明確危險訊息本地轉派與總期限／關機處理；HTTP 層頻率保護已實作，DynamoDB 實際驗證暫緩。
+依《開發規格書 v1.0.3》與後續需求，前端有登入頁、提出需求單頁與狀態追蹤頁（追蹤與簽核），後端提供登入、健康檢查、部門與處理人名單、需求單送出與 AI 判斷部門、需求單查詢與簽核。原本的對話 API（`POST /api/agent/chat`、`GET /api/agent/usage`）、知識庫向量檢索與來源卡片擴充契約已移除；相關檔案暫時保留為空檔以利合併時比對差異。
 
-| 項目 | 目前程式 | 本文件的擴充目標 |
-| --- | --- | --- |
-| 知識庫輸入 | 讀取 `backend/data/knowledgeBase.json`，主要使用 doc_name、content | 審核後整合 MD 主資料的十一個欄位 |
-| MD 與驗證情境 | 不自動載入，也不作為聊天請求本文 | MD 是資料交付來源，驗證情境獨立作為測試依據 |
-| retrieved_sources | 每筆只回傳 doc_name、relevance | 加入段落 ID、分類、摘要、部門、版本、日期、來源連結與資料狀態 |
-| 右側來源卡片 | 文件名與相似度 | 顯示第 3 節定義的來源資訊與狀態標示 |
-| 登入、userID、配額與錯誤 | 已實作後端驗證及限制 | 保留現有端點與既有成功回應頂層欄位 |
-
-第 3 節的擴充來源欄位、第 5 節的擴充 JSON 範例及對應畫面需求是後續實作契約，**不是目前 API 已回傳的內容**。串接現有後端時仍以第 3.1 節為準。擴充完成後維持 `/api/agent/chat`，以新增來源欄位的方式演進，不在本次新增版本端點。
+| 項目 | 狀態 |
+| --- | --- |
+| 登入、使用者代號（含所屬部門）、配額與錯誤格式 | 已實作 |
+| 部門設定檔、帳號設定檔、`GET /api/departments`、`POST /api/tickets` | 已實作（第 3 節） |
+| 需求單 JSON 儲存、`GET /api/tickets/mine`、`GET /api/tickets/department`、`POST /api/tickets/{id}/decision` | 已實作（第 3.4～3.7 節） |
+| 轉單、取消、已完成查詢（`POST /api/tickets/{id}/transfer`、`POST /api/tickets/{id}/cancel`、`GET /api/tickets/completed`） | 已實作（第 3.9～3.11 節） |
+| 「送達」實際通知處理人或部門、Email 或即時通知 | 未實作，不在本次範圍 |
 
 ## 1. 系統概觀與傳輸規範
 
-前後端通訊採用標準 RESTful API 架構，正式部署的傳輸層使用 HTTPS；本機開發可使用 HTTP。為配合前端託管於 GitHub Pages 且後端部署於 AWS Elastic Beanstalk 之跨網域環境，後端必須妥善設定跨來源資源共享（CORS）標頭。
+前後端通訊採用標準 RESTful API 架構，正式部署的傳輸層使用 HTTPS（由負載平衡器或反向代理終止 TLS，後端程式本身不處理憑證）；本機開發可使用 HTTP。為配合前端託管於 GitHub Pages 且後端部署於 AWS Elastic Beanstalk 之跨網域環境，後端必須妥善設定跨來源資源共享（CORS）標頭。
 
-通訊基礎設定規格如下：
+* **基礎 API 網址**：正式 `https://<aws-beanstalk-domain>.elasticbeanstalk.com`；本機 `http://localhost:3000`；所有端點都在 `/api` 之下。
+* **資料格式**：`application/json; charset=utf-8`。請求須帶 `Content-Type: application/json`；JSON 本文上限 16 KB，超過回 413；本文不是有效 JSON 回 400。
+* **認證**：登入與健康檢查以外的端點都需 `Authorization: Bearer <token>`，缺少或格式不符回 401 `UNAUTHORIZED`。
+* **CORS**：只允許 `CORS_ORIGIN` 設定的單一來源；方法 GET、POST、OPTIONS；允許標頭 Content-Type、Accept、Authorization；公開標頭 Retry-After、X-User-Remaining、X-Global-Remaining；預檢請求回 204。
+* **環境變數管理**：`GEMINI_API_KEY` 嚴禁包含於前端代碼或程式庫中，統一交由 AWS Elastic Beanstalk 後端環境變數進行管理。
 
-* **基礎 API 網址 (Base URL)**：`https://<aws-beanstalk-domain>.elasticbeanstalk.com`
-* **資料傳輸格式 (Content-Type)**：`application/json; charset=utf-8`
-* **跨網域存取控制 (CORS)**：後端必須允許來源網域 `https://<github-username>.github.io`，並開放 `GET`、`POST` 與 `OPTIONS` 請求方法。
-* **環境變數管理**：敏感資訊如 `GEMINI_API_KEY` 嚴禁包含於前端代碼或程式庫中，統一交由 AWS Elastic Beanstalk 後端環境變數進行管理。
-
----
-
-## 2. 核心對話端點規格
-
-本系統主要之 Agent 檢索與對話功能統一經由 `/api/agent/chat` 端點處理。前端傳入使用者輸入之問題或點擊之快捷範例，後端執行 RAG 檢索與 Gemini LLM 推理後，回傳包含解答、檢索來源、信心分數與路由處置之結構化 JSON。
-
-端點詳細資訊如下：
-
-* **HTTP 方法**：`POST`
-* **端點路徑**：`/api/agent/chat`
-* **功能說明**：接收使用者提問，觸發後端向量相似度檢索（RAG）與 Gemini LLM 推理，進行意圖分類與動態分流評估，並回傳前端戰情室所需之完整決策資料。
-
-### 請求標頭 (Request Headers)
-
-| 標頭名稱 (Header Name) | 標頭值 (Value) | 說明 (Description) |
-| --- | --- | --- |
-| `Content-Type` | `application/json` | 指定請求主體格式為 JSON |
-| `Accept` | `application/json` | 指定預期接收之回應格式為 JSON |
-| `Authorization` | `Bearer <token>` | 對話與用量端點必填，token 由後端登入核發 |
-
-### 請求主體 (Request Body)
-
-請求主體只需使用者問題與登入帳號 userID。前端先去除問題首尾空白，後端再次驗證 1～500 個 Unicode code points，JSON 本文上限 16 KB。不要將知識庫十一個欄位、來源相似度或驗證情境中的 expected_* 傳入聊天請求。
-
-| 欄位名稱 (Field) | 資料型別 (Type) | 必填 (Required) | 說明與限制 (Description & Constraints) |
+| 方法 | 路徑 | 認證 | 用途 |
 | --- | --- | --- | --- |
-| `message` | `string` | 是 | 使用者輸入之提問文字，長度介於 1 至 500 字元之間 |
-| `userID` | `string` | 是 | 固定識別碼，例如 `user-admin1`；必須與驗證後憑證身分相同，配額以憑證身分計算 |
+| GET | `/api/health` | 不需要 | 檢查後端是否運作，不呼叫 Gemini；回 `{ "success": true, "data": { "status": "ok" } }` |
+| POST | `/api/auth/login` | 不需要 | 驗證十組課堂帳號，取得憑證 |
+| GET | `/api/departments` | Bearer | 部門與處理人名單，取自部門設定檔，不呼叫 Gemini、不扣額度 |
+| POST | `/api/tickets` | Bearer | 送出需求單；指定處理人直接送達，沒指定時呼叫 Gemini 判斷部門；兩者都保存為「待簽核」 |
+| GET | `/api/tickets/mine` | Bearer | 我提出的需求單（最新在前） |
+| GET | `/api/tickets/department` | Bearer | 送達我所屬部門的需求單（待簽核在前） |
+| GET | `/api/tickets/completed` | Bearer | 我提出且已結案的需求單，加上我所屬部門已簽核、已退回、已取消的需求單，預設最新 100 筆，可篩選 |
+| POST | `/api/tickets/{id}/decision` | Bearer | 簽核或退回一張送達我所屬部門、狀態為待簽核的需求單 |
+| POST | `/api/tickets/{id}/transfer` | Bearer | 把一張送達我所屬部門、待簽核的需求單轉到其他部門（可指定處理人） |
+| POST | `/api/tickets/{id}/cancel` | Bearer | 取消一張待簽核的需求單：提單人可取消自己的單，送達部門的成員替提單人取消時必須填原因 |
 
-### 課堂展示登入與 userID
+未知路由與方法不符（例如對 `/api/tickets` 發 GET、對 `/api/tickets/{id}/decision` 發 PUT）一律回 404 `NOT_FOUND`。
 
-前端首頁為登入頁 `index.html`，後端驗證成功後導向 `chat.html`。帳號限定 `admin1`～`admin10`，登入密碼由後端 `DEMO_PASSWORD` 提供，沒有內建預設值，並由授課者私下提供給使用者。其他帳號顯示「查無使用者」，已知帳號密碼不符顯示「密碼錯誤」。
+## 2. 登入、使用者代號與配額
 
-| 帳號 | 固定 userID |
-| --- | --- |
-| `admin1` | `user-admin1` |
-| `admin2` | `user-admin2` |
-| `admin3` | `user-admin3` |
-| `admin4` | `user-admin4` |
-| `admin5` | `user-admin5` |
-| `admin6` | `user-admin6` |
-| `admin7` | `user-admin7` |
-| `admin8` | `user-admin8` |
-| `admin9` | `user-admin9` |
-| `admin10` | `user-admin10` |
+### 2.1 課堂展示登入與 userID
 
-`POST /api/auth/login` 接收 `{ "username": "admin1", "password": "<PASSWORD>" }`，成功回傳 `{ "token": "<JWT>", "expiresAt": 1790000000000, "user": { "username": "admin1", "userID": "user-admin1" } }`；`expiresAt` 是 epoch 毫秒，範例數值僅示意。JWT 以 HS256 簽署，預設兩小時有效，驗證簽章、期限、發行者與受眾。
+前端首頁為登入頁 `index.html`，後端驗證成功後導向提出需求單頁 `propose.html`。帳號限定下表十組英文姓名帳號（全小寫、格式為「名.姓」、區分大小寫），每個帳號屬於一個部門；登入密碼由後端 `DEMO_PASSWORD` 提供，沒有內建預設值，並由授課者私下提供給使用者。其他帳號顯示「查無使用者」，已知帳號密碼不符顯示「密碼錯誤」。
 
-前端只在 sessionStorage 保存後端核發的憑證、期限及身分，不保存密碼、不在前端比對密碼。對話與用量 API 必須傳送 `Authorization: Bearer <token>`；對話本文另傳 `userID`，與憑證不符時回傳 403。前端登出清除本分頁憑證，不代表伺服器撤銷；舊憑證在期限內仍有效。變更簽章金鑰會使既有憑證失效。
-
-### 限流與配額
-
-| 項目 | 預設限制 | 環境參數 |
+| 帳號 | 固定 userID | 所屬部門 |
 | --- | --- | --- |
-| 帳號冷卻 | 每次獲准執行後至少 10 秒 | `CHAT_COOLDOWN_SECONDS` |
-| 帳號並行 | 同時 1 筆 | 固定 |
-| 全站並行 | 同時 2 筆 | `GLOBAL_CONCURRENCY` |
-| 帳號每日配額 | 30 次 | `USER_DAILY_LIMIT` |
-| 全站每日配額 | 100 次，十組帳號共同使用 | `GLOBAL_DAILY_LIMIT` |
-| 登入失敗（來源整體） | 每 IP／IPv6 /64 每 15 分鐘最多 100 次，封鎖後正確帳密也需等待 | `LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS` |
-| 登入失敗（已知帳號＋來源） | 每組合每 5 分鐘最多 5 次；其他帳號不因該組合封鎖而連帶阻擋 | `LOGIN_ACCOUNT_FAILURE_LIMIT`、`LOGIN_ACCOUNT_WINDOW_SECONDS` |
-| HTTP API 入口 | 每 IP／IPv6 /64 每 60 秒 300 次；不含 GET 健康檢查及 OPTIONS | `HTTP_API_LIMIT`、`HTTP_RATE_WINDOW_SECONDS` |
-| HTTP 登入總請求 | 每 IP／IPv6 /64 每 60 秒 120 次，包含成功／失敗 | `HTTP_LOGIN_LIMIT` |
-| HTTP 聊天請求 | 每個驗證後 userID 每 60 秒 12 次，包含後續被業務規則拒絕的請求 | `HTTP_CHAT_LIMIT` |
-| HTTP 用量查詢 | 每個驗證後 userID 每 60 秒 30 次 | `HTTP_USAGE_LIMIT` |
+| `racky.huang` | `user-racky.huang` | 資訊管理一部（dept-it-1） |
+| `cindy.wang` | `user-cindy.wang` | 資訊管理二部（dept-it-2） |
+| `emily.wu` | `user-emily.wu` | 人力資源部（dept-hr-1） |
+| `frank.liu` | `user-frank.liu` | 人力資源部（dept-hr-1） |
+| `grace.tsai` | `user-grace.tsai` | 總務與硬體組（dept-ga-1） |
+| `henry.yang` | `user-henry.yang` | 總務與硬體組（dept-ga-1） |
+| `amy.chen` | `user-amy.chen` | 財務部（dept-fin-1） |
+| `brian.lin` | `user-brian.lin` | 採購部（dept-pur-1） |
+| `david.lee` | `user-david.lee` | 法務部（dept-legal-1） |
+| `ivy.chang` | `user-ivy.chang` | 資訊管理三部（dept-it-3） |
 
-HTTP 入口先在 CORS 之後、JSON 解析之前套用 IP／IPv6 /64 粗限流及登入總請求限流；GET /api/health（含尾斜線）與 OPTIONS 排除。聊天與用量的帳號頻率限制置於憑證驗證之後、controller／儲存操作之前，只取 req.user.userID，不採信本文身分。所有 HTTP 頻率限制各自計數，包括失敗請求；超限回傳既有 429／RATE_LIMIT_EXCEEDED、error.retry_after 與相同 Retry-After，不進入 Agent 預扣。
+帳號與所屬部門定義在後端 `data/accounts.json`（見 3.6 節），前端不再保存帳號名單，只檢查 `user-<名.姓>` 的格式；修改後須重啟後端。這十組帳號同時就是「可指定的處理人」：指定處理人時選的是同事的帳號，處理人 id 即帳號名稱。
 
-HTTP 計數目前各自使用有界單程序記憶體，HTTP_RATE_MAX_KEYS 預設每個 middleware 最多 2048 個識別碼，請求時清除到期項目，滿載回傳 503／SERVICE_BUSY，保留有效限制。重啟歸零，多 instance 不共享 HTTP 計數；不代表已實作跨 instance 的 HTTP 全站限流。
-
-登入失敗以 LIMIT_STORE 原子保存來源整體及已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待，等待時間取仍超限視窗的最晚結束時間。未封鎖前成功登入只清除該帳號組合，不清除來源整體失敗。未知帳號不建立任意 username 計數，只累積來源整體；狀態最多 512 筆，滿載回傳 503。兩種視窗各自到期，來源整體達一百次仍會影響共用出口的其他帳號。
-
-後端先驗證憑證、輸入及 userID，再原子性檢查冷卻／並行／配額並預扣一次 Agent 用量，之後才呼叫 Gemini。被拒絕的請求不扣額；獲准後的上游錯誤仍計入用量，不自動重送。一次 Agent 包含多個上游 API 呼叫，次數配額不等同金額或 token 上限。每天台北時間 00:00 重置每日計數，跨午夜仍保留冷卻與執行中租約。
-
-記憶體模式僅供本機單一程序，重啟會歸零。production 強制要求 DynamoDB，透過同一項目的版本條件寫入，同時更新帳號／全站配額與租約，避免多 instance 超額。儲存故障時回傳 503，不退回記憶體放行。程序崩潰的租約最多保留 180 秒；失敗的配額不退還。此單項目方案適用本課堂規模，不作高流量用途。
-
-前端送出後保留至少十秒倒數；請求完成後依用量 API 的剩餘冷卻更新。後端拒絕請求時提供實際等待時間；每日額度耗盡僅顯示午夜重置提示，不啟動數萬秒倒數。重新整理或多分頁也受到後端限制。
-
-`GET /api/agent/usage` 需登入，不扣 Agent 配額、不呼叫 Gemini，回傳：
+`POST /api/auth/login` 接收 `{ "username": "racky.huang", "password": "<PASSWORD>" }`（`username` 去除首尾空白後比對，長度不得超過 100；`password` 長度不得超過 200），成功回 HTTP 200（帶 `Cache-Control: no-store`）：
 
 ```json
-{
-  "userDailyLimit": 30,
-  "userRemaining": 29,
-  "globalDailyLimit": 100,
-  "globalRemaining": 99,
-  "resetAt": "2026-10-15T16:00:00.000Z",
-  "cooldownSeconds": 8
-}
+{ "token": "<JWT>", "expiresAt": 1790000000000, "user": { "username": "racky.huang", "userID": "user-racky.huang", "department": { "id": "dept-it-1", "name": "資訊管理一部" } } }
 ```
 
-對話成功 JSON 維持既有欄位，另以 `X-User-Remaining`、`X-Global-Remaining` 回應標頭提供預扣後剩餘次數。CORS 允許 `Authorization`，並公開 `Retry-After` 與上述兩個用量標頭給前端讀取。
+`expiresAt` 是憑證到期的 epoch 毫秒，範例數值僅示意。JWT 以 HS256 簽署，含 username、sub（userID）、iat、exp（預設 7200 秒後）、iss（helpdesk）與 aud（helpdesk-chat）；部門不寫入憑證，每次驗證時依目前的帳號設定檔查詢。驗證時檢查演算法、簽章、期限、iss、aud、必要欄位與 username 對應 userID，憑證字串超過 2048 字元或帳號已從設定檔移除都視為無效。
 
----
+登入失敗：
 
-## 3. 回應資料字典與來源擴充契約
-
-### 3.1 現行成功回應
-
-成功使用 HTTP 200，直接回傳決策物件，不包 success 或 data。頂層維持以下六個欄位；本次不新增由前端指定分類、分流或工單等級的參數。
-
-| 欄位 | 型別 | 規則 |
+| HTTP | 錯誤代碼 | 觸發條件與訊息 |
 | --- | --- | --- |
-| `intent` | string | 本次問題意圖，僅限 IT_SUPPORT、HR_POLICY、HARDWARE_FACILITY、UNKNOWN |
-| `retrieved_sources` | array of object | 相似度排序的最多三個段落，沒有文件時為空陣列；現行每筆僅含 doc_name、relevance |
-| `confidence_score` | integer | 0～100；為模型評估，非經校準的正確率，也不是來源相似度 |
-| `action_route` | string | 僅限 AUTO_REPLY、ESCALATE_TICKET |
-| `reply_text` | string | 非空白回答或人工處理說明，前端以純文字呈現 |
-| `ticket_payload` | object 或 null | 自動回答為 null；轉派時必須為完整工單物件 |
+| 400 | `INVALID_PAYLOAD` | 帳號或密碼不是字串、超過長度上限或缺漏（「請提供有效帳號與密碼」） |
+| 401 | `USER_NOT_FOUND` | 帳號不在十組名單內（「查無使用者」） |
+| 401 | `INVALID_CREDENTIALS` | 帳號存在但密碼不符（「密碼錯誤」） |
+| 429 | `LOGIN_RATE_LIMITED` | 來源或帳號＋來源的失敗次數已達上限（「登入失敗次數過多，請稍後再試」） |
+| 503 | `SERVICE_BUSY` | 同時追蹤的登入狀態已達 512 筆（「登入服務忙碌，請稍後再試」） |
+| 503 | `LIMIT_STORE_UNAVAILABLE` | 限制儲存無法使用 |
 
-現行來源物件的最小格式如下。以下數值為格式示例，不代表固定檢索結果：
+前端只在 sessionStorage 保存後端核發的憑證、期限及身分，不保存密碼、不在前端比對密碼。需求單本文不帶 `userID`，提單人由後端依憑證決定。前端登出清除本分頁憑證，不代表伺服器撤銷；舊憑證在期限內仍有效。變更簽章金鑰會使既有憑證失效。
+
+### 2.2 限流與配額
+
+| 項目 | 預設限制 | 環境參數 | 超過時的回應 |
+| --- | --- | --- | --- |
+| 帳號冷卻 | AI 判斷部門獲准後 10 秒 | `CHAT_COOLDOWN_SECONDS` | 429 `RATE_LIMIT_EXCEEDED`，retry_after 為剩餘秒數 |
+| 帳號並行 | 同時 1 筆 | 固定 | 429 `REQUEST_IN_PROGRESS`，retry_after 2 秒 |
+| 全站並行 | 同時 2 筆 | `GLOBAL_CONCURRENCY` | 503 `SERVICE_BUSY`，retry_after 2 秒 |
+| 帳號每日 | 30 次 | `USER_DAILY_LIMIT` | 429 `DAILY_QUOTA_EXCEEDED`，retry_after 為距台北午夜的秒數 |
+| 全站每日 | 100 次，十組帳號共用 | `GLOBAL_DAILY_LIMIT` | 429 `GLOBAL_QUOTA_EXCEEDED`，retry_after 同上 |
+| 登入失敗（來源整體） | 每 IP／IPv6 /64 每 15 分鐘 100 次 | `LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS` | 429 `LOGIN_RATE_LIMITED` |
+| 登入失敗（已知帳號＋來源） | 每組合每 5 分鐘 5 次 | `LOGIN_ACCOUNT_FAILURE_LIMIT`、`LOGIN_ACCOUNT_WINDOW_SECONDS` | 429 `LOGIN_RATE_LIMITED` |
+| HTTP API 入口 | 每 IP／IPv6 /64 每 60 秒 300 次；不含健康檢查及 OPTIONS | `HTTP_API_LIMIT`、`HTTP_RATE_WINDOW_SECONDS` | 429 `RATE_LIMIT_EXCEEDED` |
+| HTTP 登入總請求 | 每 IP／IPv6 /64 每 60 秒 120 次 | `HTTP_LOGIN_LIMIT` | 429 `RATE_LIMIT_EXCEEDED` |
+| HTTP 需求單送出與簽核 | 每個驗證後 userID 每 60 秒 12 次 | `HTTP_TICKET_LIMIT` | 429 `RATE_LIMIT_EXCEEDED` |
+| HTTP 部門名單 | 每個驗證後 userID 每 60 秒 30 次 | `HTTP_DEPARTMENTS_LIMIT` | 429 `RATE_LIMIT_EXCEEDED` |
+| HTTP 需求單查詢 | 每個驗證後 userID 每 60 秒 60 次 | `HTTP_QUERY_LIMIT` | 429 `RATE_LIMIT_EXCEEDED` |
+
+- 只有沒指定處理人、需要呼叫 Gemini 的需求單才檢查並預扣冷卻、並行與每日配額；檢查順序為處理中租約 → 冷卻 → 帳號每日 → 全站每日 → 全站並行，在同一次原子操作內完成，通過才扣帳號與全站各一次並取得 180 秒租約。
+- 被拒絕的請求（含輸入、身分驗證失敗）不扣額；獲准後的任何失敗（Gemini 上游錯誤、未設金鑰、輸出格式異常、需求單保存失敗）仍計入用量且不退還；後端不自動重送。
+- 每日計數以台北時間（UTC+8）00:00 重置；跨午夜仍保留冷卻與執行中的租約。
+- 記憶體模式只適用本機單一程序，重啟後歸零；production 強制使用 DynamoDB（`LIMIT_STORE=dynamodb`），儲存故障時回 503 `LIMIT_STORE_UNAVAILABLE`，不退回記憶體、不放行 Gemini。
+- HTTP 層限制各自使用有界單程序記憶體（`HTTP_RATE_MAX_KEYS`，預設 2048），滿載回 503 `SERVICE_BUSY`；被 HTTP 限流拒絕不扣額度。
+- 獲准後的成功回應帶 `X-User-Remaining` 與 `X-Global-Remaining` 標頭；任何帶等待時間的拒絕帶 `Retry-After` 標頭，與 `error.retry_after` 一致。
+
+## 3. 需求單 API（已實作）
+
+本節依《開發規格書 v1.0.3》的「部門設定檔」與「需求單 API」實作，並依後續需求加入帳號設定檔、需求單 JSON 儲存、查詢與簽核端點。所有端點都需要 `Authorization: Bearer <token>`，錯誤格式見第 4 節。「送達」不會實際通知任何人；送達部門的成員可在狀態追蹤頁看到待簽核的需求單並簽核或退回，提單人可追蹤狀態。
+
+### 3.1 部門設定檔 `backend/data/departments.json`
+
+部門陣列，每個部門一筆，欄位一律用英文；後端啟動時一次讀入並驗證，修改後須重啟。目前定義八個部門：資訊管理一部（預設部門）、資訊管理二部、人力資源部、總務與硬體組、財務部、採購部、法務部、資訊管理三部（AI 宣導、部署、教育訓練與發展），每個部門至少有一個登入帳號，AI 判斷送達的需求單才有人能簽核：
+
+| 欄位 | 型別 | 必填 | 規則 |
+| --- | --- | --- | --- |
+| `id` | string | 是 | 部門的穩定識別碼，全檔唯一；Gemini 回覆時也用它指定部門 |
+| `name` | string | 是 | 部門名稱，是需求單最後要送到的業務單位 |
+| `type` | string | 否 | 部門屬性標籤；缺漏時視為空字串，前端不顯示標籤 |
+| `duty` | string | 是 | 一段話說明部門處理哪些事；交給 Gemini，也顯示在「各部門業務範圍」視窗 |
+| `business` | string[] | 是 | 代表部門業務的關鍵字詞；Gemini 用來比對主題與內容 |
+
+處理人不寫在部門設定檔：每個部門可被指定的處理人就是該部門的登入帳號（見 3.6 節），`GET /api/departments` 會自動合併。設定檔若仍含 `handlers` 欄位會啟動失敗，提示改用帳號設定檔。預設部門：`business` 含「IT資訊服務台」的部門，接收對不到部門的需求單；設定檔必須恰有一個，否則啟動失敗。JSON 語法錯誤、必填欄位缺漏或型別不符、id 重複時啟動失敗，錯誤訊息只列出位置與原因。
+
+### 3.2 `GET /api/departments`
+
+取得部門與處理人名單，不呼叫 Gemini、不扣額度、不計入冷卻。成功回 HTTP 200（帶 `Cache-Control: no-store`），內容直接取自部門設定檔：
 
 ```json
 {
-  "doc_name": "VPN連線故障排查手冊.md",
-  "relevance": 0.89
-}
-```
-
-### 3.2 知識庫主資料與 API 欄位對應
-
-MD 中每筆主資料提供十一個 key。整理者審核後才整合至 knowledgeBase.json；目前沒有 Markdown 匯入端點，也沒有自動載入此資料夾的機制。
-
-| MD 主資料欄位 | 型別與約束 | 擴充後的 API 位置／用途 |
-| --- | --- | --- |
-| `id` | 非空白 string，全資料庫唯一，如 IT-001 | retrieved_sources[].id，識別段落與追蹤版本 |
-| `category` | 固定 INTENTS 之一 | retrieved_sources[].category，來源段落的分類 |
-| `doc_name` | 非空白 string；同文件多段可重複 | retrieved_sources[].doc_name，文件名稱 |
-| `section_title` | 非空白 string | retrieved_sources[].section_title，引用段落標題 |
-| `content` | 非空白 string，含適用條件、步驟、例外與人工處理條件 | 後端建立向量並提供 Gemini 的完整依據；來源卡片採 summary，不在此擴充回應預設傳送全文 |
-| `summary` | 非空白 string，一至兩句且不增加正文沒有的規則 | retrieved_sources[].summary，來源卡片摘要 |
-| `department` | 固定部門名稱，依第 3.4 節對應 | retrieved_sources[].department，來源流程權責部門 |
-| `version` | 非空白 string，如 1.0 | retrieved_sources[].version，原樣顯示，不當數字計算 |
-| `updated_at` | YYYY-MM-DD 的有效日期 | retrieved_sources[].updated_at，最後整理／核對日期，前端直接顯示日期字串 |
-| `source_url` | HTTP／HTTPS 網址或 JSON null | retrieved_sources[].source_url，原始文件連結；無法提供或無權公開時為 null |
-| `data_status` | OFFICIAL、PENDING_REVIEW、SIMULATED | retrieved_sources[].data_status，區分正式、待確認與模擬來源 |
-
-擴充來源回應另加 `relevance`（number，0～1，由後端計算，顯示至四位小數），不屬於組員手填的主資料。主資料中的其餘十個欄位直接由選中的本地段落取得，不讓 Gemini 重新撰寫或捏造。全文 content 可供內部檢索與推理，但不因加入前端來源卡片而重複回傳。
-
-`category` 是某個來源段落的主題；頂層 `intent` 是本次提問的分類，兩者不要求相等。例如一個問題可能同時檢索到不同類別的段落。來源 department 也不等於本次工單 department，前端需分別標示「來源部門」與「建議處理部門」。
-
-### 3.3 擴充相容規則與前端呈現
-
-| 欄位／狀態 | 顯示與處理方式 |
-| --- | --- |
-| doc_name、section_title | 文件名稱與段落標題分開呈現；同文件多段可同時出現，不以文件名去重 |
-| id | 作為來源卡片識別碼；舊資料沒有 id 時，暫以該次結果順序識別，不回寫假編號 |
-| summary | 顯示簡短摘要，不拿 reply_text 假冒文件摘要 |
-| category、department | 顯示來源類別與權責部門，固定值對應第 3.4 節 |
-| version、updated_at | 顯示版本及整理／核對日期；日期不代表企業已審核或規章生效日 |
-| source_url | 非 null 且為有效 HTTP／HTTPS 才提供「查看原始文件」連結；開新分頁使用 noopener／noreferrer；null 時不顯示可點擊連結，不組出本機檔案路徑 |
-| OFFICIAL | 顯示「正式資料」，僅代表資料已按交付規則確認來源，不代表 AI 回答保證正確 |
-| PENDING_REVIEW | 顯示「待確認」，不得顯示為正式規章 |
-| SIMULATED | 明顯標示「課堂模擬資料」，不作為真實企業政策或法律依據 |
-| relevance | 顯示 0～1 的向量餘弦相似度與進度條，不標成回答信心 |
-
-新主資料提交時十一個欄位均需提供，只有 source_url 可填 null。相容舊資料時，API 的 doc_name、relevance 仍必填；新增 metadata 欄位在遷移期間可省略。前端缺少摘要、版本等資訊時隱藏該列或顯示「待補資料」，不得猜測、將缺值填成 OFFICIAL，或用今天日期補上 updated_at。null 不作為其他字串欄位的替代值。
-
-後端現階段沒有依 data_status 自動篩選來源，整合者仍須人工審核。資料篩選或核准流程若需自動化，另訂需求；本規格不宣稱已有該功能。擴充完成前，現有前端驗證器仍只檢查 doc_name、relevance，額外欄位不會自動產生來源卡片畫面。
-
-### 3.4 固定分類與工單格式
-
-| INTENTS／category | departments 對應 |
-| --- | --- |
-| `IT_SUPPORT` | `IT資訊服務台` |
-| `HR_POLICY` | `HR人力資源部` |
-| `HARDWARE_FACILITY` | `總務與硬體組` |
-| `UNKNOWN` | `IT資訊服務台` |
-
-ROUTES 只允許 AUTO_REPLY、ESCALATE_TICKET；LEVELS 只允許 P1_URGENT、P2_HIGH、P3_NORMAL，不增加其他值。
-
-| 工單欄位 | 型別 | 規則 |
-| --- | --- | --- |
-| `ticket_id` | string | 後端生成 TK- 加 UUID，模型或提交者不決定正式編號 |
-| `level` | string | P1_URGENT（緊急）、P2_HIGH（高優先）、P3_NORMAL（一般）；需依本次情境與依據判斷 |
-| `department` | string | 後端強制使用上表中本次 intent 對應部門，忽略模型的部門字串，不代表已派送 |
-| `action_required` | string | 非空白的建議處理事項，不承諾已執行 |
-
-AUTO_REPLY 的 ticket_payload 欄位仍必須存在，值為 null，此時沒有工單內部欄位；ESCALATE_TICKET 必須提供上述四個欄位，不能將 level 或 department 設為 null。
-
-已實作：後端驗證 intent、level、route 與必要非空白欄位；最終工單 department 一律依最終 intent 映射，不採用模型部門。明確危險字詞會強制 HARDWARE_FACILITY／總務與硬體組。
-
----
-
-## 4. 分流與知識庫驗證情境
-
-### 4.1 執行時決策
-
-一般問題先檢索最多三個段落，再將段落內容與本次問題交給 Gemini。回應經後端檢查後，confidence_score 至少 75 時使用 AUTO_REPLY，低於 75 時使用 ESCALATE_TICKET。無文件、模型要求轉派或明確危險字詞時採保守轉派，不能僅因來源相似度高就自動認定可回答。
-
-有流程文件不代表 AI 可以執行該流程。例如：詢問「如何申請權限」可說明 SOP；要求「直接開通權限」則涉及人工核准，需產生工單資料。UNKNOWN 由 IT 初步受理，不作其他專業領域的通用解答。
-
-前端自動回答顯示綠色標籤；需人工處理顯示警告標籤與工單四欄及 JSON。緊急情境提供既有安全提示：遠離危險、避免接觸、聯絡現場負責人，僅在安全且可行時斷電。所有工單均為資料展示，不宣稱已立案、派送、通知真人、核准或完成處理。
-
-明確符合既有 `冒煙|起火|著火|觸電|電線裸露` 規則時，在登入、輸入與配額檢查後直接使用本地保守決策，不呼叫 Gemini；回傳 HTTP 200、HARDWARE_FACILITY、confidence_score=0、retrieved_sources=[]、ESCALATE_TICKET 與 P1_URGENT 工單。仍扣一次 Agent 用量，記錄 agent.emergency.local。此有限關鍵字規則不是完整的語意分類器；正常問題才以 agent.completed 驗證外部服務完整執行。
-
-一般問題的整次檢索及推理總期限由 AGENT_TIMEOUT_MS 設定，預設 60000，最多 120000；逾時回傳既有 HTTP 500／SERVER_ERROR，不自動重送、不退還預扣用量。SDK 取消僅代表本地等待結束，不保證上游停止計費。每個上游呼叫另有 30 秒限制，共用文件索引不因單一請求取消而中斷其他使用者。
-
-關機停止新對話並等待既有工作及租約清理，SHUTDOWN_TIMEOUT_MS 預設 75000，至少比 Agent 總期限多 10000；部署平台必須提供相容的終止寬限。HTTP 層限流與帳號＋來源登入失敗隔離已實作；共用 Wi-Fi 仍共同受較寬的來源整體限制。DynamoDB 尚未啟用、實際驗證暫緩，production 仍要求 DynamoDB。詳見 [後端保護與上雲待辦](backend/後端保護與上雲待辦.md)。
-
-### 4.2 驗證資料不屬於聊天合約
-
-MD 的驗證情境是離線測試資料，與十一個主資料欄位分開。只將 message 作為問題送入對話 API，測試工具另提供登入憑證與 userID；不得把 expected_* 放入知識庫正文或要求模型照預期答案回傳。
-
-| 驗證情境欄位 | 與執行時回應的關係 |
-| --- | --- |
-| message | 對話請求的 message |
-| expected_intent | 比對頂層 intent，固定四種選項 |
-| expected_action_route | 比對頂層 action_route，固定兩種選項 |
-| expected_level | AUTO_REPLY 為 null；轉派時比對 ticket_payload.level |
-| expected_department | AUTO_REPLY 為 null；轉派時比對 ticket_payload.department |
-| expected_reply_points | 檢查 reply_text 是否涵蓋重點，不要求逐字相等 |
-
-relevance、confidence_score、ticket_id 不由組員手填。範例回應中的數值及 UUID 只用於說明格式，不是測試必須完全相同的答案。以下情境矩陣來自三部門 MD，須在資料整合及程式擴充後再實測：
-
-| 主資料 ID | 情境摘要 | 預期 intent | 預期 route | 預期 level | 預期工單部門 |
-| --- | --- | --- | --- | --- | --- |
-| IT-001 | VPN 一般連線排查 | IT_SUPPORT | AUTO_REPLY | null | null |
-| IT-002 | 專案共享資料夾無存取權限 | IT_SUPPORT | ESCALATE_TICKET | P2_HIGH | IT資訊服務台 |
-| IT-003 | 缺少問題主題或必要資訊 | UNKNOWN | ESCALATE_TICKET | P3_NORMAL | IT資訊服務台 |
-| HR-001 | 一般請假申請步驟 | HR_POLICY | AUTO_REPLY | null | null |
-| HR-002 | 忘記打卡的補正申請 | HR_POLICY | ESCALATE_TICKET | P3_NORMAL | HR人力資源部 |
-| HR-003 | 當期薪資明細疑似差異 | HR_POLICY | ESCALATE_TICKET | P2_HIGH | HR人力資源部 |
-| FAC-001 | 投影機與會議設備借用流程 | HARDWARE_FACILITY | AUTO_REPLY | null | null |
-| FAC-002 | 投影設備無法顯示且影響當日會議 | HARDWARE_FACILITY | ESCALATE_TICKET | P2_HIGH | 總務與硬體組 |
-| FAC-003 | 設備冒煙或起火的初步受理 | HARDWARE_FACILITY | ESCALATE_TICKET | P1_URGENT | 總務與硬體組 |
-
----
-
-## 5. 擴充後的前後端串接範例
-
-以下範例使用 MD 主資料的實際 key 與內容；**尚未載入 knowledgeBase.json，新增來源 metadata 也尚未由 API 回傳**。每個來源物件的 metadata 由後端從本地文件取得，只有 relevance 是本次檢索計算的數值。
-
-以下各次呼叫都需 `POST /api/agent/chat`、`Content-Type: application/json` 與 `Authorization: Bearer <token>`。為方便閱讀，來源陣列只示意一筆；實際回傳最多三筆，不能把範例當成固定數量、排名或分數。
-
-### 5.1 一般排查自動回答
-
-請求本文：
-
-```json
-{
-  "message": "我已經有 VPN 權限，但今天連不上，先檢查什麼？",
-  "userID": "user-admin1"
-}
-```
-
-目標成功回應：
-
-```json
-{
-  "intent": "IT_SUPPORT",
-  "retrieved_sources": [
+  "departments": [
     {
-      "id": "IT-001",
-      "category": "IT_SUPPORT",
-      "doc_name": "遠端連線操作手冊",
-      "section_title": "VPN 一般連線排查",
-      "summary": "VPN 無法連線時，依序確認網路、用戶端、憑證與帳號狀態。",
-      "department": "IT資訊服務台",
-      "version": "1.0",
-      "updated_at": "2026-10-16",
-      "source_url": null,
-      "data_status": "SIMULATED",
-      "relevance": 0.89
+      "id": "dept-it-1",
+      "name": "資訊管理一部",
+      "type": "資訊",
+      "duty": "處理各部門有關網路連線相關、VPN 連線申請等，並擔任 IT資訊服務台",
+      "business": ["VPN", "防火牆", "IT資訊服務台"],
+      "handlers": [
+        { "id": "racky.huang", "name": "racky.huang" },
+        { "id": "amy.chen", "name": "amy.chen" }
+      ]
     }
-  ],
-  "confidence_score": 88,
-  "action_route": "AUTO_REPLY",
-  "reply_text": "請先確認一般網頁可正常開啟，再確認 VPN 用戶端與公司憑證是否有效，以及帳號是否顯示過期或鎖定。不要停用防火牆或略過憑證檢查；若仍無法連線，請提供錯誤代碼、時間及裝置類型供 IT 確認。",
-  "ticket_payload": null
+  ]
 }
 ```
 
-### 5.2 需人工核准的高優先工單
+`handlers` 是該部門的登入帳號（`id` 與 `name` 都是帳號名稱，沒有職稱欄位），沒有帳號的部門回空陣列；`type` 缺漏時回空字串。前端：部門或處理人缺少 `id` 或 `name` 時整份名單視為格式不正確；`business` 中不是文字的項目略過；沒有處理人的部門不出現在指定處理人的選單，但仍列在「各部門業務範圍」視窗。指定處理人為可搜尋選單：輸入帳號或部門名稱即時過濾（不分大小寫），依部門分組顯示，選定後把處理人 id 放入 `handler_id` 送出。
 
-請求本文：
+### 3.3 `POST /api/tickets`
 
-```json
-{
-  "message": "我們專案組今天都打不開共享資料夾，請直接幫我們開權限。",
-  "userID": "user-admin1"
-}
-```
+請求欄位：
 
-目標成功回應：
+| 欄位 | 型別 | 必填 | 規則 |
+| --- | --- | --- | --- |
+| `subject` | string | 是 | 去除首尾空白後 1～100 個 Unicode code points；不合規定回 400 `INVALID_PAYLOAD`（「subject 必須是 1 到 100 字元的非空白字串」） |
+| `content` | string | 是 | 去除首尾空白後 1～2000 個 Unicode code points（「content 必須是 1 到 2000 字元的非空白字串」） |
+| `handler_id` | string 或 null | 否 | 指定處理人的 id，即同事的帳號名稱（取自 GET /api/departments 的 handlers[].id）；null、省略或空字串代表不指定；有值但不是任何帳號回 400（「指定的處理人不存在」）；不是字串或 null 回 400（「handler_id 必須是字串或 null」） |
 
-```json
-{
-  "intent": "IT_SUPPORT",
-  "retrieved_sources": [
-    {
-      "id": "IT-002",
-      "category": "IT_SUPPORT",
-      "doc_name": "資訊權限申請辦法",
-      "section_title": "專案共享資料夾無存取權限",
-      "summary": "共享資料夾權限需資料擁有者與主管核准，再由 IT 人工設定。",
-      "department": "IT資訊服務台",
-      "version": "1.0",
-      "updated_at": "2026-10-16",
-      "source_url": null,
-      "data_status": "SIMULATED",
-      "relevance": 0.86
-    }
-  ],
-  "confidence_score": 62,
-  "action_route": "ESCALATE_TICKET",
-  "reply_text": "權限變更需要資料擁有者及直屬主管確認，AI 無法直接開通。請提供資料夾名稱、工作用途與需要的存取範圍，不要提供密碼。已產生工單資料，可於右側查看。",
-  "ticket_payload": {
-    "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000",
-    "level": "P2_HIGH",
-    "department": "IT資訊服務台",
-    "action_required": "人工核對多人共享資料夾存取問題及核准紀錄"
-  }
-}
-```
+提單人由後端依憑證決定，本文不帶 `userID`；多餘欄位忽略；本文上限 16 KB。
 
-### 5.3 緊急設備事件
+成功一律回 HTTP 200：
 
-請求本文：
-
-```json
-{
-  "message": "辦公室螢幕冒煙了，我現在該怎麼辦？",
-  "userID": "user-admin1"
-}
-```
-
-目標成功回應：
-
-```json
-{
-  "intent": "HARDWARE_FACILITY",
-  "retrieved_sources": [
-    {
-      "id": "FAC-003",
-      "category": "HARDWARE_FACILITY",
-      "doc_name": "設備異常緊急通報流程",
-      "section_title": "設備冒煙或起火的初步受理",
-      "summary": "設備冒煙等危險情況應先遠離並聯絡現場負責人，產生 P1 緊急工單資料。",
-      "department": "總務與硬體組",
-      "version": "1.0",
-      "updated_at": "2026-10-16",
-      "source_url": null,
-      "data_status": "SIMULATED",
-      "relevance": 0.52
-    }
-  ],
-  "confidence_score": 42,
-  "action_route": "ESCALATE_TICKET",
-  "reply_text": "請先遠離危險設備，避免接觸；僅在安全且可行時切斷電源，並立即聯絡現場負責人。已產生緊急報修工單資料，可於工單資料區查看。",
-  "ticket_payload": {
-    "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000",
-    "level": "P1_URGENT",
-    "department": "總務與硬體組",
-    "action_required": "請現場負責人確認安全並安排設備檢測"
-  }
-}
-```
-
----
-
-## 6. Gemini 內部輸出與後續實作範圍
-
-### 6.1 模型輸出與對外回應的邊界
-
-推理模型由後端 GEMINI_MODEL 設定，不在 API 契約綁定舊模型名稱。呼叫時使用 responseMimeType 為 application/json 與 responseSchema，模型輸出 intent、confidence_score、action_route、reply_text 及 ticket_payload。
-
-retrieved_sources 由後端檢索結果組成，不能由模型提供或覆寫。新增來源 metadata 不需要增加模型輸出的同名欄位。現有 schema 仍要求模型轉派時提供完整 ticket_payload（含 ticket_id），但最終對外 ticket_id 由後端重新生成 UUID；模型編號不得直接當正式編號。
-
-### 6.2 擴充實作清單
-
-| 檔案／範圍 | 後續需要的調整 | 現況 |
+| 欄位 | 型別 | 說明 |
 | --- | --- | --- |
-| knowledgeBase.json | 人工審核 MD 主資料後整合十一欄，驗證唯一 ID、日期、資料狀態及分類／部門映射 | 仍為三筆舊展示資料；MD 九筆未匯入 |
-| knowledgeService.js | 保留段落 metadata；檢索依 doc_name、content 建向量，維持排序與 Top-3，不用 expected_* 作為依據 | 已會保留輸入物件欄位，但未驗證新增欄位 |
-| geminiAgent.js | 將本地來源 metadata 明確映射到 retrieved_sources，維持 relevance 來自後端；一般工單部門映射已完成 | 現行回應來源只映射 doc_name、relevance，metadata 擴充未完成 |
-| frontend/src/services/agentService.js | 驗證擴充欄位型別／選項及 source_url，保留舊來源格式相容性 | 尚未驗證新增 metadata |
-| frontend/src/components/DecisionPanel.js | 顯示第 3.3 節的來源卡片資訊，維持純文字、安全連結及缺值處理 | 來源卡片僅顯示文件名與相似度 |
-| 測試 | 驗證 metadata 不由模型捏造、空來源／舊來源相容、九筆驗證情境及固定選項 | 需隨上述實作新增相應測試 |
+| `ticket_id` | string | `TK-` 加 UUID，由後端每次產生 |
+| `route` | string | `HANDLER`（有指定處理人）、`DEPARTMENT`（Gemini 判斷出部門且信心分數達 75）、`FALLBACK`（對不到部門，送預設部門） |
+| `department` | string | 送達的部門名稱；`HANDLER` 為處理人所屬部門，`FALLBACK` 為預設部門 |
+| `handler` | object | 只有 `HANDLER` 出現：`{ name }`，name 為處理人的帳號名稱 |
+| `basis` | string | 判斷依據，只有 `DEPARTMENT` 與 `FALLBACK` 出現；去空白後最多 200 字，空字串時省略 |
+| `status` | string | 新單一律為 `PENDING`（待簽核） |
 
-本次不新增文件上傳、知識庫管理、來源全文查詢或工單派送端點。資料擴充不改變登入、userID、每日配額及冷卻規則。
+範例一（指定處理人）：
+
+```json
+// 請求
+{ "subject": "VPN 帳號申請", "content": "新進同仁需要 VPN 連線權限", "handler_id": "racky.huang" }
+// 回應
+{ "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000", "route": "HANDLER", "department": "資訊管理一部", "handler": { "name": "racky.huang" }, "status": "PENDING" }
+```
+
+範例二（由 Gemini 判斷）：
+
+```json
+// 請求
+{ "subject": "ERP 報表權限", "content": "財務部需要新增 ERP 報表的檢視權限", "handler_id": null }
+// 回應
+{ "ticket_id": "TK-9b2f6c1e-5d3a-4e8b-8f21-0a7c4d9e1b35", "route": "DEPARTMENT", "department": "資訊管理二部", "basis": "需求提到 ERP 報表權限，屬於資訊管理二部的 ERP 業務", "status": "PENDING" }
+```
+
+處理順序：解析 JSON → ① 驗證憑證 → ② 檢查欄位 → ③ 查指定處理人（找到即保存為待簽核並回傳 `HANDLER`，不扣額度、不呼叫 Gemini）；沒有指定處理人時 → ④ 預扣用量與租約（見 2.2，成功時回應帶 `X-User-Remaining`、`X-Global-Remaining`）→ ⑤ 呼叫 Gemini 一次（逾時 15 秒、temperature 0.2、maxOutputTokens 1024；輸入為 `{ ticket: { subject, content }, departments: [{ id, name, duty, business }] }`，不送處理人；結構化輸出 `department_id`（字串或 null）、`confidence_score`（0～100 整數）、`basis`（字串））→ ⑥ 驗證與分流（`department_id` 在設定檔內且分數 >= 75 為 `DEPARTMENT`，否則 `FALLBACK`；格式異常回 500「AI 回應格式異常，請稍後再試」）→ ⑦ 保存需求單（失敗回 503 `TICKET_STORE_UNAVAILABLE`）→ ⑧ 回應並釋放租約。上游 429 轉成 429 `RATE_LIMIT_EXCEEDED`，其他上游錯誤與逾時轉成 500 `SERVER_ERROR`；已扣的額度不退還。這條流程不使用向量檢索。
+
+### 3.4 需求單儲存 `backend/data/tickets.json`
+
+所有需求單（指定處理人與 AI 判斷都包含）保存在單一 JSON 檔（可用 `TICKETS_FILE` 指定其他絕對路徑），每張需求單一筆，含狀態與簽核紀錄；檔案含需求單原文，不得提交 Git，也列入 `.ebignore`。寫入先寫暫存檔再改名，並在程序內排隊；只適用單一程序，多個 instance 不會共用。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `ticket_id` | string | 單號，`TK-` 加 UUID |
+| `created_at`、`updated_at` | string | UTC ISO 8601；簽核或退回時更新 `updated_at` |
+| `requester` | object | 提單人 `{ user_id, username, department_id, department_name }`，取自憑證 |
+| `subject`、`content` | string | 去除首尾空白後的原文 |
+| `route` | string | `HANDLER`、`DEPARTMENT`、`FALLBACK` |
+| `department_id`、`department_name` | string | 送達部門；簽核權限以 `department_id` 判定 |
+| `handler` | object 或 null | 指定處理人 `{ id, name }`（都是帳號名稱）；AI 判斷的單為 null |
+| `judgement` | object 或 null | AI 判斷 `{ ai_department_id, confidence_score, basis, model }`；指定處理人的單為 null |
+| `status` | string | `PENDING`（待簽核）、`APPROVED`（已簽核）、`REJECTED`（已退回）、`CANCELLED`（已取消） |
+| `decision` | object 或 null | 簽核或取消結果 `{ by_user_id, by_username, at, comment }`，取消時另含 `cancelled_by`（`REQUESTER` 或 `DEPARTMENT`）；待簽核時 null |
+| `history` | object[] | 歷程，每筆 `{ at, event, by_user_id, by_username, comment? }`，event 為 `SUBMITTED`、`APPROVED`、`REJECTED`、`TRANSFERRED`、`CANCELLED`；轉單另含 `from_department_id`、`from_department_name`、`to_department_id`、`to_department_name`、`to_handler_name?`；取消另含 `cancelled_by` |
+
+轉單只改變 `department_id`、`department_name` 與 `handler`，`route` 與 `judgement` 保留原始判斷；簽核權限以目前的 `department_id` 判定。
+
+### 3.5 `GET /api/tickets/mine` 與 `GET /api/tickets/department`
+
+- `GET /api/tickets/mine`：回 `{ "tickets": [ ...需求單 ] }`，只含提單人為憑證身分的需求單，依 `created_at` 由新到舊；帶 `Cache-Control: no-store`。
+- `GET /api/tickets/department`：回 `{ "department": { "id", "name" }, "tickets": [ ...需求單 ] }`，只含 `department_id` 等於憑證身分所屬部門的需求單；待簽核的在前（最早的優先），其餘依 `updated_at` 由新到舊。
+- 兩者都不呼叫 Gemini、不扣額度；需求單的欄位見 3.4 節。前端整理時缺少 `ticket_id`、`subject`、`status`、`department_name` 或 `created_at` 視為格式不正確。
+
+### 3.6 帳號設定檔 `backend/data/accounts.json`
+
+帳號陣列，每筆 `{ "username", "department_id" }`；`username` 全小寫、格式為「名.姓」、全檔唯一；`department_id` 必須存在於部門設定檔。後端啟動時讀入並驗證，錯誤時啟動失敗並只列出位置與原因。十組帳號的對應見 2.1 節。帳號同時是可指定的處理人（下拉選單依部門分組顯示帳號），同部門的所有帳號都可以看到並簽核送達該部門的需求單。
+
+### 3.7 `POST /api/tickets/{id}/decision`
+
+簽核或退回一張需求單；只有送達部門的成員可以操作，且需求單狀態必須是待簽核。
+
+| 欄位 | 型別 | 必填 | 規則 |
+| --- | --- | --- | --- |
+| `action` | string | 是 | `APPROVE`（簽核）或 `REJECT`（退回）；其他值回 400「action 必須是 APPROVE 或 REJECT」 |
+| `comment` | string | 否 | 備註，去除首尾空白後最多 200 個 Unicode code points；不是字串回 400「comment 必須是字串」，超過回 400「comment 最多 200 字元」 |
+
+成功回 HTTP 200 `{ "ticket": { ...更新後的需求單 } }`：`status` 變為 `APPROVED` 或 `REJECTED`，`decision` 填入簽核人與備註，`history` 追加一筆。失敗：404 `TICKET_NOT_FOUND`（「找不到這張需求單」）、403 `FORBIDDEN`（「只有送達部門的成員可以簽核這張需求單」）、409 `TICKET_ALREADY_DECIDED`（「這張需求單已經簽核過」或「這張需求單已經取消」）、503 `TICKET_STORE_UNAVAILABLE`。
+
+### 3.9 `POST /api/tickets/{id}/transfer`
+
+AI 判斷錯誤或指定錯處理人時，送達部門的成員可把「待簽核」的需求單轉到其他部門；狀態維持待簽核，轉單後只有新部門的成員可以簽核、退回、轉單或替提單人取消。
+
+| 欄位 | 型別 | 必填 | 規則 |
+| --- | --- | --- | --- |
+| `department_id` | string | 是 | 目標部門 id，必須存在且不同於目前送達部門（「轉單的目標部門不存在」「轉單的目標部門必須不同於目前部門」） |
+| `handler_id` | string 或 null | 否 | 目標部門的處理人 id（帳號名稱）；不存在回「指定的處理人不存在」，不屬於目標部門回「指定的處理人不屬於目標部門」；省略或 null 代表不指定（轉單後 `handler` 為 null） |
+| `comment` | string | 否 | 備註，最多 200 字 |
+
+成功回 HTTP 200 `{ "ticket": { ...更新後的需求單 } }`，`history` 追加 `TRANSFERRED`。失敗：400、403 `FORBIDDEN`（「只有送達部門的成員可以轉這張需求單」）、404、409（已簽核或已取消）、503。
+
+### 3.10 `POST /api/tickets/{id}/cancel`
+
+取消一張「待簽核」的需求單，資料保留、狀態改為 `CANCELLED`，不提供刪除。
+
+| 身分 | 條件 |
+| --- | --- |
+| 提單人（`requester.user_id` 等於憑證身分） | 可取消自己的單，`comment` 選填 |
+| 送達部門的成員 | 可替提單人取消，`comment` 必填（「替提單人取消時必須填寫原因」） |
+| 其他人 | 403 `FORBIDDEN`（「只有提單人或送達部門的成員可以取消這張需求單」） |
+
+成功回 HTTP 200 `{ "ticket": { ...更新後的需求單 } }`，`decision.cancelled_by` 為 `REQUESTER` 或 `DEPARTMENT`，`history` 追加 `CANCELLED`。已簽核、已退回或已取消的單回 409 `TICKET_ALREADY_DECIDED`（「這張需求單已經簽核或取消，不能再取消」）。
+
+### 3.11 `GET /api/tickets/completed`
+
+回傳與憑證身分有關且已結案的需求單：提單人是本人的，加上送達部門是本人所屬部門的，狀態為已簽核、已退回或已取消，依簽核（或取消）時間由新到舊，預設最新 100 筆。查詢參數：
+
+| 參數 | 規則 |
+| --- | --- |
+| `status` | `APPROVED`、`REJECTED` 或 `CANCELLED`；省略為全部 |
+| `q` | 關鍵字，去空白後最多 100 字，不分大小寫，比對單號、主題、內容、提單人帳號、簽核人帳號、簽核備註與處理人姓名 |
+| `from`、`to` | 簽核日期的台北日期（`YYYY-MM-DD`），`from` 不可晚於 `to` |
+| `limit` | 1～500 的整數，預設 100 |
+
+成功回 `{ "department": { "id", "name" }, "total": 符合條件的總筆數, "limit": 本次上限, "tickets": [ ...最多 limit 筆 ] }`；條件無效回 400 `INVALID_PAYLOAD`。轉到其他部門後才被簽核的單屬於簽核部門的紀錄，但提單人仍看得到。
+
+### 3.8 前端呈現摘要
+
+提出需求單頁的結果視窗：`HANDLER` 送達「姓名（部門）」、方式「已指定處理人，直接送達」；`DEPARTMENT` 送達部門名稱、方式「AI 依主題與內容判斷部門」，有 `basis` 時多一列「判斷依據」；`FALLBACK` 方式「內容未對應到明確部門」，說明「先送「{部門}」，由人工分派部門」；視窗另有前往狀態追蹤頁的連結。429 非額度錯誤依 `retry_after` 倒數（超過 300 秒或沒有秒數時只顯示提示）；額度用盡、503 不倒數；401 清除本分頁登入狀態並回登入頁。完整的狀態對應見開發規格書「送出結果與錯誤處理」。
+
+狀態追蹤頁 `tickets.html` 有兩個分頁，依需求單「進行中／已結案」切分而不是依身分：
+
+- 「表單追蹤」分兩區。「待簽核」先列送達本部門、等我簽核的需求單（標籤「待本部門簽核」，顯示提單人，卡片內有備註欄、「轉單到其他部門」、「替提單人取消」（原因必填）與「退回」「簽核」按鈕），再列我送出且仍在等待的需求單（標籤「我提出的」，可取消，原因選填）；同一張單同時符合兩者時只列一次並保留簽核操作。「已退回」列我提出但被退回的需求單，附退回人與原因，可按「重新提出」把主題與內容帶到提出需求單頁（透過本分頁的 sessionStorage 草稿，帶入後即清除）。分頁計數為兩區的總筆數。
+- 「已完成」以 `GET /api/tickets/completed` 列出我提出且已結案的需求單與本部門的簽核紀錄（我提出的加上「我提出的」標籤），預設最新 100 筆，可用關鍵字、結果（全部／已簽核／已退回／已取消）、簽核日期區間與「今天」「近 7 天」「近 30 天」「不限日期」常用條件查詢。
+
+每張卡片都顯示狀態、送達對象、判斷依據、簽核人與備註、轉單紀錄與歷程。403、404、409 的提示顯示在卡片內，401 回登入頁。頂欄的帳號選單顯示所屬部門。`#completed` 直接開啟已完成分頁。
 
 ---
 
-## 7. 錯誤處理與 HTTP 狀態碼規範
+## 4. 錯誤處理與 HTTP 狀態碼規範
 
-為確保前端 GitHub Pages 在面對網路異常或後端故障時能維持良好之 UI/UX 狀態（如取消按鈕鎖定、顯示友善錯誤提示），後端必須遵守以下標準 HTTP 狀態碼回應原則。
+為確保前端 GitHub Pages 在面對網路異常或後端故障時能維持良好之 UI/UX 狀態（如解除按鈕鎖定、顯示友善錯誤提示），後端必須遵守以下標準 HTTP 狀態碼回應原則。
 
 ### 錯誤回應 JSON 格式
 
-所有非 200 狀態碼之錯誤回應，統一採用包含 `error` 物件之 JSON 格式：
+所有非 2xx 狀態碼之錯誤回應，統一採用包含 `error` 物件之 JSON 格式；有等待時間時另有 `error.retry_after`（整數秒）並回相同的 `Retry-After` 標頭：
 
 ```json
 {
   "error": {
     "code": "INVALID_PAYLOAD",
-    "message": "請求主體缺失 message 欄位或內容為空白。"
+    "message": "subject 必須是 1 到 100 字元的非空白字串"
   }
 }
 ```
 
+訊息是繁體中文；後端不輸出供應商（Gemini）的原始錯誤、金鑰或需求單內容。
+
 ### HTTP 狀態碼對照表
 
-| HTTP 狀態碼 | 錯誤代碼 (Error Code) | 觸發時機與說明 (Trigger Scenario) | 前端處置建議 (Frontend Action) |
+| HTTP 狀態碼 | 錯誤代碼 | 觸發時機 | 前端處置 |
 | --- | --- | --- | --- |
-| `200 OK` | N/A | 請求處理成功，順利回傳 Agent 對話與決策資料 | 正常解構 JSON 並更新對話與戰情室 UI |
-| `400 Bad Request` | `INVALID_PAYLOAD` | 請求格式非合法 JSON 或 `message` 欄位空白 | 彈出警告訊息提醒使用者輸入有效文字 |
-| `401 Unauthorized` | `UNAUTHORIZED`、`USER_NOT_FOUND`、`INVALID_CREDENTIALS` | 憑證無效或登入失敗 | 提示錯誤；對話憑證失效時回登入頁 |
-| `403 Forbidden` | `USER_ID_MISMATCH` | 本文 userID 與憑證不符 | 不送往 Gemini |
-| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | HTTP 請求頻率、冷卻、處理中、登入失敗過多或 Gemini 限流 | 依 `retry_after` 與 `Retry-After` 等待 |
-| `429 Too Many Requests` | `DAILY_QUOTA_EXCEEDED`、`GLOBAL_QUOTA_EXCEEDED` | 帳號或全站今日額度耗盡 | 顯示台北午夜重置提示 |
-| `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE` | 全站並行滿載、保護計數容量不足或限制儲存無法使用 | 稍後重試，不自動重送 |
-| `500 Internal Error` | `SERVER_ERROR` | 後端向量計算失敗、Gemini API 異常或 Agent 超過總期限 | 顯示系統維護提示，並解除前端傳送按鈕鎖定 |
+| `200 OK` | N/A | 請求處理成功 | 依 `route` 顯示結果視窗 |
+| `400 Bad Request` | `INVALID_PAYLOAD` | JSON 無法解析、登入欄位不合規定、需求單欄位不合規定或指定的處理人不存在 | 「送出的內容不符合規定，請檢查後再試」加後端訊息 |
+| `401 Unauthorized` | `UNAUTHORIZED`、`USER_NOT_FOUND`、`INVALID_CREDENTIALS` | 憑證缺少、無效或過期；登入失敗 | 登入頁顯示訊息；其他頁清除登入狀態並回登入頁 |
+| `403 Forbidden` | `FORBIDDEN` | 不是送達部門的成員卻嘗試簽核或轉單；既不是提單人也不是送達部門成員卻嘗試取消 | 顯示後端訊息 |
+| `404 Not Found` | `NOT_FOUND`、`TICKET_NOT_FOUND` | 未知路由或方法不符；簽核、轉單或取消時查無需求單 | 提示後端版本與網址；查無需求單時顯示後端訊息 |
+| `409 Conflict` | `TICKET_ALREADY_DECIDED` | 需求單已簽核、退回或取消 | 顯示提示並重新整理清單 |
+| `413 Payload Too Large` | `PAYLOAD_TOO_LARGE` | JSON 本文超過 16 KB | 提示縮短內容 |
+| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | HTTP 請求頻率、冷卻、處理中、登入失敗過多或 Gemini 上游限流 | 依 `retry_after` 倒數（最多 300 秒） |
+| `429 Too Many Requests` | `DAILY_QUOTA_EXCEEDED`、`GLOBAL_QUOTA_EXCEEDED` | 帳號或全站今日額度耗盡 | 顯示台北午夜重置提示，不倒數 |
+| `500 Internal Error` | `SERVER_ERROR` | 未設定 Gemini 金鑰、模型輸出未通過驗證、上游失敗或逾時、其他未預期錯誤 | 顯示系統暫時無法使用提示，解除送出鎖定 |
+| `503 Service Unavailable` | `SERVICE_BUSY`、`LIMIT_STORE_UNAVAILABLE`、`TICKET_STORE_UNAVAILABLE` | 全站並行滿載、保護計數容量不足、限制儲存無法使用或需求單檔案無法讀寫 | 稍後重試，不自動重送、不倒數 |
 
-
-有限制等待時間的錯誤會在 `error` 增加 `retry_after`（整數秒），並回傳相同的 `Retry-After` 標頭；Gemini 上游 429 未提供本地等待值時使用十秒。
+Gemini 上游 429 未提供本地等待值時 `retry_after` 使用十秒；每日額度用盡時的 `retry_after` 是到台北午夜的秒數，前端不應拿它做倒數。

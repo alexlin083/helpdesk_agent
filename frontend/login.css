@@ -1,0 +1,36 @@
+/* 登入頁：左側說明、右側登入表單。 */
+.login-page { display: grid; grid-template-columns: minmax(0, 47fr) minmax(0, 53fr); min-height: 100dvh; }
+
+.login-hero {
+  background: var(--brown); color: #fff; padding: 48px 56px; display: flex; flex-direction: column; justify-content: space-between;
+}
+.hero-body { margin-top: auto; padding-top: 48px; }
+.hero-title { font-family: var(--serif); font-size: clamp(32px, 4.2vw, 54px); font-weight: 700; line-height: 1.35; letter-spacing: 0.01em; }
+.hero-steps { margin-top: 44px; border-top: 1px solid rgba(255, 255, 255, 0.28); }
+.hero-steps li {
+  display: flex; align-items: baseline; gap: 22px; padding: 22px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.28);
+  font-size: 17px; color: rgba(255, 255, 255, 0.92);
+}
+.step-index { font-weight: 700; font-size: 20px; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.72); font-variant-numeric: tabular-nums; }
+
+.login-main { display: grid; place-items: center; padding: 48px 24px; }
+.login-form { width: min(100%, 460px); }
+.form-title { font-family: var(--serif); font-size: 44px; font-weight: 700; line-height: 1.2; }
+.form-intro { color: var(--muted); margin: 14px 0 40px; font-size: 16px; }
+.login-form .field { margin-bottom: 24px; }
+.password-field { position: relative; }
+.password-field input { padding-right: 76px; }
+.password-field .link-button { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); text-decoration: none; color: var(--ink-soft); }
+.login-form .form-error { margin: 14px 0 8px; }
+.login-form .primary-button { width: 100%; margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-hero { padding: 32px 24px 36px; }
+  .hero-body { padding-top: 36px; }
+  .hero-steps { margin-top: 28px; }
+  .hero-steps li { padding: 16px 0; font-size: 15px; gap: 16px; }
+  .login-main { padding: 36px 20px 48px; align-items: start; }
+  .form-title { font-size: 34px; }
+  .form-intro { margin-bottom: 28px; }
+}

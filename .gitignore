@@ -9,6 +9,10 @@ node_modules/
 !.env.example
 !.env.sample
 
+# Ticket data contains raw ticket text; never commit it
+backend/data/tickets.json
+backend/data/tickets.json.tmp
+
 # Local system files, logs, and private credentials
 .DS_Store
 *.log

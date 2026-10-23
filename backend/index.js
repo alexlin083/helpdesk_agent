@@ -12,14 +12,14 @@ const server = app.listen(env.port, onListening);
  */
 function onListening() {
   logger('info', 'server.started', { port: env.port, nodeEnv: env.nodeEnv, nodeVersion: process.version,
-    corsOrigin: env.corsOrigin, model: env.geminiModel, embeddingModel: env.geminiEmbeddingModel,
+    corsOrigin: env.corsOrigin, model: env.geminiModel,
     credentialsConfigured: Boolean(env.geminiApiKey), logLevel: env.logLevel,
     localUrl: `http://localhost:${env.port}/api` });
   if (!env.geminiApiKey) logger('warn', 'server.credentials.missing', { hint: '請在後端設定 GEMINI_API_KEY 並重新啟動。' });
-  logger('info', 'server.limits', { store: env.limitStore, accountCount: 10, userDailyLimit: env.userDailyLimit,
+  logger('info', 'server.limits', { store: env.limitStore, ticketStore: 'file', accountCount: 10, userDailyLimit: env.userDailyLimit,
     globalDailyLimit: env.globalDailyLimit, cooldownSeconds: env.chatCooldownSeconds, globalConcurrency: env.globalConcurrency });
   logger('info', 'server.http_limits', { store: 'bounded-memory', windowSeconds: env.httpRateWindowSeconds,
-    api: env.httpApiLimit, login: env.httpLoginLimit, chat: env.httpChatLimit, usage: env.httpUsageLimit,
+    api: env.httpApiLimit, login: env.httpLoginLimit, ticket: env.httpTicketLimit, departments: env.httpDepartmentsLimit, query: env.httpQueryLimit,
     maxKeysPerLimiter: env.httpRateMaxKeys, loginFailureLimit: env.loginFailureLimit,
     loginWindowSeconds: env.loginWindowSeconds, loginAccountFailureLimit: env.loginAccountFailureLimit,
     loginAccountWindowSeconds: env.loginAccountWindowSeconds });
@@ -41,7 +41,7 @@ server.on('error', onServerError);
 
 let stopping = false;
 /**
- * 停止接受新對話與連線，等待既有對話及租約清理完成後才結束程序。
+ * 停止接受新需求單與連線，等待既有工作及租約清理完成後才結束程序。
  * 重複訊號不啟動第二次關機；超過設定期限才強制關閉連線並以非零碼結束。
  * @returns {Promise<void>} 正常或強制關閉程序。
  */

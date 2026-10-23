@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 process.env.NODE_ENV = 'test';
+process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 process.env.LOG_LEVEL = 'debug';
 const { createLogger, diagnoseError, requestContext } = await import('../utils/logger.js');
-const { createHelpdeskAgent } = await import('../services/geminiAgent.js');
+const { createTicketJudge } = await import('../services/ticketJudge.js');
+const { createDepartmentService } = await import('../services/departmentService.js');
 const { requestLogger } = await import('../middleware/requestLogger.js');
 const { loadEnv } = await import('../config/env.js');
 
@@ -88,14 +90,14 @@ async function verifyContext() {
 test('並行請求的 requestId 不互相污染', verifyContext);
 
 /**
- * 驗證 embedding 失敗可定位 taskType、模型與狀態，並維持前端原有的安全錯誤合約。
+ * 驗證需求單判斷失敗時日誌可定位階段、模型與上游狀態，不輸出需求單原文，並維持安全的錯誤合約。
  * @param {import('node:test').TestContext} context 測試隔離與 mock 管理器。
  * @returns {Promise<void>}
  */
 async function verifyPipelineFailure(context) {
   const records = [];
   /**
-   * 捕捉 Agent 與檢索器的實際日誌，不對外輸出測試內容。
+   * 捕捉判斷器的實際日誌，不對外輸出測試內容。
    * @param {string} record JSON 日誌。
    * @returns {void}
    */
@@ -103,29 +105,31 @@ async function verifyPipelineFailure(context) {
   context.mock.method(console, 'log', capture);
   context.mock.method(console, 'error', capture);
   /**
-   * 模擬文件 embedding 的模型不存在錯誤，錯誤原文刻意包含不得輸出的內容。
+   * 模擬推理模型不存在的錯誤，錯誤原文刻意包含不得輸出的內容。
    * @returns {Promise<never>}
    * @throws {Error} 模擬 SDK HTTP 404。
    */
-  async function embedContent() { throw Object.assign(new Error('private-user-question private-document'), { status: 404 }); }
+  async function generateContent() { throw Object.assign(new Error('private-subject private-content'), { status: 404 }); }
   /**
    * 提供替身 client，避免呼叫真實 API。
-   * @returns {object} 僅提供 embedding 的 SDK 替身。
+   * @returns {object} 僅提供推理的 SDK 替身。
    */
-  function getAI() { return { models: { embedContent } }; }
-  const run = createHelpdeskAgent({ getAI });
-  await assert.rejects(run('private-user-question'), { status: 500, code: 'SERVER_ERROR', message: '檢索或 AI 服務暫時無法回應' });
+  function getAI() { return { models: { generateContent } }; }
+  const departments = createDepartmentService({ departments: [{ id: 'd', name: '部門', duty: 'IT資訊服務台', business: ['IT資訊服務台'] }] });
+  const judge = createTicketJudge({ getAI, departments, model: 'test-model' });
+  await assert.rejects(judge({ subject: 'private-subject', content: 'private-content' }), { status: 500, code: 'SERVER_ERROR', message: '檢索或 AI 服務暫時無法回應' });
   const events = new Map();
   for (const record of records) events.set(record.event, record);
-  assert.equal(events.get('gemini.embedding.failed').taskType, 'RETRIEVAL_DOCUMENT');
-  assert.equal(events.get('gemini.embedding.failed').reason, 'MODEL_NOT_FOUND');
-  assert.equal(events.get('gemini.embedding.failed').upstreamStatus, 404);
-  assert.equal(events.get('agent.failed').stage, 'knowledge.retrieve');
-  assert.ok(!events.has('gemini.generate.started'));
-  assert.ok(!JSON.stringify(records).includes('private-user-question'));
-  assert.ok(!JSON.stringify(records).includes('private-document'));
+  assert.equal(events.get('ticket.judge.failed').stage, 'gemini.generate');
+  assert.equal(events.get('ticket.judge.failed').reason, 'MODEL_NOT_FOUND');
+  assert.equal(events.get('ticket.judge.failed').upstreamStatus, 404);
+  assert.equal(events.get('ticket.judge.failed').model, 'test-model');
+  assert.ok(events.has('gemini.generate.started'));
+  assert.ok(!events.has('ticket.judge.completed'));
+  assert.ok(!JSON.stringify(records).includes('private-subject'));
+  assert.ok(!JSON.stringify(records).includes('private-content'));
 }
-test('真實 Agent 管線的日誌指出失敗階段且不洩漏原文', verifyPipelineFailure);
+test('需求單判斷管線的日誌指出失敗階段且不洩漏原文', verifyPipelineFailure);
 
 /**
  * 驗證連線在原請求脈絡之外結束時仍保有 requestId，且 finish／close 不重複記錄。
@@ -145,7 +149,7 @@ function verifyRequestCompletion(context) {
   let nextCalls = 0;
   /** 執行替代的後續處理。@returns {void} */
   function next() { nextCalls += 1; }
-  requestLogger({ method: 'POST', path: '/api/agent/chat' }, res, next);
+  requestLogger({ method: 'POST', path: '/api/tickets' }, res, next);
   res.emit('finish');
   res.emit('close');
   assert.equal(nextCalls, 1);

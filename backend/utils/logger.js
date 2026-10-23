@@ -5,14 +5,14 @@ export const requestContext = new AsyncLocalStorage();
 const priorities = { debug: 10, info: 20, warn: 30, error: 40, silent: Infinity };
 
 /**
- * 遮蔽欄位中的機密與內容，並遞迴處理陣列及物件；不接受原始 Error 供直接輸出。
+ * 遮蔽欄位中的機密與內容（含需求單的 subject 與 content），並遞迴處理陣列及物件；不接受原始 Error 供直接輸出。
  * @param {unknown} value 待輸出的日誌值。
  * @param {string} secret 目前設定的金鑰，用於精確遮蔽。
  * @param {string} [key=''] 欄位名稱，用於識別敏感內容。
  * @returns {unknown} 可安全序列化的日誌值。
  */
 function redact(value, secret, key = '') {
-  if (/key|token|secret|authorization|password|message|contents|prompt|reply|stack|body|content|text/i.test(key)) return '[REDACTED]';
+  if (/key|token|secret|authorization|password|message|contents|prompt|reply|stack|body|content|text|subject/i.test(key)) return '[REDACTED]';
   if (value instanceof Error) return '[ERROR: use diagnoseError]';
   if (typeof value === 'string') {
     const masked = secret ? value.split(secret).join('[REDACTED]') : value;
@@ -82,7 +82,7 @@ export function diagnoseError(error) {
   } else if (networkCode || /fetch failed|network/.test(text)) {
     reason = 'NETWORK_ERROR'; hint = '檢查 DNS、網路、防火牆、代理與 TLS 憑證。';
   } else if (status === 400) {
-    reason = 'INVALID_ARGUMENT'; hint = '確認模型是否支援此 API、embedding 參數或結構化輸出 schema。';
+    reason = 'INVALID_ARGUMENT'; hint = '確認模型是否支援此 API 或結構化輸出 schema。';
   } else if (status >= 500) {
     reason = 'UPSTREAM_UNAVAILABLE'; hint = '上游服務暫時異常，稍後重試並確認服務狀態。';
   }

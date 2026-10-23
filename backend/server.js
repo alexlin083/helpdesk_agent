@@ -13,7 +13,7 @@ app.set('trust proxy', env.trustProxy);
 app.use(requestLogger);
 app.use(cors({
   origin: env.corsOrigin,
-  methods: ['GET', 'POST', 'OPTIONS'], // GET 供健康檢查使用。
+  methods: ['GET', 'POST', 'OPTIONS'], // GET 供健康檢查、用量查詢與部門名單使用。
   allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
   exposedHeaders: ['Retry-After', 'X-User-Remaining', 'X-Global-Remaining'],
 }));

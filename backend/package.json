@@ -2,7 +2,7 @@
   "name": "backend",
   "version": "1.0.0",
   "type": "module",
-  "description": "Lightweight Express API middleware with a Gemini agent",
+  "description": "企業智慧服務台後端：登入、部門與處理人名單、需求單送出與 AI 判斷、需求單查詢與簽核 API",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +10,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": "22.x"
+    "node": ">=20"
   },
   "keywords": [],
   "author": "",

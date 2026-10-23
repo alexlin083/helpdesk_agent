@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
+process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.LIMIT_STORE = 'memory';
 process.env.GEMINI_API_KEY = '';
 process.env.LOG_LEVEL = 'silent';
 const { env } = await import('../config/env.js');
-const { createAuthService, accountFor } = await import('../services/authService.js');
+const { createAuthService, accountFor, ACCOUNTS } = await import('../services/authService.js');
 const { createUsageService, taipeiDay } = await import('../services/usageService.js');
 const { createMemoryLimitStore, createDynamoLimitStore } = await import('../services/limitStore.js');
 
@@ -19,15 +20,16 @@ async function signedIdentity(context) {
   context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-15T00:00:00Z') });
   const auth = createAuthService({ ...env, authSecret: 'test-only-secret'.repeat(4), authTtlSeconds: 2 });
   for (let index = 1; index <= 10; index += 1) {
-    const user = accountFor(`admin${index}`);
+    const user = accountFor(ACCOUNTS[index - 1]);
+    assert.equal(typeof user.department.id, 'string');
     assert.deepEqual(auth.credentials(user.username, 'test-only-password'), user);
     const session = await auth.issue(user);
     assert.deepEqual(await auth.verify(session.token), user);
     await assert.rejects(auth.verify(`${session.token}tampered`), { status: 401 });
   }
-  for (const name of ['admin0', 'admin11', 'constructor', '__proto__', 'Admin1']) assert.equal(accountFor(name), null);
-  assert.equal(auth.credentials('admin1', 'wrong'), null);
-  const session = await auth.issue(accountFor('admin10'));
+  for (const name of ['racky', 'racky.huang.jr', 'Racky.Huang', 'admin1', 'constructor', '__proto__']) assert.equal(accountFor(name), null);
+  assert.equal(auth.credentials('racky.huang', 'wrong'), null);
+  const session = await auth.issue(accountFor('ivy.chang'));
   context.mock.timers.tick(3000);
   await assert.rejects(auth.verify(session.token), { status: 401 });
 }
@@ -43,10 +45,10 @@ async function concurrencyAndCooldown() {
   function clock() { return now; }
   const usage = createUsageService({ store: createMemoryLimitStore(), clock });
   const tasks = [];
-  for (let index = 1; index <= 10; index += 1) tasks.push(usage.reserve(`user-admin${index}`));
+  for (let index = 1; index <= 10; index += 1) tasks.push(usage.reserve(`user-${ACCOUNTS[index - 1]}`));
   const results = await Promise.allSettled(tasks);
   const allowed = [];
-  for (const [index, result] of results.entries()) if (result.status === 'fulfilled') allowed.push([`user-admin${index + 1}`, result.value]);
+  for (const [index, result] of results.entries()) if (result.status === 'fulfilled') allowed.push([`user-${ACCOUNTS[index]}`, result.value]);
   assert.equal(allowed.length, 2);
   await assert.rejects(usage.reserve(allowed[0][0]), { code: 'REQUEST_IN_PROGRESS' });
   await usage.release(allowed[0][0], allowed[0][1].id);
@@ -71,20 +73,20 @@ async function dailyQuota() {
   function clock() { return now; }
   const config = { ...env, userDailyLimit: 1, globalDailyLimit: 2 };
   const usage = createUsageService({ store: createMemoryLimitStore(), config, clock });
-  const first = await usage.reserve('user-admin1');
-  await usage.release('user-admin1', first.id);
+  const first = await usage.reserve('user-racky.huang');
+  await usage.release('user-racky.huang', first.id);
   now += 10000;
-  await assert.rejects(usage.reserve('user-admin1'), { code: 'DAILY_QUOTA_EXCEEDED' });
-  const second = await usage.reserve('user-admin2');
-  await assert.rejects(usage.reserve('user-admin3'), { code: 'GLOBAL_QUOTA_EXCEEDED' });
-  assert.equal((await usage.usage('user-admin3')).globalRemaining, 0);
+  await assert.rejects(usage.reserve('user-racky.huang'), { code: 'DAILY_QUOTA_EXCEEDED' });
+  const second = await usage.reserve('user-amy.chen');
+  await assert.rejects(usage.reserve('user-brian.lin'), { code: 'GLOBAL_QUOTA_EXCEEDED' });
+  assert.equal((await usage.usage('user-brian.lin')).globalRemaining, 0);
   assert.equal(taipeiDay(now).day, '2026-10-15');
   now = Date.parse('2026-10-15T16:00:00Z');
   assert.equal(taipeiDay(now).day, '2026-10-16');
-  assert.equal((await usage.usage('user-admin1')).globalRemaining, 2);
-  await assert.rejects(usage.reserve('user-admin2'), { code: 'REQUEST_IN_PROGRESS' });
-  assert.equal((await usage.reserve('user-admin1')).usage.userRemaining, 0);
-  await usage.release('user-admin2', second.id);
+  assert.equal((await usage.usage('user-racky.huang')).globalRemaining, 2);
+  await assert.rejects(usage.reserve('user-amy.chen'), { code: 'REQUEST_IN_PROGRESS' });
+  assert.equal((await usage.reserve('user-racky.huang')).usage.userRemaining, 0);
+  await usage.release('user-amy.chen', second.id);
 }
 test('帳號及全站配額一起扣除，台北午夜重置且保留並行保護', dailyQuota);
 
@@ -100,9 +102,9 @@ async function failureWindows() {
   for (let index = 0; index < 100; index += 1) await usage.loginAttempt('127.0.0.1', false);
   await assert.rejects(usage.loginAttempt('127.0.0.1', true), { code: 'LOGIN_RATE_LIMITED', retryAfter: 900 });
   await usage.loginAttempt('127.0.0.2', true);
-  await usage.reserve('user-admin1');
+  await usage.reserve('user-racky.huang');
   now += 180001;
-  const recovered = await usage.reserve('user-admin1');
+  const recovered = await usage.reserve('user-racky.huang');
   assert.equal(recovered.usage.userRemaining, env.userDailyLimit - 2);
   now += 900000;
   await usage.loginAttempt('127.0.0.1', true);
@@ -135,12 +137,12 @@ async function dynamoAtomicity() {
   const config = { ...env, globalConcurrency: 10, globalDailyLimit: 1 };
   const first = createUsageService({ store: createDynamoLimitStore({ client, table: 'test' }), config });
   const second = createUsageService({ store: createDynamoLimitStore({ client, table: 'test' }), config });
-  const results = await Promise.allSettled([first.reserve('user-admin1'), second.reserve('user-admin2')]);
+  const results = await Promise.allSettled([first.reserve('user-racky.huang'), second.reserve('user-amy.chen')]);
   assert.equal(results[0].status, 'fulfilled');
   assert.equal(results[1].reason.code, 'GLOBAL_QUOTA_EXCEEDED');
-  assert.equal((await second.usage('user-admin2')).globalRemaining, 0);
+  assert.equal((await second.usage('user-amy.chen')).globalRemaining, 0);
   failed = true;
-  await assert.rejects(first.reserve('user-admin3'), { status: 503, code: 'LIMIT_STORE_UNAVAILABLE' });
-  await assert.rejects(second.usage('user-admin1'), { status: 503 });
+  await assert.rejects(first.reserve('user-brian.lin'), { status: 503, code: 'LIMIT_STORE_UNAVAILABLE' });
+  await assert.rejects(second.usage('user-racky.huang'), { status: 503 });
 }
 test('DynamoDB 跨服務原子配額、版本競爭與故障時拒絕放行', dynamoAtomicity);

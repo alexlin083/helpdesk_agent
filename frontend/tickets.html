@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="企業智慧服務台：追蹤我提出的需求單狀態、簽核或轉送送達本部門的需求單、查詢本部門的簽核紀錄">
+    <title>狀態追蹤 · 企業智慧服務台</title>
+    <link rel="stylesheet" href="./base.css">
+    <link rel="stylesheet" href="./propose.css">
+    <link rel="stylesheet" href="./tickets.css">
+    <script type="module" src="./src/tickets.js"></script>
+  </head>
+  <body class="tickets-page" hidden>
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 14.5l1.8 1.8 3.4-3.6"/></svg>
+        </span>
+        <div><p class="brand-name">企業智慧服務台</p><p class="brand-sub">需求單提案</p></div>
+      </div>
+      <nav class="top-nav" aria-label="主要頁面">
+        <a href="./propose.html">提出需求單</a>
+        <a href="./tickets.html" aria-current="page">狀態追蹤</a>
+      </nav>
+      <details id="account-menu" class="account-menu">
+        <summary class="account-summary" aria-label="帳號選單">
+          <span id="account-avatar" class="avatar" aria-hidden="true"></span>
+          <span id="account-name" class="account-name"></span>
+          <span class="chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="account-panel">
+          <p class="account-id"><span class="muted">使用者代號</span><span id="account-id"></span></p>
+          <p class="account-id"><span class="muted">所屬部門</span><span id="account-department"></span></p>
+          <button id="logout-button" class="secondary-button" type="button">登出</button>
+        </div>
+      </details>
+    </header>
+
+    <main class="tickets-layout">
+      <div class="tickets-head">
+        <div>
+          <h1 id="page-title">狀態追蹤</h1>
+          <p class="intro">追蹤還在進行中的需求單：等待簽核的、等你簽核的、被退回的；結案的單在「已完成」查詢</p>
+        </div>
+        <button id="refresh-button" class="secondary-button" type="button">重新整理</button>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="需求單清單">
+        <button id="tab-tracking" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-tracking">表單追蹤 <span id="count-tracking" class="tab-count"></span></button>
+        <button id="tab-completed" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-completed">已完成</button>
+      </div>
+
+      <section id="panel-tracking" class="tab-panel" role="tabpanel" aria-labelledby="tab-tracking">
+        <p id="notice-tracking" class="notice" role="status" hidden></p>
+        <section class="tracking-section" aria-labelledby="pending-title">
+          <h2 id="pending-title" class="section-title">待簽核 <span id="count-pending" class="tab-count"></span></h2>
+          <p id="pending-hint" class="department-title"></p>
+          <p id="empty-pending" class="empty" hidden>目前沒有等待簽核的需求單，<a href="./propose.html">前往提出需求單</a></p>
+          <div id="list-pending" class="ticket-list" aria-live="polite"></div>
+        </section>
+        <section class="tracking-section" aria-labelledby="rejected-title">
+          <h2 id="rejected-title" class="section-title">已退回 <span id="count-rejected" class="tab-count"></span></h2>
+          <p class="department-title">你提出但被退回的需求單；看過退回原因後，可帶入原本內容重新提出</p>
+          <p id="empty-rejected" class="empty" hidden>沒有被退回的需求單</p>
+          <div id="list-rejected" class="ticket-list" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <section id="panel-completed" class="tab-panel" role="tabpanel" aria-labelledby="tab-completed" hidden>
+        <p id="completed-title" class="department-title"></p>
+        <form id="filter-form" class="filter-form" novalidate>
+          <div class="filter-field filter-keyword">
+            <label for="filter-q">關鍵字</label>
+            <input id="filter-q" name="q" autocomplete="off" placeholder="單號、主題、內容、提單人或簽核人">
+          </div>
+          <div class="filter-field">
+            <label for="filter-status">結果</label>
+            <select id="filter-status" name="status">
+              <option value="">全部</option>
+              <option value="APPROVED">已簽核</option>
+              <option value="REJECTED">已退回</option>
+              <option value="CANCELLED">已取消</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label for="filter-from">簽核日期（起）</label>
+            <input id="filter-from" name="from" type="date">
+          </div>
+          <div class="filter-field">
+            <label for="filter-to">簽核日期（迄）</label>
+            <input id="filter-to" name="to" type="date">
+          </div>
+          <div class="filter-quick" role="group" aria-label="常用區間">
+            <button type="button" class="chip-button" data-range="today">今天</button>
+            <button type="button" class="chip-button" data-range="7">近 7 天</button>
+            <button type="button" class="chip-button" data-range="30">近 30 天</button>
+            <button type="button" class="chip-button" data-range="all">不限日期</button>
+          </div>
+          <div class="filter-actions">
+            <button id="filter-reset" class="link-button" type="button">清除條件</button>
+            <button id="filter-submit" class="primary-button" type="submit">查詢</button>
+          </div>
+        </form>
+        <p id="completed-summary" class="completed-summary" role="status"></p>
+        <p id="notice-completed" class="notice" role="status" hidden></p>
+        <p id="empty-completed" class="empty" hidden>沒有符合條件的紀錄</p>
+        <div id="list-completed" class="ticket-list" aria-live="polite"></div>
+      </section>
+    </main>
+  </body>
+</html>

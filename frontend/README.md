@@ -1,69 +1,61 @@
 # 智慧服務台前端
 
-使用原生 HTML、CSS、ES Modules，無需安裝前端依賴。需 Python 3 啟動靜態伺服器，Node.js 22.x 執行測試。
+純 HTML、CSS 與原生 JavaScript（ES module），不使用框架，沒有需要安裝的 npm 依賴。三個頁面：登入頁、提出需求單頁、狀態追蹤頁（追蹤、簽核、轉單、取消與簽核紀錄查詢）；對話頁已移除。
 
 ## 本機啟動
 
-先在另一個終端機執行後端：
+先在另一個終端機啟動後端（見 [後端說明](../backend/README.md)），再於 **frontend 目錄**啟動靜態伺服器：
 
 ```bash
-cd /Users/liweimac/helpdesk_agent/backend
-npm start
-```
-
-再啟動前端：
-
-```bash
-cd /Users/liweimac/helpdesk_agent/frontend
+cd frontend
 npm run dev
 ```
 
-瀏覽器開啟 **http://localhost:5173**，請勿直接雙擊 HTML 使用 `file://`。
-首頁為登入畫面，使用 `admin1`～`admin10`，密碼由授課者另行提供，不在 Git 文件記錄。登入後進入 `chat.html`，右上角顯示帳號與 userID 並提供登出。
-後端預設 CORS 來源即為此網址；若變更前端網址，同步設定後端 `CORS_ORIGIN` 並重新啟動。
+`npm run dev` 實際執行 `python3 -m http.server 5173 --bind localhost`。Windows 通常沒有 `python3` 指令，改在 frontend 目錄執行：
 
-## 架構與設定
+```powershell
+py -m http.server 5173 --bind localhost
+```
 
-- `src/app.js`：協調表單提交、服務請求與畫面狀態。
-- `index.html`、`src/login.js`：登入畫面與登入後導頁。
-- `chat.html`：需前端登入狀態的對話頁。
-- `src/services/authService.js`：後端登入、憑證與 sessionStorage 工作階段管理。
-- `src/components/ChatPanel.js`：聊天紀錄、範例、輸入驗證、等待提示與逐字顯示。
-- `src/components/DecisionPanel.js`：意圖、Top-3 來源、信心與分流、工單及完整 JSON。
-- `src/components/dom.js`：安全的純文字元素建立工具。
-- `src/services/agentService.js`：對話與用量 API 存取入口，處理 HTTP、逾時、錯誤及合約驗證。
-- `src/config.js`：設定公開的後端 origin，預設 `http://localhost:3000`；不含 `/api`。
+瀏覽器開啟 **http://localhost:5173**。必須用 `localhost`（後端 CORS 預設只允許這個來源），不可用 `127.0.0.1`，也不可直接雙擊 HTML 以 `file://` 開啟。靜態伺服器必須在 frontend 目錄啟動；若看到整個專案的檔案清單而不是登入頁，代表啟動位置錯了，按 Control + C 停止後改在 frontend 目錄重啟。
 
-原生 ES Modules 不會讀取 `.env`。Gemini 金鑰只設定在後端；前端不保存金鑰。
-部署 GitHub Pages 時可直接使用本目錄的靜態檔案，將 API origin 改為實際 HTTPS 網址，並設定後端 CORS。這次實作未執行部署。
+## 頁面與檔案
 
-## 需求與 API 對應
-
-以專案根目錄的《企業智慧服務台 Agent 前後端 API 介面規格書》為介面依據：
-
-| 需求 | 前端行為 |
+| 路徑 | 說明 |
 | --- | --- |
-| 單次問答 | `POST /api/agent/chat`，傳 `{ "message": "...", "userID": "user-admin1" }`；畫面保留聊天紀錄，後端不接收歷史 |
-| 輸入 | 去除首尾空白，限制 1～500 個 Unicode code points；Enter 或按鈕送出 |
-| 等待 | 請求開始後至少十秒不能再次送出，輸入框下方顯示倒數與說明；若 API／回覆顯示超過十秒，完成前仍鎖定送出 |
-| 左側聊天 | 區分員工與 AI 訊息，完整回答到達後以打字效果顯示；支援減少動態效果偏好 |
-| 右側資料 | 顯示 `intent`、`retrieved_sources`、`confidence_score`、`action_route` |
-| 分流 | `AUTO_REPLY` 綠色、`ESCALATE_TICKET` 黃色；門檻為 75 分 |
-| 工單 | 顯示四個工單欄位與可展開 JSON；目前僅展示，不保存、派送或通知部門 |
-| 錯誤 | 顯示後端錯誤提示，解除輸入鎖定，仍須等待十秒冷卻到期才可重試；不自動重送 |
-| 附加檢視 | 可展開完整 API JSON，方便驗證 Gemini 串接 |
+| `index.html`、`src/login.js` | 登入頁：左側說明、右側登入表單；必填檢查、密碼顯示切換、登入後導向提出需求單頁 |
+| `propose.html`、`src/propose.js` | 提出需求單頁：主題與需求內容（字數提示）、指定處理人可搜尋選單（輸入英文姓名或部門即時過濾，依部門分組列出同事帳號，支援鍵盤上下鍵、Enter、Esc）、送出結果視窗（含前往狀態追蹤頁的連結）、各部門業務範圍視窗 |
+| `tickets.html`、`src/tickets.js` | 狀態追蹤頁：「表單追蹤」分「待簽核」（等我簽核的單可簽核、退回、轉單或替提單人取消；我送出還在等的單可取消）與「已退回」（我被退回的單，可重新提出）；「已完成」查詢我已結案的單與本部門的簽核紀錄（預設最新 100 筆，關鍵字、結果、日期與常用區間篩選） |
+| `base.css`、`login.css`、`propose.css`、`tickets.css` | 共用樣式、登入頁、提出需求單頁（含頂欄導覽）、狀態追蹤頁樣式 |
+| `src/components/handlerPicker.js` | 指定處理人的可搜尋選單（combobox）：關鍵字過濾、鍵盤操作、清除、隱藏欄位保存選定的處理人 id |
+| `src/components/account.js` | 頂欄帳號選單（帳號、使用者代號、所屬部門、登出）與登入守門，兩個登入後頁面共用 |
+| `src/config.js` | 後端 origin，預設 `http://localhost:3000`；不含 `/api` |
+| `src/services/authService.js` | 後端登入、sessionStorage 工作階段（含所屬部門）與登出；只檢查 `user-<名.姓>` 的格式，帳號名單由後端決定 |
+| `src/services/ticketService.js` | 部門名單、送單、我的需求單、部門需求單、已完成查詢、簽核、轉單與取消的存取、欄位驗證、回應整理與錯誤提示對應 |
+| `src/components/dialogs.js` | 結果視窗文案與部門卡片的繪製 |
+| `src/components/dom.js` | 以 `textContent` 建立元素，避免 HTML 注入 |
+| `tests/` | 10 個測試檔，以瀏覽器替身執行，不驗證版面，也不呼叫 Gemini 或真後端 |
+| `chat.html`、`styles.css`、`src/app.js`、`src/components/ChatPanel.js`、`src/components/DecisionPanel.js`、`src/services/agentService.js`、`tests/agentService.test.js`、`tests/chatCooldown.test.js`、`tests/pageGuards.test.js` | 對話頁已移除，這些檔案暫時保留為空檔以利 Merge 時比對差異，合併回主線後另開分支清除 |
 
-目前採用規格書的右側工單預覽方式，未新增另開工單分頁。規格範例中的「已立案」不代表目前後端已串接工單系統，介面依實際功能明確標示。
-資料使用純文字渲染，不將 AI 回覆或問題當成 HTML。重整頁面即清除聊天紀錄。
+前端是原生 ES Modules，不會讀取任何 `.env`；要改後端網址就編輯 `src/config.js`。Gemini 金鑰只存在後端。
 
-十個 userID 依序為 `user-admin1`～`user-admin10`，重新登入同一帳號不會改變。sessionStorage 保存後端簽發的 JWT、期限與身分，不保存密碼；有效期內重新整理維持登入，登出後清除。所有導頁使用相對路徑，支援 GitHub Pages 的專案子目錄。
+## 流程
 
-登入改由 `POST /api/auth/login` 驗證，對話與 `GET /api/agent/usage` 均攜帶 Bearer 憑證。後端以驗證後的身分執行冷卻、並行與配額檢查，偽造本文 userID 不能切換計費身分。頁面顯示帳號與全站剩餘次數及重置時間；憑證失效則回登入。登出只清除本分頁憑證，舊 JWT 到期前仍有效。
+1. **登入**：輸入十組英文姓名帳號之一（例如 `racky.huang`，完整名單與所屬部門見 API 介面規格書）與授課者另行提供的密碼（輸入框提示為「員工英文姓名（例如 alex.huang）」，後端目前只接受這十組示範帳號）。帳號與密碼只有空白也算空白，顯示「請輸入帳號與密碼」；登入請求結束後（成功、失敗或連線失敗）一律清空密碼。憑證只存在本分頁的 sessionStorage，關閉分頁即失效。
+2. **載入名單**：進入提出需求單頁後以 `GET /api/departments` 載入處理人與部門。載入中搜尋框停用；成功後點擊或輸入即展開清單，依部門分組顯示帳號名稱並依關鍵字（帳號或部門名稱，不分大小寫）即時過濾，沒有處理人的部門不列出，選定後顯示「預計送達：帳號（部門）」並可用 × 清除；失敗時（含舊版後端回 404、格式不正確）搜尋框維持停用並改為「名單無法載入，由 AI 判斷部門」，表單上方顯示原因，仍可送出需求單。
+3. **送出需求單**：主題 1～100 字、需求內容 1～2000 字（去除首尾空白後以 Unicode code points 計）；兩欄一起檢查，錯誤顯示在欄位下方並把焦點移到第一個有錯的欄位。送出中按鈕改為「送出中…」、主題與內容唯讀、「清除重填」鎖住。
+4. **結果視窗**：依後端回傳的 `route` 顯示送達對象與方式：`HANDLER` 為「姓名（部門）」、`DEPARTMENT` 為 AI 判斷的部門（有判斷依據時多一列）、`FALLBACK` 為預設部門並由人工分派。以任何方式關閉視窗都會清空表單並把焦點放回主題。
+5. **錯誤**：429 非額度錯誤時送出鈕改為「請等 N 秒」倒數（超過 300 秒或沒有秒數則只顯示提示）；額度用盡、400、403、404、413、503、其他 5xx、連線失敗、逾時與無法辨識的回應各有固定提示；憑證失效（401）清除登入狀態並回到登入頁。完整規則見開發規格書「送出結果與錯誤處理」。
 
-## 驗證
+6. **追蹤與簽核**：狀態追蹤頁依「進行中／已結案」分兩個分頁。「表單追蹤」的「待簽核」區先列送達本部門、等我簽核的需求單（同部門的任何帳號都可以簽核或退回，備註最多 200 字；可轉單到其他部門並指定該部門的處理人，用於 AI 判斷錯誤時改派；可替提單人取消，原因必填），再列我送出且仍在等待的需求單（可取消，原因選填）；「已退回」區列我被退回的需求單與退回原因，「重新提出」會把主題與內容帶到提出需求單頁。「已完成」分頁查詢我提出且已結案的需求單與本部門的簽核紀錄，預設最新 100 筆，可用關鍵字、結果、簽核日期與常用區間篩選。每張卡片顯示狀態、送達對象、判斷依據、簽核人與備註、轉單紀錄與歷程。沒有刪除功能，所有紀錄保留。403、404、409 提示顯示在卡片內。
+
+需求單送出後的「送達」不會實際通知任何人；所有需求單與簽核紀錄由後端保存在 `backend/data/tickets.json`。
+
+## 測試
 
 ```bash
+cd frontend
 npm test
 ```
 
-測試以替代 fetch 驗證請求合約及錯誤處理，不會呼叫付費 API。實際串接需啟動後端並設定有效金鑰後，在頁面送出問題。
+測試以 `node --test` 執行，使用 fetch 與 DOM 替身驗證請求合約、欄位驗證、錯誤提示、倒數與頁面流程；不會呼叫付費 API。實際串接請啟動後端並在頁面操作。
