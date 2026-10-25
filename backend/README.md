@@ -3,7 +3,7 @@
 Express 5 後端 API，使用 ES Modules。提供登入、健康檢查、部門與處理人名單、需求單送出（指定處理人直接送達，或由 Gemini 判斷部門）、需求單查詢與部門簽核。資料不使用資料庫，部門、帳號與需求單都保存在 `data/` 底下的 JSON 檔。
 完整規格以專案根目錄的《企業智慧服務台 Agent 前後端 API 介面規格書》與開發規格書為準；本文件是後端入門說明。
 
-對話 API（`/api/agent/chat`、`/api/agent/usage`）與知識庫檢索已移除；相關檔案暫時保留為空檔以利合併時比對差異，合併回主線後另開分支清除。
+對話 API（`/api/agent/chat`、`/api/agent/usage`）與知識庫檢索已移除，相關的空檔也已刪除。
 
 ## 架構
 
@@ -15,11 +15,9 @@ backend/
 ├── routes/
 │   ├── authRoutes.js            # /auth：登入
 │   ├── departmentRoutes.js      # /departments：部門與處理人名單
-│   ├── ticketRoutes.js          # /tickets：送出需求單
-│   └── agentRoutes.js           # （已移除，空檔）
+│   └── ticketRoutes.js          # /tickets：送出需求單
 ├── controllers/
-│   ├── ticketController.js      # 需求單：送出、我的需求單、部門待簽核、已完成查詢、簽核／退回、轉單、取消；部門名單處理器
-│   └── agentController.js       # （已移除，空檔）
+│   └── ticketController.js      # 需求單：送出、我的需求單、部門待簽核、已完成查詢、簽核／退回、轉單、取消；部門名單處理器
 ├── services/
 │   ├── authService.js           # 密碼比對、JWT；帳號名單取自 accountService
 │   ├── accountService.js        # 載入並驗證帳號設定檔（帳號與所屬部門）；帳號即可指定的處理人
@@ -28,16 +26,11 @@ backend/
 │   ├── departmentService.js     # 載入並驗證部門設定檔（不含處理人）
 │   ├── ticketJudge.js           # 需求單判斷部門：一次 Gemini 呼叫、75 分分流
 │   ├── ticketStore.js           # 需求單儲存：單一 JSON 檔，含狀態與簽核紀錄
-│   ├── recordStore.js           # （已由 ticketStore 取代，空檔）
-│   ├── chatTasks.js             # 需求單工作追蹤器，供關機流程等待
-│   ├── geminiAgent.js           # （已移除，空檔）
-│   └── knowledgeService.js      # （已移除，空檔）
+│   └── chatTasks.js             # 需求單工作追蹤器，供關機流程等待
 ├── data/
 │   ├── departments.json         # 部門設定檔（八個部門：部門、業務說明、關鍵字）
 │   ├── accounts.json            # 帳號設定檔（十組帳號與所屬部門；同時是處理人名單）
-│   ├── tickets.json             # 執行後產生的需求單資料（含原文、狀態與簽核紀錄，不提交 Git）
-│   ├── knowledgeBase.json       # （已移除，空檔）
-│   └── knowledge-submissions/   # （已移除，空檔）
+│   └── tickets.json             # 執行後產生的需求單資料（含原文、狀態與簽核紀錄，不提交 Git）
 ├── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、shutdown（優雅關機）
 ├── config/
 │   └── env.js                   # 載入 backend/.env 與驗證環境參數

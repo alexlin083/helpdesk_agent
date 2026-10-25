@@ -34,8 +34,7 @@ py -m http.server 5173 --bind localhost
 | `src/services/ticketService.js` | 部門名單、送單、我的需求單、部門需求單、已完成查詢、簽核、轉單與取消的存取、欄位驗證、回應整理與錯誤提示對應 |
 | `src/components/dialogs.js` | 結果視窗文案與部門卡片的繪製 |
 | `src/components/dom.js` | 以 `textContent` 建立元素，避免 HTML 注入 |
-| `tests/` | 10 個測試檔，以瀏覽器替身執行，不驗證版面，也不呼叫 Gemini 或真後端 |
-| `chat.html`、`styles.css`、`src/app.js`、`src/components/ChatPanel.js`、`src/components/DecisionPanel.js`、`src/services/agentService.js`、`tests/agentService.test.js`、`tests/chatCooldown.test.js`、`tests/pageGuards.test.js` | 對話頁已移除，這些檔案暫時保留為空檔以利 Merge 時比對差異，合併回主線後另開分支清除 |
+| `tests/` | 11 個測試檔，以瀏覽器替身執行，不驗證版面，也不呼叫 Gemini 或真後端 |
 
 前端是原生 ES Modules，不會讀取任何 `.env`；要改後端網址就編輯 `src/config.js`。Gemini 金鑰只存在後端。
 
