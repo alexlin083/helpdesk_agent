@@ -57,8 +57,9 @@ export function createBoundedRateStore(maxKeys) {
 /**
  * 建立彼此獨立的 HTTP 頻率限制；IP 為寬鬆入口保護，帳號限制只採驗證後的身分。
  * 所有請求（含失敗）皆計數，超限以既有 errorHandler 輸出統一 JSON 與 Retry-After。
+ * 需求單送出與簽核以 HTTP_TICKET_LIMIT、部門名單以 HTTP_DEPARTMENTS_LIMIT、需求單查詢以 HTTP_QUERY_LIMIT 分別計數。
  * @param {object} [config=env] 已驗證的限制設定，可注入小額度作隔離測試。
- * @returns {object} apiRateLimiter、loginRateLimiter、chatRateLimiter、usageRateLimiter。
+ * @returns {object} apiRateLimiter、loginRateLimiter、ticketRateLimiter、departmentRateLimiter、queryRateLimiter。
  */
 export function createRateLimiters(config = env) {
   /**
@@ -108,9 +109,10 @@ export function createRateLimiters(config = env) {
   return {
     apiRateLimiter: createLimiter('api', config.httpApiLimit),
     loginRateLimiter: createLimiter('login', config.httpLoginLimit),
-    chatRateLimiter: createLimiter('chat', config.httpChatLimit, true),
-    usageRateLimiter: createLimiter('usage', config.httpUsageLimit, true),
+    ticketRateLimiter: createLimiter('ticket', config.httpTicketLimit, true),
+    departmentRateLimiter: createLimiter('departments', config.httpDepartmentsLimit, true),
+    queryRateLimiter: createLimiter('query', config.httpQueryLimit, true),
   };
 }
 
-export const { apiRateLimiter, loginRateLimiter, chatRateLimiter, usageRateLimiter } = createRateLimiters();
+export const { apiRateLimiter, loginRateLimiter, ticketRateLimiter, departmentRateLimiter, queryRateLimiter } = createRateLimiters();

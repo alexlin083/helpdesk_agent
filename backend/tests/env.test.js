@@ -64,6 +64,7 @@ test('production 忽略 .env，使用平台參數及 PORT', () => {
     assert.equal(config.port, 8080);
     assert.equal(config.corsOrigin, 'https://example.github.io');
     assert.equal(config.geminiModel, 'test-model');
+    assert.match(config.ticketsFile, /tickets\.json$/);
     assert.throws(() => loadEnv({ environment: { NODE_ENV: 'production' }, envFile }), /GEMINI_API_KEY/);
     assert.throws(() => loadEnv({
       environment: { NODE_ENV: 'production', GEMINI_API_KEY: 'fake-cloud-key' }, envFile,
@@ -79,3 +80,20 @@ test('沒有 .env 時仍可使用平台參數；非法 PORT 被拒絕', () => {
     assert.throws(() => loadEnv({ environment: { NODE_ENV: 'production', PORT: port } }), /PORT/);
   }
 });
+
+/**
+ * 驗證需求單 JSON 檔路徑：預設在 data/tickets.json，可用 TICKETS_FILE 覆寫；HTTP_QUERY_LIMIT 預設 60。
+ * @returns {void}
+ */
+function ticketsFileConfig() {
+  const envFile = '/nonexistent/helpdesk/.env';
+  const base = { DEMO_PASSWORD: 'test-only-password' };
+  const local = loadEnv({ environment: base, envFile });
+  assert.match(local.ticketsFile, /[\\/]data[\\/]tickets\.json$/);
+  assert.equal(local.httpQueryLimit, 60);
+  assert.equal(loadEnv({ environment: { ...base, TICKETS_FILE: '/tmp/custom.json' }, envFile }).ticketsFile, '/tmp/custom.json');
+  /** 嘗試無效的查詢限制。@returns {object} 設定。@throws {Error} 參數不是正整數。 */
+  function invalid() { return loadEnv({ environment: { ...base, HTTP_QUERY_LIMIT: '0' }, envFile }); }
+  assert.throws(invalid, /HTTP_QUERY_LIMIT/);
+}
+test('需求單檔案路徑與查詢限制設定', ticketsFileConfig);
