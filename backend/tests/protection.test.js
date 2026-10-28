@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.LIMIT_STORE = 'memory';
@@ -9,7 +10,7 @@ process.env.LOG_LEVEL = 'silent';
 const { env } = await import('../config/env.js');
 const { createAuthService, accountFor, ACCOUNTS } = await import('../services/authService.js');
 const { createUsageService, taipeiDay } = await import('../services/usageService.js');
-const { createMemoryLimitStore, createDynamoLimitStore } = await import('../services/limitStore.js');
+const { createMemoryLimitStore } = await import('../services/limitStore.js');
 
 /**
  * 驗證十組帳密、有效簽章、偽造 token 與過期憑證，不呼叫外部服務。
@@ -110,39 +111,3 @@ async function failureWindows() {
   await usage.loginAttempt('127.0.0.1', true);
 }
 test('登入失敗限流與崩潰租約到期復原', failureWindows);
-
-/**
- * 模擬同一 DynamoDB 項目版本鎖定，驗證多個服務共用配額、條件衝突重試及故障拒絕。
- * @returns {Promise<void>}
- */
-async function dynamoAtomicity() {
-  let item;
-  let failed = false;
-  const client = {
-    /**
-     * 模擬強一致 Get 與帶版本條件的 Put，不呼叫 AWS。
-     * @param {object} command AWS SDK command。
-     * @returns {Promise<object>} 模擬的 AWS 回應。
-     * @throws {Error} 條件衝突或服務故障。
-     */
-    async send(command) {
-      if (failed) throw new Error('offline');
-      if (command.constructor.name === 'GetCommand') return { Item: structuredClone(item) };
-      const expected = command.input.ExpressionAttributeValues?.[':version'];
-      if ((item && expected !== item.version) || (!item && expected !== undefined)) throw Object.assign(new Error('conflict'), { name: 'ConditionalCheckFailedException' });
-      item = structuredClone(command.input.Item);
-      return {};
-    },
-  };
-  const config = { ...env, globalConcurrency: 10, globalDailyLimit: 1 };
-  const first = createUsageService({ store: createDynamoLimitStore({ client, table: 'test' }), config });
-  const second = createUsageService({ store: createDynamoLimitStore({ client, table: 'test' }), config });
-  const results = await Promise.allSettled([first.reserve('user-racky.huang'), second.reserve('user-amy.chen')]);
-  assert.equal(results[0].status, 'fulfilled');
-  assert.equal(results[1].reason.code, 'GLOBAL_QUOTA_EXCEEDED');
-  assert.equal((await second.usage('user-amy.chen')).globalRemaining, 0);
-  failed = true;
-  await assert.rejects(first.reserve('user-brian.lin'), { status: 503, code: 'LIMIT_STORE_UNAVAILABLE' });
-  await assert.rejects(second.usage('user-racky.huang'), { status: 503 });
-}
-test('DynamoDB 跨服務原子配額、版本競爭與故障時拒絕放行', dynamoAtomicity);

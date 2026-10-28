@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const scratch = mkdtempSync(join(tmpdir(), 'helpdesk-cancel-'));
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.TICKETS_FILE = join(scratch, 'unused.json');
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';

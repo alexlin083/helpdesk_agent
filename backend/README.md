@@ -22,14 +22,14 @@ backend/
 │   ├── authService.js           # 密碼比對、JWT；帳號名單取自 accountService
 │   ├── accountService.js        # 載入並驗證帳號設定檔（帳號與所屬部門）；帳號即可指定的處理人
 │   ├── usageService.js          # 冷卻、並行租約、每日配額、登入失敗計數
-│   ├── limitStore.js            # 限制儲存：記憶體或 DynamoDB
+│   ├── limitStore.js            # 限制儲存：單程序記憶體（含管理重置）
 │   ├── departmentService.js     # 載入並驗證部門設定檔（不含處理人）
 │   ├── ticketJudge.js           # 需求單判斷部門：一次 Gemini 呼叫、75 分分流
 │   ├── ticketStore.js           # 需求單儲存：單一 JSON 檔，含狀態與簽核紀錄
 │   └── chatTasks.js             # 需求單工作追蹤器，供關機流程等待
 ├── data/
 │   ├── departments.json         # 部門設定檔（八個部門：部門、業務說明、關鍵字）
-│   ├── accounts.json            # 帳號設定檔（十組帳號與所屬部門；同時是處理人名單）
+│   ├── accounts.json            # 帳號設定檔（十組一般帳號與獨立管理員；僅一般帳號可當處理人）
 │   └── tickets.json             # 執行後產生的需求單資料（含原文、狀態與簽核紀錄，不提交 Git）
 ├── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、shutdown（優雅關機）
 ├── config/
@@ -45,7 +45,7 @@ backend/
 
 ## 啟動
 
-需 Node.js 20 以上（`.nvmrc` 指定 20，`engines` 為 `>=20`）。若使用 nvm，可在 backend 目錄執行 `nvm use`（未安裝時先 `nvm install`）；nvm-windows 要指定版本，例如 `nvm install 20`、`nvm use 20`。
+統一使用 Node.js 22（根目錄與 backend 的 `.nvmrc` 均指定 22，前後端 `engines` 均為 `22.x`）。使用 nvm 時執行 `nvm install 22`、`nvm use 22`，再執行 `npm ci`。
 
 ```bash
 cd backend
@@ -61,7 +61,8 @@ npm run dev
 PORT=3000
 CORS_ORIGIN=http://localhost:5173
 GEMINI_API_KEY=<請填入自己的金鑰>
-DEMO_PASSWORD=<請填入私下提供的登入密碼>
+DEMO_PASSWORD=<請填入私下提供的一般登入密碼>
+ADMIN_PASSWORD=<請填入獨立管理密碼，不得與一般密碼相同>
 GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
@@ -70,8 +71,8 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 
 ## 登入、限流與配額
 
-帳號為十組英文姓名帳號（全小寫、格式為「名.姓」、區分大小寫），每個帳號屬於一個部門，定義在 `data/accounts.json`（`username`、`department_id`）；對應的使用者代號為 `user-` 加帳號（例如 `user-racky.huang`）。帳號必須唯一、部門必須存在於部門設定檔，否則啟動失敗；修改後須重啟。前端不保存帳號名單，只檢查格式。這十組帳號同時就是「指定處理人」的名單：處理人 id 即帳號名稱，送達對象顯示「帳號（部門）」。
-登入密碼必須透過後端 `DEMO_PASSWORD` 設定，沒有內建預設值，也不在文件記錄實際密碼。登入成功簽發 HS256 JWT，預設兩小時有效，回應的 `user` 含 `department`（部門不寫入憑證，驗證時依目前設定檔查詢）；部門名單與需求單都需要 Bearer 憑證，提單人由憑證決定。
+一般帳號為十組英文姓名帳號（全小寫、格式為「名.姓」、區分大小寫），每個帳號屬於一個部門，定義在 `data/accounts.json`（`username`、`department_id`、選填 `role`）；對應的使用者代號為 `user-` 加帳號（例如 `user-racky.huang`）。帳號必須唯一、部門必須存在於部門設定檔，否則啟動失敗；修改後須重啟。前端不保存帳號名單，只檢查格式。這十組帳號同時就是「指定處理人」的名單：處理人 id 即帳號名稱，送達對象顯示「帳號（部門）」。
+登入密碼必須透過後端 `DEMO_PASSWORD` 設定，沒有內建預設值，也不在文件記錄實際密碼。另有 `alex.admin`（`dept-it-1`，`role: ADMIN`），只可使用管理頁與重置 API，不參與工作單、不列入處理人名單，密碼由 `ADMIN_PASSWORD` 獨立設定且不得與 `DEMO_PASSWORD` 相同。登入成功簽發 HS256 JWT，預設兩小時有效，回應的 `user` 含 `department` 與 `role`（部門與角色不寫入憑證，驗證時依目前設定檔查詢）；部門名單與需求單都需要 Bearer 憑證，提單人由憑證決定。
 
 | 環境參數 | 預設 | 用途 |
 | --- | --- | --- |
@@ -95,9 +96,10 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 | `HTTP_QUERY_LIMIT` | 60 | 每個驗證後帳號的需求單查詢請求數（我的需求單、部門需求單） |
 | `TICKETS_FILE` | `data/tickets.json` | 需求單 JSON 檔的絕對路徑；留空使用預設 |
 | `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 25000 |
-| `LIMIT_STORE` | 本機 memory、production dynamodb | 限制狀態儲存，production 拒絕 memory |
-| `LIMIT_TABLE` | 無 | DynamoDB 表格名稱 |
-| `AWS_REGION` | 無 | DynamoDB 所在區域；亦可用 AWS_DEFAULT_REGION |
+| `LIMIT_STORE` | memory | local 與 production 都只允許 memory；重啟及管理重置會歸零 |
+| `ADMIN_PASSWORD` | 必填 | 應用程式管理員的獨立密碼，不是 AWS IAM 密碼 |
+| `ORIGIN_VERIFY_SECRET` | 無 | CloudFront 來源秘密，設定後至少 32 bytes；除健康檢查外 API（含 OPTIONS）需帶 X-Origin-Verify |
+| `NODE_ENV` | local | 只接受 local 或 production；正式環境不讀 .env |
 | `TRUST_PROXY` | 不信任代理 | 依實際代理鏈填可信任 IP、網段或 hop 數，勿盲目填 true |
 
 冷卻、並行與每日用量只在「沒有指定處理人、需要呼叫 Gemini」時檢查並預扣；指定處理人的需求單不扣額度。獲准後的上游錯誤也計入，不退額；拒絕或輸入／身分驗證失敗不扣額。台北午夜重置每日計數，但不清除執行中租約或冷卻。
@@ -110,7 +112,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 登出只清除前端分頁憑證，舊 JWT 到期前仍有效。修改 `DEMO_PASSWORD` 不會撤銷已簽發憑證；需要使全部憑證失效時更換 `AUTH_SECRET` 並重新部署所有 instance。
 
-登入失敗以 `LIMIT_STORE` 原子保存來源整體與已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待。未知帳號只累積來源整體；狀態最多 512 筆，滿載回傳 503。IPv6 以 /64 分組。IP 登入保護只相信 Express 判定的 `req.ip`，負載平衡器或反向代理後須依實際拓撲設定 `TRUST_PROXY`。
+登入失敗以 `LIMIT_STORE` 原子保存來源整體與已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待。未知帳號只累積來源整體；狀態最多 512 筆，滿載回傳 503。IPv6 以 /64 分組。IP 登入保護只相信 Express 判定的 `req.ip`，CloudFront 與 Nginx 後須依實際拓撲設定 `TRUST_PROXY`。
 
 ## 需求單 API、部門與帳號設定檔
 
@@ -136,8 +138,10 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 | 方法 | 路徑 | 用途 |
 | --- | --- | --- |
+| GET | `/api/admin/metrics` | 管理員唯讀監測：AI、帳號、HTTP 與登入保護摘要 |
+| POST | `/api/admin/reset` | 管理員清空全部工作單與一般保護計數 |
 | GET | `/api/health` | 檢查伺服器是否運作，不檢查 Gemini 連線 |
-| POST | `/api/auth/login` | 驗證十組帳號並取得登入憑證 |
+| POST | `/api/auth/login` | 驗證一般帳號或獨立管理員並取得登入憑證 |
 | GET | `/api/departments` | 以 Bearer 憑證取得部門與處理人名單，不呼叫 Gemini、不扣額度 |
 | POST | `/api/tickets` | 以 Bearer 憑證送出需求單；指定處理人時直接送達，沒指定時呼叫 Gemini 判斷部門；保存為待簽核 |
 | GET | `/api/tickets/mine` | 我提出的需求單 |
@@ -179,28 +183,53 @@ curl -X POST http://localhost:3000/api/tickets/<TICKET_ID>/decision \
 
 錯誤回應一律為 `{"error":{"code":"...","message":"..."}}`，有等待期限時另有 `error.retry_after` 與相同的 `Retry-After` 標頭。錯誤包含 400 輸入無效、401 未登入／登入失敗、403 無權限（不是送達部門、不是提單人）、404 未知路由／方法不符／查無需求單、409 已簽核或已取消、413 本文超過 16 KB、429 冷卻／每日配額／處理中／登入失敗過多、500 未設金鑰／輸出格式異常／上游失敗、503 全站忙碌／限制儲存故障／需求單儲存故障。完整代碼以 API 規格書為準。
 
-## AWS 配額儲存設定
+## 正式環境與部署
 
-上雲前需另外建立 DynamoDB 表格給限制儲存（`LIMIT_TABLE`），設定 **partition key `pk`（String），不設 sort key**。需求單資料只保存在 JSON 檔，不使用 DynamoDB；正式環境請用單一 instance，並注意重新部署會重置 `data/tickets.json`（課堂展示可接受，正式使用需另行設計持久化）。本次程式變更沒有建立或部署任何 AWS 資源。
+不使用資料庫。工作單存在單一 JSON 檔，配額、冷卻、並行租約、登入失敗與 HTTP 計數都存在記憶體。local 與 production 使用相同保護邏輯；重啟、換機或管理重置會清空保護計數，不能當作永久的費用上限。`LIMIT_STORE` 預設且只接受 `memory`；已移除 AWS 資料庫 SDK、表格參數及資料庫權限需求。
 
-在 EB 設定 `DEMO_PASSWORD=<私下提供的密碼>`、`NODE_ENV=production`、`LIMIT_STORE=dynamodb`、`LIMIT_TABLE=<限制表格>`、`AWS_REGION=<表格區域>`、`AUTH_SECRET=<隨機金鑰>`，以及 `GEMINI_API_KEY`、`GEMINI_MODEL`、`CORS_ORIGIN`（前端 GitHub Pages 的 origin，不含路徑）。所有 instance 使用相同表格與簽章金鑰。`PORT` 由 EB 平台提供。
+只區分 `NODE_ENV=local` 與 `NODE_ENV=production`。本機預設 local，讀取 `backend/.env`，shell 參數優先；正式環境完全不讀 `.env`，必須由平台設定 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`（至少 32 bytes）、`DEMO_PASSWORD`、獨立的 `ADMIN_PASSWORD`。模式須設定在 shell 或平台；不接受第三種模式。測試使用隔離的 local 參數及假密碼。
 
-讓 EB EC2 instance profile 具有限制表格的 `dynamodb:GetItem` 與 `dynamodb:PutItem` 權限。使用 AWS SDK 的預設憑證鏈，不把 AWS access key 放進原始碼。範例 IAM policy（替換 region、account-id 與表格名稱）：
+部署架構為 **GitHub Pages → CloudFront HTTPS → 單台 Elastic Beanstalk／Nginx → 單一 Node.js 22 程序**，不使用 ALB。JSON 不能跨程序共用，禁止 PM2 cluster、多 instance 或以額外執行個體進行部署。應用程式更新可能覆蓋檔案；EC2 被替換後本機檔案可能遺失，修改 `TICKETS_FILE` 路徑不等於持久化。課堂資料應事先匯出或另行備份。
+
+以 backend 為應用程式根目錄，ZIP 根目錄直接放 `package.json` 與 `Procfile`；`.ebignore` 排除 `.env`、測試及真實工作單，但手動 ZIP 不會自動套用該檔，需自行檢查。EB 使用 `NODE_ENV=production`、`PORT=5000`，健康檢查 `/api/health`。AWS Console 由既有 IAM user `alex.admin` 操作；IAM user 不能充當 EB Service Role 或 EC2 Instance Profile，仍須選擇合適的既有角色或另行建立，應用程式不保存 AWS 金鑰。
+
+CloudFront 必須停用 API 快取、轉送 Authorization、Origin、預檢標頭及查詢參數，並允許 POST／OPTIONS。詳見 [單台 EB 與 CloudFront 部署操作手冊](./單台EB與CloudFront部署操作手冊.md)。本次只完成程式與部署說明，沒有建立或修改 AWS 資源。
+
+## 管理員與課堂重置
+
+`alex.admin` 登入後導向 `frontend/admin/admin.html`，顯示限制設定與即時取樣用量；沒有工作單操作入口，後端所有 `/api/tickets` 與 `/api/departments` 也明確拒絕 ADMIN（403）。帳號設定的 `role` 只接受 USER 或 ADMIN，省略為 USER，禁止從請求本文或前端角色決定授權。
+
+`POST /api/admin/reset` 需要 Bearer 管理員憑證及本文：
 
 ```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    { "Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem"], "Resource": "arn:aws:dynamodb:<region>:<account-id>:table/<limit-table-name>" }
-  ]
-}
+{ "confirmation": "RESET_HELPDESK" }
 ```
 
-限制儲存使用強一致讀取與單項目的版本條件寫入，原子性更新帳號配額、全站配額、冷卻、並行租約與登入失敗計數；儲存故障回傳 503，不自動降級放行。並行租約為 180 秒，成功或失敗會以租約 ID 釋放，程序崩潰後可於到期復原。
+成功回 HTTP 200：
 
-所有業務程式透過 `config/env.js` 的 `env` 取得設定：本機（預設 `development`）載入 `backend/.env`，已存在於 `process.env` 的參數優先；`NODE_ENV=production` 完全不讀 `.env`，缺少 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`、`LIMIT_TABLE` 或區域設定時停止啟動，錯誤不輸出金鑰值。請將 `NODE_ENV` 設在 shell 或平台上，而非 `.env`。
+```json
+{ "deletedTickets": 12, "resetAt": "2026-10-28T00:00:00.000Z" }
+```
 
-部署以 **backend 目錄為應用程式根目錄**，`Procfile` 以 `npm start` 啟動，健康檢查路徑可設為 `/api/health`。`backend/.ebignore` 排除 `.env`、`node_modules`、測試與需求單資料檔；手動上傳 ZIP 時須自行排除，並讓 `package.json`、`Procfile` 位於 ZIP 根目錄。本機使用 HTTP；正式環境由 AWS 負載平衡器或反向代理終止 TLS 後轉送 Express。
+維護鎖先拒絕新登入與業務工作（503 SERVICE_BUSY），等待已開始的登入、AI、查詢及工作單變更完成，再依序將檔案及快取清為 `[]`、清除全部配額／冷卻／租約／登入失敗記錄、清除一般 HTTP 計數。檔案寫入失敗回 503 TICKET_STORE_UNAVAILABLE，還原快取並保留計數。重複重置回 503，不會排入無限等待。
+
+管理路徑使用獨立的 IP 與管理員 HTTP 保護，不受一般 API 入口已耗盡影響；管理路徑自己的計數不會被重置，以免反覆清除繞過保護。未登入回 401、一般帳號回 403、確認文字不符回 400。帳號與已核發 JWT 保留；重置不會重送請求或通知其他分頁，也不會退還 Gemini 實際費用。`admin.reset.completed` 僅記錄操作者 userID、筆數及時間。
+
+不要在執行中手動刪檔或覆寫檔案，否則快取可能把舊資料寫回。管理清除不可復原，畫面要求輸入確認文字；連線中斷不自動重試，因為伺服器可能已完成操作。
+
+## 管理監測
+
+`GET /api/admin/metrics` 只接受 Bearer ADMIN，未登入回 401、一般帳號回 403。回傳 observedAt、pollSeconds、runtime、ai、users、login、http、monitoring，採明確欄位白名單，不包含金鑰、密碼、IP、來源雜湊、租約 ID 或工作單原文。
+
+管理頁每次請求完成後等待 5 秒再取樣，也提供「立即更新」與「暫停自動更新」。各帳號只列 USER，顯示部門、AI 今日已用／上限／剩餘、處理中與剩餘冷卻。全站顯示每日額度、AI 並行數、午夜重置時間、維護／關機狀態、業務工作數與程序運行時間；設定值取自執行中的後端，不在前端寫死預設值。
+
+HTTP 表格顯示五種一般限制的設定、有效識別數／容量、有效視窗請求合計、達上限識別數與超額次數。視窗起點因識別碼而異，不是每秒流量或啟動以來的歷史累計；超額次數不含容量不足或更上層 middleware 的拒絕。來源只回總量，帳號層可回 userID 的視窗資料。登入失敗另分來源與帳號＋來源的有效視窗摘要，同次失敗可能進入兩類，不能相加視為總次數。
+
+監測使用獨立固定 60 秒視窗：每 IP／IPv6 /64 最多 120 次、每已驗證管理員最多 60 次。與一般入口、查詢、管理重置的計數完全分開，不受一般入口耗盡影響，也不被管理重置清除。監測不扣 AI 額度、不呼叫 Gemini、不載入工作單、不寫入或清除任何業務保護狀態；到期與跨午夜只在輸出時投影。仍經過來源驗證與 no-store，CloudFront 也須 CachingDisabled。
+
+維護中可持續讀取監測，重置後畫面立即要求新快照（若監測已被限流則等待 Retry-After）。分頁隱藏、離開或開始重置會取消監測請求；過時回應不覆蓋新快照。恢復可見後自動更新；手動暫停後不自行恢復。429 尊重等待秒數、其他連線或格式錯誤逐步退避，保留舊值並標示不是最新快照；401 停止輪詢並登出，403 停止自動更新。
+
+此功能為單程序、短間隔取樣，沒有逐筆推播、歷史儲存、Gemini Token／帳單或 AWS 費用監控。各儲存依序取樣，並非跨儲存交易；重啟後記憶體數據消失。清除一般計數會增加可用保護額度，不會退還實際費用。
 
 ## 日誌與排查
 
@@ -226,8 +255,8 @@ curl -X POST http://localhost:3000/api/tickets/<TICKET_ID>/decision \
 
 ## HTTP 限流 middleware
 
-`middleware/rateLimiter.js` 使用 express-rate-limit，五個 middleware 各有獨立的有界記憶體儲存：`/api` 入口 IP 限流、登入總請求限流、需求單送出／簽核／轉單／取消的帳號限流、部門名單帳號限流、需求單查詢（含已完成）帳號限流。`server.js` 掛載順序為日誌 → CORS → /api IP 粗限流 → POST 登入總請求限流 → JSON 解析 → 路由 → 錯誤處理。GET /api/health（含尾斜線）與 OPTIONS 不計入 HTTP 限流。
-`ticketRoutes.js` 與 `departmentRoutes.js` 先 authenticate，再套用各自的帳號限流，最後才呼叫處理器；帳號 middleware 只採 `req.user.userID`。
+`middleware/rateLimiter.js` 使用 express-rate-limit，一般五個 middleware 各有獨立的有界記憶體儲存：`/api` 入口 IP 限流、登入總請求限流、需求單送出／簽核／轉單／取消的帳號限流、部門名單帳號限流、需求單查詢（含已完成）帳號限流。`server.js` 掛載順序為日誌 → API no-store 與選用來源驗證 → CORS → 獨立管理路由 → 一般 /api IP 粗限流 → POST 登入總請求限流 → JSON 解析 → 路由 → 錯誤處理。GET /api/health（含尾斜線）與 OPTIONS 不計入 HTTP 限流。
+`ticketRoutes.js` 與 `departmentRoutes.js` 先 authenticate 與 USER 角色驗證，再套用各自的帳號限流，最後才呼叫處理器；帳號 middleware 只採 `req.user.userID`。
 
 HTTP 超限維持 429／`RATE_LIMIT_EXCEEDED` 與既有 JSON，`error.retry_after` 與 `Retry-After` 是相同的實際剩餘整數秒。`http.rate_limit.blocked` 日誌標示 api／login／ticket／departments／query，沒有原始 IP、帳密或 token。被 HTTP 限流拒絕不扣額度，也不呼叫 Gemini。HTTP 計數使用單程序記憶體，重啟歸零，多 instance 各自計數。
 
@@ -239,4 +268,4 @@ HTTP 超限維持 429／`RATE_LIMIT_EXCEEDED` 與既有 JSON，`error.retry_afte
 
 例如新增查詢 API：建立 `routes/xxxRoutes.js`，在 `routes.js` 掛載 `router.use('/xxx', xxxRoutes)`，將請求處理放在 `controllers/xxxController.js`，需要業務邏輯時再建立 service；需求單 API 的掛法（`routes/ticketRoutes.js` → `controllers/ticketController.js` → `services/ticketJudge.js`）可作為範例。
 
-SDK 與錯誤處理參考：[Gemini Structured Output](https://ai.google.dev/gemini-api/docs/structured-output)、[Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)、[AWS 版本控制說明](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_ImplementingVersionControl.html)。
+SDK 與錯誤處理參考：[Gemini Structured Output](https://ai.google.dev/gemini-api/docs/structured-output)、[Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)。

@@ -8,5 +8,6 @@
   { "username": "amy.chen", "department_id": "dept-fin-1" },
   { "username": "brian.lin", "department_id": "dept-pur-1" },
   { "username": "david.lee", "department_id": "dept-legal-1" },
-  { "username": "ivy.chang", "department_id": "dept-it-3" }
+  { "username": "ivy.chang", "department_id": "dept-it-3" },
+  { "username": "alex.admin", "department_id": "dept-it-1", "role": "ADMIN" }
 ]

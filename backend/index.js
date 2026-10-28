@@ -1,3 +1,4 @@
+import { accountService } from './services/accountService.js';
 import { chatTasks } from './services/chatTasks.js';
 import { drainServer } from './utils/shutdown.js';
 import { app } from './server.js';
@@ -16,7 +17,7 @@ function onListening() {
     credentialsConfigured: Boolean(env.geminiApiKey), logLevel: env.logLevel,
     localUrl: `http://localhost:${env.port}/api` });
   if (!env.geminiApiKey) logger('warn', 'server.credentials.missing', { hint: '請在後端設定 GEMINI_API_KEY 並重新啟動。' });
-  logger('info', 'server.limits', { store: env.limitStore, ticketStore: 'file', accountCount: 10, userDailyLimit: env.userDailyLimit,
+  logger('info', 'server.limits', { store: env.limitStore, ticketStore: 'file', accountCount: accountService.usernames.length, userDailyLimit: env.userDailyLimit,
     globalDailyLimit: env.globalDailyLimit, cooldownSeconds: env.chatCooldownSeconds, globalConcurrency: env.globalConcurrency });
   logger('info', 'server.http_limits', { store: 'bounded-memory', windowSeconds: env.httpRateWindowSeconds,
     api: env.httpApiLimit, login: env.httpLoginLimit, ticket: env.httpTicketLimit, departments: env.httpDepartmentsLimit, query: env.httpQueryLimit,

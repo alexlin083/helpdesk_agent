@@ -1,0 +1,23 @@
+// 狀態追蹤頁各元件共用的文字；沒有副作用，不依賴頁面初始化。
+export const TICKETS_TEXT = {
+  loading: '載入中…',
+  unexpected: '發生未預期的錯誤，請稍後再試',
+  approve: '簽核',
+  reject: '退回',
+  working: '處理中…',
+  decided: '已更新這張需求單的狀態',
+  transfer: '轉單',
+  transferred: '已把需求單轉到其他部門',
+  transferUnavailable: '無法載入部門名單，暫時不能轉單；請重新整理頁面',
+  chooseDepartment: '請選擇要轉到的部門',
+  noHandler: '不指定處理人',
+  searching: '查詢中…',
+  cancel: '取消需求單',
+  cancelForRequester: '替提單人取消',
+  cancelled: '已取消這張需求單',
+  cancelReasonRequired: '替提單人取消時必須填寫原因',
+  tagMine: '我提出的',
+  tagDepartment: '待本部門簽核',
+  resubmit: '重新提出',
+  resubmitHelp: '被退回的單不會自動重送；按下後會把主題與內容帶到提出需求單頁，修改後再送出',
+};

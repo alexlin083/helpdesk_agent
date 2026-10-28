@@ -139,3 +139,6 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] { border-bottom-color:
   .dialog-actions { justify-content: stretch; }
   .dialog-actions button { flex: 1; }
 }
+
+/* 提單結果與需求單卡片共用的單號排版。 */
+.ticket-id { font-variant-numeric: tabular-nums; }

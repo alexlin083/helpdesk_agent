@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const scratch = mkdtempSync(join(tmpdir(), 'helpdesk-tickets-'));
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 process.env.CORS_ORIGIN = 'http://localhost:5173';
@@ -151,7 +152,7 @@ test('部門設定檔的正規化、查詢與啟動驗證', departmentConfig);
  */
 function accountConfig() {
   assert.deepEqual(accounts.usernames, ['one.it', 'two.it', 'erp.user']);
-  assert.deepEqual(accounts.find('erp.user'), { username: 'erp.user', userID: 'user-erp.user', department: { id: 'dept-it-2', name: '資訊管理二部' } });
+  assert.deepEqual(accounts.find('erp.user'), { username: 'erp.user', userID: 'user-erp.user', role: 'USER', department: { id: 'dept-it-2', name: '資訊管理二部' } });
   assert.equal(accounts.find('One.it'), null);
   assert.equal(accounts.find(null), null);
   assert.deepEqual(accounts.handlersOf('dept-it-1'), [{ id: 'one.it', name: 'one.it' }, { id: 'two.it', name: 'two.it' }]);
@@ -174,7 +175,7 @@ function accountConfig() {
     assert.throws(load, pattern);
   }
   const real = accountService.list();
-  assert.equal(real.length, 10);
+  assert.equal(real.length, 11);
   for (const account of real) assert.ok(departmentService.findDepartment(account.department.id), account.username);
   assert.equal(real[0].username, 'racky.huang');
   for (const department of departmentService.list()) assert.ok(accountService.handlersOf(department.id).length >= 1, `${department.name} 至少要有一個帳號可指定`);
@@ -546,7 +547,7 @@ async function mountedRoutes() {
     assert.equal(preflight.status, 204);
     const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"username":"grace.tsai","password":"test-only-password"}' });
     const session = await login.json();
-    assert.deepEqual(session.user, { username: 'grace.tsai', userID: 'user-grace.tsai', department: { id: 'dept-ga-1', name: '總務與硬體組' } });
+    assert.deepEqual(session.user, { username: 'grace.tsai', userID: 'user-grace.tsai', role: 'USER', department: { id: 'dept-ga-1', name: '總務與硬體組' } });
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` };
     const list = await fetch(`${base}/api/departments`, { headers });
     assert.equal(list.status, 200);

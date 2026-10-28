@@ -21,7 +21,7 @@ function unavailable(operation) {
  * 寫入先寫暫存檔再改名，避免中途失敗留下半截 JSON；所有寫入依序排隊，不會交錯。只適用單一程序。
  * @param {object} [options={}] 設定。
  * @param {string} [options.file=env.ticketsFile] 需求單 JSON 檔的絕對路徑，不存在時自動建立。
- * @returns {object} all、find、insert、update 操作。
+ * @returns {object} all、find、insert、update、clear 操作。
  */
 export function createFileTicketStore({ file = env.ticketsFile } = {}) {
   let tickets;
@@ -87,6 +87,23 @@ export function createFileTicketStore({ file = env.ticketsFile } = {}) {
   }
 
   return {
+    /**
+     * 在維護鎖內排隊清空所有需求單，同步更新快取與磁碟；寫檔失敗還原快取。
+     * 呼叫端必須先阻擋新請求並排空既有工作，避免 AI 回覆在清空後重新寫入。
+     * @returns {Promise<number>} 已清除的工作單筆數。
+     * @throws {HttpError} 檔案無法載入或寫入；失敗時不重置其他保護計數。
+     */
+    clear() {
+      /** 原子替換為空陣列，沿用暫存檔改名與程序內排隊。@returns {Promise<number>} 清除筆數。 */
+      async function clearAll() {
+        await load();
+        const previous = tickets;
+        tickets = [];
+        try { await persist(); } catch (error) { tickets = previous; throw error; }
+        return previous.length;
+      }
+      return serialize(clearAll);
+    },
     /** 取得所有需求單的複本。@returns {Promise<object[]>} 需求單陣列。 */
     all() { return serialize(async () => { await load(); return structuredClone(tickets); }); },
     /**

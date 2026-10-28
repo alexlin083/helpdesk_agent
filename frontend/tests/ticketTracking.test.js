@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { transferTicket, loadCompletedTickets, normalizeStoredTicket, MESSAGES } from '../src/services/ticketService.js';
-import { describeHistory, quickRange, taipeiDateString, describeSummary } from '../src/tickets.js';
+import { describeHistory, quickRange, taipeiDateString, describeSummary } from '../src/utils/ticketFormatters.js';
 
 const originalFetch = globalThis.fetch;
 const originalStorage = globalThis.sessionStorage;

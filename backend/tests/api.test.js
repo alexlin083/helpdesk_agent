@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
 process.env.CORS_ORIGIN = 'http://localhost:5173';

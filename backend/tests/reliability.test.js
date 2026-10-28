@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
@@ -108,7 +109,7 @@ test('判斷逾時仍扣額、取消上游等待並釋放真實記憶體租約',
 
 /** 確認關機期限的預設值與下限。@returns {void} */
 function shutdownConfiguration() {
-  const options = { environment: { NODE_ENV: 'test', DEMO_PASSWORD: 'test-only-password' }, envFile: '/nonexistent/helpdesk/.env' };
+  const options = { environment: { NODE_ENV: 'local', DEMO_PASSWORD: 'test-only-password', ADMIN_PASSWORD: 'test-admin-only-password' }, envFile: '/nonexistent/helpdesk/.env' };
   assert.equal(loadEnv(options).shutdownTimeoutMs, 75000);
   assert.equal(loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '25000' } }).shutdownTimeoutMs, 25000);
   /** 嘗試過短的關機緩衝。@returns {object} 設定。@throws {Error} 不合法的期限。 */

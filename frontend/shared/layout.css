@@ -1,0 +1,41 @@
+/* 已登入一般頁共用：頂欄、導覽、帳號選單與介紹文字。 */
+.top-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 18px 40px; border-bottom: 1px solid var(--line); background: #fff; position: sticky; top: 0; z-index: 5;
+}
+
+.account-menu { position: relative; }
+.account-summary {
+  list-style: none; display: flex; align-items: center; gap: 12px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 16px 6px 6px; background: #fff; user-select: none;
+}
+.account-summary::-webkit-details-marker { display: none; }
+.account-summary:hover { background: var(--cream); }
+.avatar {
+  width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--cream);
+  color: var(--brown-deep); font-weight: 700; font-size: 16px;
+}
+.account-name { font-size: 16px; overflow-wrap: anywhere; }
+.chevron { width: 10px; height: 10px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: rotate(45deg); margin: 0 4px 4px; }
+.account-menu[open] .chevron { transform: rotate(-135deg); margin: 4px 4px 0; }
+.account-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); min-width: 240px; background: #fff; border: 1px solid var(--line);
+  border-radius: 12px; padding: 16px; box-shadow: 0 12px 36px rgba(43, 42, 39, 0.12); display: grid; gap: 14px;
+}
+.account-id { display: grid; gap: 2px; font-size: 14px; overflow-wrap: anywhere; }
+.account-id .muted { font-size: 12px; }
+
+.top-nav { display: flex; gap: 6px; margin-left: 28px; margin-right: auto; }
+.top-nav a { color: var(--ink-soft); text-decoration: none; padding: 8px 14px; border-radius: 999px; font-size: 15px; font-weight: 500; }
+.top-nav a:hover { background: var(--cream); color: var(--ink); }
+.top-nav a[aria-current="page"] { background: var(--dark); color: #fff; }
+
+.intro { color: var(--muted); margin: 14px 0 36px; }
+
+@media (max-width: 640px) {
+  .top-bar { padding: 12px 16px; }
+  .brand-sub { display: none; }
+  .top-nav { margin-left: 12px; }
+  .top-nav a { padding: 6px 10px; font-size: 14px; }
+  .intro { margin-bottom: 28px; }
+}

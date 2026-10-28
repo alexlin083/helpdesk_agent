@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import cors from 'cors';
 
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'local';
+process.env.ADMIN_PASSWORD = 'test-admin-only-password';
 process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
 process.env.DEMO_PASSWORD = 'test-only-password';
 process.env.GEMINI_API_KEY = '';
@@ -209,7 +210,7 @@ test('登入失敗計數滿載時保守拒絕且到期可復原', loginCapacity)
 function rateConfiguration() {
   for (const name of ['HTTP_API_LIMIT', 'HTTP_LOGIN_LIMIT', 'HTTP_TICKET_LIMIT', 'HTTP_DEPARTMENTS_LIMIT', 'HTTP_QUERY_LIMIT', 'HTTP_RATE_MAX_KEYS', 'HTTP_RATE_WINDOW_SECONDS', 'LOGIN_ACCOUNT_FAILURE_LIMIT', 'LOGIN_ACCOUNT_WINDOW_SECONDS']) {
     /** 嘗試無效的限制設定。@returns {object} 設定。@throws {Error} 參數不是正整數。 */
-    function invalid() { return loadEnv({ environment: { DEMO_PASSWORD: 'test-only-password', [name]: '0' }, envFile: '/nonexistent/helpdesk/.env' }); }
+    function invalid() { return loadEnv({ environment: { DEMO_PASSWORD: 'test-only-password', ADMIN_PASSWORD: 'test-admin-only-password', [name]: '0' }, envFile: '/nonexistent/helpdesk/.env' }); }
     assert.throws(invalid, new RegExp(name));
   }
 }

@@ -1,3 +1,4 @@
+import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildProposeDom, pageIds, fakeAuth } from './helpers/fakeDom.js';
@@ -54,7 +55,7 @@ function requiresLogin() {
   const auth = fakeAuth(null);
   const page = initProposePage(doc, win, { auth });
   assert.equal(page, null);
-  assert.deepEqual(win.redirects, ['./index.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.login]);
   assert.equal(doc.body.hidden, true);
   assert.deepEqual(auth.calls, ['logout']);
 }
@@ -244,7 +245,7 @@ async function resetAndLogout() {
   auth.user = { username: 'amy.chen', userID: 'user-amy.chen', department: { id: 'dept-it-1', name: '資訊管理一部' } };
   await nodes.logout.click();
   assert.deepEqual(auth.calls, ['logout']);
-  assert.deepEqual(win.redirects, ['./index.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.login]);
   assert.equal(doc.body.hidden, true);
   win.events.get('pageshow')();
   assert.equal(win.redirects.length, 2);
