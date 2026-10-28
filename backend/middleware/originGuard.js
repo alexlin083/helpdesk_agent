@@ -3,9 +3,10 @@ import { env } from '../config/env.js';
 import { HttpError } from './errorHandler.js';
 
 /**
- * 建立 CloudFront 來源驗證；設定秘密後，除健康檢查外所有 API（含預檢）必須由代理附上標頭。
- * CloudFront 應覆寫 X-Origin-Verify，秘密只存在 AWS 與後端，不得交給瀏覽器。
- * 此標頭不取代 HTTPS 或 security group；未設定時保持本機與初次 EB 驗證可用。
+ * 建立可選的代理來源驗證；設定秘密後，除健康檢查外所有 API（含預檢）須由代理附上標頭。
+ * 採用此功能的代理須覆寫 X-Origin-Verify，秘密只存在代理與後端，不得交給瀏覽器。
+ * 目前單一 Caddy 的 Compose 架構固定停用此驗證，以後端不發布主機 port 隔離入口。
+ * 此標頭不取代 HTTPS 或網路隔離；其他拓撲需另行配置可信任代理與來源限制。
  * @param {string} [secret=env.originVerifySecret] 至少 32 bytes 的代理秘密；空字串代表停用。
  * @returns {Function} Express middleware。
  */

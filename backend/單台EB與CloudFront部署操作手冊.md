@@ -1,5 +1,7 @@
 # 單台 EB 與 CloudFront 部署操作手冊
 
+> 歷史方案：目前部署方向已改為單台 Lightsail＋Docker Compose＋Caddy。請依專案根目錄的 [Docker 與 Lightsail 部署操作手冊](../Docker與Lightsail部署操作手冊.md) 操作。本文件僅保留 EB／CloudFront 方案供比較，不與新方案混用；現行前端預設同站點 API，不再預設指向 CloudFront。
+
 本專案統一 Node.js 22，只區分 local 與 production。不使用資料庫或 ALB；工作單以單一 JSON 檔儲存，用量與限流以單程序記憶體管理。此文件是操作步驟，不代表 AWS 資源已建立。
 
 ## 1. 架構與身分

@@ -6,7 +6,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 # 企業智慧服務台 Agent 前後端 API 介面規格書
 
-本規格書為成員 A（後端與架構主導）與成員 B（前端與 UI/UX 設計）之間的標準介面合約（API Contract），旨在規範 GitHub Pages 前端網頁與部署於 AWS Elastic Beanstalk 之 Node.js Express 後端 API 服務間的通訊協定、JSON 資料綱要、分流邏輯與錯誤處理機制。
+本規格書為成員 A（後端與架構主導）與成員 B（前端與 UI/UX 設計）之間的標準介面合約（API Contract），規範同站點靜態前端與 Node.js Express 後端的通訊協定、JSON 資料綱要、分流邏輯與錯誤處理。現行部署方式為單台 Lightsail 主機上的 Docker Compose 與 Caddy。
 
 ---
 
@@ -24,13 +24,13 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ## 1. 系統概觀與傳輸規範
 
-前後端通訊採用標準 RESTful API 架構，正式部署的傳輸層使用 HTTPS（由 CloudFront 提供瀏覽器端 HTTPS；單台 EB、不使用 ALB；來源連線的 TLS 限制見部署手冊）；本機開發可使用 HTTP。為配合前端託管於 GitHub Pages 且後端部署於 AWS Elastic Beanstalk 之跨網域環境，後端必須妥善設定跨來源資源共享（CORS）標頭。
+前後端通訊採用 RESTful API。正式架構為單台 Lightsail Linux 主機執行 Docker Compose：Caddy 提供前端與公開 HTTPS，將同站點 `/api` 轉送至單一 Node.js 22 後端程序；不使用 GitHub Pages、CloudFront、ALB 或資料庫。Docker 本機驗證可使用 HTTP；保留 Python 前端與 Node 後端分開啟動的 local 方式。後端仍保留單一 CORS_ORIGIN 設定。
 
-* **基礎 API 網址**：正式 `https://<distribution-domain>.cloudfront.net` 或指向該 distribution 的自訂網域；本機 `http://localhost:3000`；所有端點都在 `/api` 之下。
+* **基礎 API 網址**：正式 `https://<網站網域>`；Docker 本機 `http://localhost:8080`；分開啟動的本機後端 `http://localhost:3000`。前端在 localhost:5173 使用 localhost:3000，其餘網站使用目前 origin；所有端點都在 `/api` 之下。
 * **資料格式**：`application/json; charset=utf-8`。請求須帶 `Content-Type: application/json`；JSON 本文上限 16 KB，超過回 413；本文不是有效 JSON 回 400。
 * **認證**：登入與健康檢查以外的端點都需 `Authorization: Bearer <token>`，缺少或格式不符回 401 `UNAUTHORIZED`。
 * **CORS**：只允許 `CORS_ORIGIN` 設定的單一來源；方法 GET、POST、OPTIONS；允許標頭 Content-Type、Accept、Authorization；公開標頭 Retry-After、X-User-Remaining、X-Global-Remaining；預檢請求回 204。
-* **環境變數管理**：`GEMINI_API_KEY` 嚴禁包含於前端代碼或程式庫中，統一交由 AWS Elastic Beanstalk 後端環境變數進行管理。
+* **環境變數管理**：`GEMINI_API_KEY` 嚴禁包含於前端代碼或程式庫中，由 Compose 將專案根目錄未追蹤的 `.env` 注入後端容器，production 後端不讀磁碟 `.env`；image、前端及 Git 不包含實際秘密。
 
 | 方法 | 路徑 | 認證 | 用途 |
 | --- | --- | --- | --- |
@@ -204,7 +204,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ### 3.4 需求單儲存 `backend/data/tickets.json`
 
-所有需求單（指定處理人與 AI 判斷都包含）保存在單一 JSON 檔（可用 `TICKETS_FILE` 指定其他絕對路徑），每張需求單一筆，含狀態與簽核紀錄；檔案含需求單原文，不得提交 Git，也列入 `.ebignore`。寫入先寫暫存檔再改名，並在程序內排隊；只適用單一程序，多個 instance 不會共用。
+所有需求單（指定處理人與 AI 判斷都包含）保存在單一 JSON 檔（可用 `TICKETS_FILE` 指定其他絕對路徑），每張需求單一筆，含狀態與簽核紀錄；檔案含需求單原文，不得提交 Git，也排除於 Docker build context 與 image。寫入先寫暫存檔再改名，並在程序內排隊；只適用單一程序，多個 instance 不會共用。
 
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
@@ -307,13 +307,13 @@ AI 判斷錯誤或指定錯處理人時，送達部門的成員可把「待簽�
 
 前端 admin/admin.html 不載入工作單，提供帳號、登出、唯讀保護監測與清除操作。輸入完整確認文字後才能送出；請求期間鎖定，成功顯示筆數及台北時間。401 清除登入回首頁；其他錯誤顯示提示，不自動重試。管理員直接開工作單頁時導回管理頁；一般帳號開管理頁則導回 propose.html，後端獨立驗證角色。
 
-### 3.13 CloudFront 與執行限制
+### 3.13 Docker、反向代理與執行限制
 
-架構使用單台 EB／單一 Node.js 22 程序、不使用 ALB 或資料庫。CloudFront 必須 CachingDisabled、轉送 Authorization／Origin／預檢標頭及查詢參數、允許 POST 與 OPTIONS。正式 CORS_ORIGIN 不包含 GitHub Pages 的專案路徑。
+架構使用單台 Lightsail、Caddy 與單一 Node.js 22 後端程序，不使用 ALB 或資料庫。只有 Caddy 發布對外 port；後端僅在 Docker 網路可達。Caddy 保留 `/api` 前綴、查詢參數與 Authorization，並產生可信任的 X-Forwarded-For；Compose 固定 TRUST_PROXY=1，此值只適用唯一 Caddy 代理且後端沒有對外發布 port 的拓撲。正式 CORS_ORIGIN 為同站點 HTTPS origin，不含頁面路徑。API 保持 Cache-Control: no-store，Caddy 不快取 API。
 
-設定 ORIGIN_VERIFY_SECRET 後，除 GET /api/health 外，API 必須帶 CloudFront 設定的 X-Origin-Verify，缺少或錯誤回 403；秘密至少 32 bytes，不公開給前端。來源驗證在 CORS 之前，CloudFront 必須替 OPTIONS 也加上來源標頭。此秘密不提供連線加密，來源 TLS、安全群組與 TRUST_PROXY 必須依 [部署手冊](backend/單台EB與CloudFront部署操作手冊.md) 配置。
+Docker Compose 固定 ORIGIN_VERIFY_SECRET 為空，避免舊 CloudFront 參數阻擋同站點 API；既有可選來源驗證功能仍保留供其他拓撲使用，設定後至少 32 bytes、除 GET /api/health 外需代理附上 X-Origin-Verify。一般瀏覽器不持有來源秘密。正式 Caddy 使用公開網域與持久化憑證資料，實際 DNS／防火牆及 HTTPS 依 [Docker 部署手冊](Docker與Lightsail部署操作手冊.md) 配置並驗收。
 
-本機 JSON 不具跨部署／換機持久化保證；記憶體計數重啟即歸零。管理重置只清除目前執行環境，不操作其他 instance 或 AWS 資源。
+Compose 的 TICKETS_FILE 固定為 /app/storage/tickets.json，以 tickets volume 掛載整個目錄；新 volume 為空，不匯入本機工作單。volume 可跨容器重建保留，無法保證換主機、刪磁碟或刪 volume 後保留，須另行備份。記憶體計數重啟即歸零，不能當作永久費用上限。維持單程序與單副本，管理重置只清除目前執行環境，不操作其他 instance 或 AWS 資源。
 
 ### 3.14 管理監測 `GET /api/admin/metrics`
 
@@ -339,11 +339,11 @@ HTTP totalHits 是目前仍有效的各識別視窗合計，不是每秒流量�
 
 前端提供立即更新、暫停自動更新、最後成功取樣時間與陳舊資料提示。隱藏／離開分頁或開始重置時中止監測；恢復時依自動更新選擇重新取樣，重置完成要求新快照，忽略舊請求回應。401 停止並登出，403 停止自動更新，429 尊重 Retry-After，其他錯誤逐步退避並保留舊數據。清除操作不會自動重送。
 
-本功能只監測目前程序的保護狀態，沒有歷史記錄、Gemini Token／帳單或 AWS 費用統計。CloudFront 必須對此端點同樣停用快取並轉送 Authorization。
+本功能只監測目前程序的保護狀態，沒有歷史記錄、Gemini Token／帳單或 AWS 費用統計。Caddy 不快取此端點，並將 Authorization 轉送後端。
 
 ## 4. 錯誤處理與 HTTP 狀態碼規範
 
-為確保前端 GitHub Pages 在面對網路異常或後端故障時能維持良好之 UI/UX 狀態（如解除按鈕鎖定、顯示友善錯誤提示），後端必須遵守以下標準 HTTP 狀態碼回應原則。
+為確保前端在面對網路異常或後端故障時能維持良好之 UI/UX 狀態（如解除按鈕鎖定、顯示友善錯誤提示），後端必須遵守以下標準 HTTP 狀態碼回應原則。
 
 ### 錯誤回應 JSON 格式
 

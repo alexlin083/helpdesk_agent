@@ -24,3 +24,7 @@ backend/data/tickets.json.tmp
 *.p12
 *.pfx
 coverage/
+
+# Docker 備份含工作單原文；image 匯出檔不進 Git
+backups/
+helpdesk-images*.tar

@@ -30,7 +30,7 @@ app.use(errorHandler);
 
 /**
  * 禁止瀏覽器及代理快取 API 成功與錯誤回應，避免跨帳號資料或舊限流訊息被重用。
- * CloudFront 仍須搭配 CachingDisabled，不能只依賴回應標頭。
+ * 目前 Caddy 不快取 API；若另加 CDN，仍須明確停用 API 快取，不能只依賴此標頭。
  * @param {object} req Express 請求。
  * @param {object} res Express 回應。
  * @param {Function} next 繼續路由。

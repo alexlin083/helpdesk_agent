@@ -1,0 +1,16 @@
+{$SITE_ADDRESS:http://localhost} {
+	encode zstd gzip
+
+	# 保留 /api 前綴；handle_path 會移除前綴，與既有 Express 路由不符。
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy backend:3000
+	}
+
+	handle {
+		root * /srv
+		# 更新部署後重新驗證資產，避免舊 JS 沿用過期的 API 設定。
+		header Cache-Control "no-cache"
+		file_server
+	}
+}

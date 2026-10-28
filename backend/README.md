@@ -98,7 +98,7 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 | `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 25000 |
 | `LIMIT_STORE` | memory | local 與 production 都只允許 memory；重啟及管理重置會歸零 |
 | `ADMIN_PASSWORD` | 必填 | 應用程式管理員的獨立密碼，不是 AWS IAM 密碼 |
-| `ORIGIN_VERIFY_SECRET` | 無 | CloudFront 來源秘密，設定後至少 32 bytes；除健康檢查外 API（含 OPTIONS）需帶 X-Origin-Verify |
+| `ORIGIN_VERIFY_SECRET` | 無 | 可選代理來源秘密，設定後至少 32 bytes；目前 Compose 強制停用，其他拓撲啟用時除健康檢查外 API（含 OPTIONS）需帶 X-Origin-Verify |
 | `NODE_ENV` | local | 只接受 local 或 production；正式環境不讀 .env |
 | `TRUST_PROXY` | 不信任代理 | 依實際代理鏈填可信任 IP、網段或 hop 數，勿盲目填 true |
 
@@ -112,7 +112,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 登出只清除前端分頁憑證，舊 JWT 到期前仍有效。修改 `DEMO_PASSWORD` 不會撤銷已簽發憑證；需要使全部憑證失效時更換 `AUTH_SECRET` 並重新部署所有 instance。
 
-登入失敗以 `LIMIT_STORE` 原子保存來源整體與已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待。未知帳號只累積來源整體；狀態最多 512 筆，滿載回傳 503。IPv6 以 /64 分組。IP 登入保護只相信 Express 判定的 `req.ip`，CloudFront 與 Nginx 後須依實際拓撲設定 `TRUST_PROXY`。
+登入失敗以 `LIMIT_STORE` 原子保存來源整體與已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待。未知帳號只累積來源整體；狀態最多 512 筆，滿載回傳 503。IPv6 以 /64 分組。IP 登入保護只相信 Express 判定的 `req.ip`；目前只有 Caddy 一層代理且後端不發布 port，Compose 使用 `TRUST_PROXY=1`，更換拓撲須重新驗證。
 
 ## 需求單 API、部門與帳號設定檔
 
@@ -189,11 +189,13 @@ curl -X POST http://localhost:3000/api/tickets/<TICKET_ID>/decision \
 
 只區分 `NODE_ENV=local` 與 `NODE_ENV=production`。本機預設 local，讀取 `backend/.env`，shell 參數優先；正式環境完全不讀 `.env`，必須由平台設定 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`（至少 32 bytes）、`DEMO_PASSWORD`、獨立的 `ADMIN_PASSWORD`。模式須設定在 shell 或平台；不接受第三種模式。測試使用隔離的 local 參數及假密碼。
 
-部署架構為 **GitHub Pages → CloudFront HTTPS → 單台 Elastic Beanstalk／Nginx → 單一 Node.js 22 程序**，不使用 ALB。JSON 不能跨程序共用，禁止 PM2 cluster、多 instance 或以額外執行個體進行部署。應用程式更新可能覆蓋檔案；EC2 被替換後本機檔案可能遺失，修改 `TICKETS_FILE` 路徑不等於持久化。課堂資料應事先匯出或另行備份。
+目前部署架構為 **單台 Lightsail Linux 主機 → Docker Compose → Caddy（HTTPS、靜態前端、/api 代理）→ 單一 Node.js 22 程序**，不使用 GitHub Pages、CloudFront、ALB 或資料庫。後端沒有發布主機 port，僅 Caddy 可由外部進入；Caddy 為唯一代理，因此 Compose 固定 `TRUST_PROXY=1`，並清空舊的 `ORIGIN_VERIFY_SECRET`。修改拓撲後須重新驗證來源 IP，不可直接沿用此跳數。
 
-以 backend 為應用程式根目錄，ZIP 根目錄直接放 `package.json` 與 `Procfile`；`.ebignore` 排除 `.env`、測試及真實工作單，但手動 ZIP 不會自動套用該檔，需自行檢查。EB 使用 `NODE_ENV=production`、`PORT=5000`，健康檢查 `/api/health`。AWS Console 由既有 IAM user `alex.admin` 操作；IAM user 不能充當 EB Service Role 或 EC2 Instance Profile，仍須選擇合適的既有角色或另行建立，應用程式不保存 AWS 金鑰。
+Compose 的參數來源是專案根目錄未追蹤的 `.env`，與原本 `backend/.env` 分開；後端容器固定 `PORT=3000`、`TICKETS_FILE=/app/storage/tickets.json`、`LIMIT_STORE=memory`、`SHUTDOWN_TIMEOUT_MS=75000`，停止寬限 90 秒。Node 使用非 root 的 node 帳號執行。`/api/health` 是容器健康檢查，不呼叫 Gemini；健康狀態本身不會自動重啟卡住的程序，restart policy 只處理程序結束或主機重啟等情況。
 
-CloudFront 必須停用 API 快取、轉送 Authorization、Origin、預檢標頭及查詢參數，並允許 POST／OPTIONS。詳見 [單台 EB 與 CloudFront 部署操作手冊](./單台EB與CloudFront部署操作手冊.md)。本次只完成程式與部署說明，沒有建立或修改 AWS 資源。
+工作單以名為 tickets 的 Docker volume 掛載整個 `/app/storage`，保留暫存檔改名的寫入方式。新 volume 為空，不匯入本機 `data/tickets.json`；第一次成功寫單才產生檔案。正常重建容器不會清除 volume，但換主機、刪除磁碟或刪除 volume 仍可能遺失資料，必須另行備份。禁止多副本與 PM2 cluster。日誌輪替每個服務最多 3 個 10 MB 檔；Caddy 憑證另存 volume。
+
+詳細的本機啟動、Lightsail 建立、DNS／HTTPS、更新、備份與還原步驟見 [Docker 與 Lightsail 部署操作手冊](../Docker與Lightsail部署操作手冊.md)。AWS 資源與公開 HTTPS 尚須自行依手冊建立及驗收；程式不建立雲端資源，也不需要 AWS Access Key。舊的 [EB／CloudFront 手冊](./單台EB與CloudFront部署操作手冊.md) 已標示為歷史方案。
 
 ## 管理員與課堂重置
 
@@ -225,7 +227,7 @@ CloudFront 必須停用 API 快取、轉送 Authorization、Origin、預檢標�
 
 HTTP 表格顯示五種一般限制的設定、有效識別數／容量、有效視窗請求合計、達上限識別數與超額次數。視窗起點因識別碼而異，不是每秒流量或啟動以來的歷史累計；超額次數不含容量不足或更上層 middleware 的拒絕。來源只回總量，帳號層可回 userID 的視窗資料。登入失敗另分來源與帳號＋來源的有效視窗摘要，同次失敗可能進入兩類，不能相加視為總次數。
 
-監測使用獨立固定 60 秒視窗：每 IP／IPv6 /64 最多 120 次、每已驗證管理員最多 60 次。與一般入口、查詢、管理重置的計數完全分開，不受一般入口耗盡影響，也不被管理重置清除。監測不扣 AI 額度、不呼叫 Gemini、不載入工作單、不寫入或清除任何業務保護狀態；到期與跨午夜只在輸出時投影。仍經過來源驗證與 no-store，CloudFront 也須 CachingDisabled。
+監測使用獨立固定 60 秒視窗：每 IP／IPv6 /64 最多 120 次、每已驗證管理員最多 60 次。與一般入口、查詢、管理重置的計數完全分開，不受一般入口耗盡影響，也不被管理重置清除。監測不扣 AI 額度、不呼叫 Gemini、不載入工作單、不寫入或清除任何業務保護狀態；到期與跨午夜只在輸出時投影。仍經過可選來源驗證與 no-store；目前 Compose 停用來源秘密，Caddy 不快取 API。
 
 維護中可持續讀取監測，重置後畫面立即要求新快照（若監測已被限流則等待 Retry-After）。分頁隱藏、離開或開始重置會取消監測請求；過時回應不覆蓋新快照。恢復可見後自動更新；手動暫停後不自行恢復。429 尊重等待秒數、其他連線或格式錯誤逐步退避，保留舊值並標示不是最新快照；401 停止輪詢並登出，403 停止自動更新。
 
