@@ -6,6 +6,7 @@
     <meta name="description" content="企業智慧服務台：填寫主題與需求內容，指定處理人或由 AI 判斷部門送出需求單">
     <title>提出需求單 · 企業智慧服務台</title>
     <link rel="stylesheet" href="./base.css">
+    <link rel="stylesheet" href="./shared/layout.css">
     <link rel="stylesheet" href="./propose.css">
     <script type="module" src="./src/propose.js"></script>
   </head>
@@ -19,7 +20,7 @@
       </div>
       <nav class="top-nav" aria-label="主要頁面">
         <a href="./propose.html" aria-current="page">提出需求單</a>
-        <a href="./tickets.html">狀態追蹤</a>
+        <a href="./tickets/tickets.html">狀態追蹤</a>
       </nav>
       <details id="account-menu" class="account-menu">
         <summary class="account-summary" aria-label="帳號選單">
@@ -111,7 +112,7 @@
         <div id="result-basis-row" class="result-row" hidden><dt>判斷依據</dt><dd id="result-basis"></dd></div>
       </dl>
       <p id="result-note" class="result-note"></p>
-      <p class="result-link">可到<a href="./tickets.html">狀態追蹤</a>頁查看狀態與簽核結果</p>
+      <p class="result-link">可到<a href="./tickets/tickets.html">狀態追蹤</a>頁查看狀態與簽核結果</p>
       <div class="dialog-actions">
         <button id="result-close" class="secondary-button" type="button">關閉</button>
         <button id="result-again" class="primary-button" type="button">再提一張</button>

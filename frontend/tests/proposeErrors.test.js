@@ -1,3 +1,4 @@
+import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildProposeDom, fakeAuth } from './helpers/fakeDom.js';
@@ -78,7 +79,7 @@ async function listFailures(context) {
   async function expired() { throw new TicketServiceError(MESSAGES.loginRequired, { status: 401, code: 'UNAUTHORIZED' }); }
   const { win, auth, page, doc } = mountPage({ loadDepartments: expired });
   await page.ready;
-  assert.deepEqual(win.redirects, ['./index.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.login]);
   assert.deepEqual(auth.calls, ['logout']);
   assert.equal(doc.body.hidden, true);
 }
@@ -184,7 +185,7 @@ test('送出失敗只顯示提示並保留輸入內容', displayedErrors);
  */
 async function sessionAndUnexpected(context) {
   const expired = await submitWith(new TicketServiceError(MESSAGES.loginRequired, { status: 401, code: 'UNAUTHORIZED' }));
-  assert.deepEqual(expired.win.redirects, ['./index.html']);
+  assert.deepEqual(expired.win.redirects, [PAGE_URLS.login]);
   assert.deepEqual(expired.auth.calls, ['logout']);
   assert.equal(expired.doc.body.hidden, true);
   cleanup();
@@ -198,7 +199,7 @@ async function sessionAndUnexpected(context) {
   local.nodes.content.value = '新進同仁需要 VPN 連線權限';
   await local.nodes.form.dispatch('submit');
   assert.equal(calls, 0);
-  assert.deepEqual(local.win.redirects, ['./index.html']);
+  assert.deepEqual(local.win.redirects, [PAGE_URLS.login]);
   cleanup();
   const errors = context.mock.method(console, 'error', () => {});
   const unexpected = await submitWith(new TypeError('程式錯誤 private-detail'));

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>課堂管理 · 企業智慧服務台</title>
+  <link rel="stylesheet" href="../base.css">
+  <link rel="stylesheet" href="./admin.css">
+  <script type="module" src="../src/admin.js"></script>
+</head>
+<body>
+  <main class="admin-panel">
+    <p class="admin-eyebrow">企業智慧服務台 · 課堂管理</p>
+    <h1>管理員控制台</h1>
+    <p><strong id="account-name"></strong> · <span id="account-department"></span></p>
+    <button id="logout-button" type="button" class="link-button">登出</button>
+    <section id="admin-monitoring" aria-labelledby="monitor-title">
+      <div class="monitor-heading">
+        <div><h2 id="monitor-title">限流與用量監測</h2><p class="muted">每 5 秒更新，可隨時暫停或手動更新。</p></div>
+        <div class="monitor-actions">
+          <button id="metrics-refresh" class="secondary-button" type="button">立即更新</button>
+          <button id="metrics-toggle" class="secondary-button" type="button" aria-pressed="true">暫停自動更新</button>
+        </div>
+      </div>
+      <p id="metrics-status" role="status" aria-live="polite">等待取得監測資料…</p>
+      <p id="metrics-updated" class="muted">尚無成功快照</p>
+      <div id="metrics-cards" class="metric-grid"></div>
+      <label for="metrics-quota-progress">全站今日 AI 額度使用情況</label>
+      <progress id="metrics-quota-progress" max="1" value="0"></progress>
+      <p id="metrics-policy"></p>
+      <p id="metrics-runtime" class="muted"></p>
+      <p class="monitor-note">只監測目前這個後端程序；重啟或管理重置會讓一般計數歸零。這是本地保護額度，不是 Gemini 帳單或 Token 用量。指定處理人的工作單不扣 AI 額度。</p>
+      <h3>各帳號 AI 使用狀態</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="各帳號 AI 使用狀態">
+        <table><thead><tr><th scope="col">帳號</th><th scope="col">部門</th><th scope="col">今日已用／上限</th><th scope="col">剩餘次數</th><th scope="col">目前狀態</th><th scope="col">剩餘冷卻</th></tr></thead><tbody id="metrics-users"></tbody></table>
+      </div>
+      <h3>一般 HTTP 頻率保護</h3>
+      <p class="muted">計數是各個仍有效固定視窗的合計，不是每秒流量或歷史總次數。達上限表示下一次請求將被拒絕；超額次數不含容量不足的拒絕。不顯示來源 IP。</p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="HTTP 頻率摘要">
+        <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別／容量</th><th scope="col">視窗請求合計</th><th scope="col">達上限識別數</th><th scope="col">超額次數</th></tr></thead><tbody id="metrics-http"></tbody></table>
+      </div>
+      <h3>登入失敗保護</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="登入失敗摘要">
+        <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別數</th><th scope="col">視窗失敗合計</th><th scope="col">封鎖識別數</th></tr></thead><tbody id="metrics-login"></tbody></table>
+      </div>
+      <p id="metrics-login-capacity" class="muted"></p>
+      <p id="metrics-monitor-policy" class="muted"></p>
+    </section>
+    <section aria-labelledby="reset-title">
+      <h2 id="reset-title">清除目前所有工作單</h2>
+      <p>此操作會永久清空全部工作單，並重置所有帳號與全站的 AI 額度、冷卻時間、登入失敗及一般 HTTP 限流計數。</p>
+      <p>重置時會暫停新操作，等待進行中的工作結束。帳號與登入憑證會保留；管理操作本身的頻率保護不會重置。</p>
+      <form id="reset-form">
+        <label for="reset-confirmation">請輸入 <strong>RESET_HELPDESK</strong> 確認，資料無法復原。</label>
+        <input id="reset-confirmation" autocomplete="off" spellcheck="false" required aria-describedby="reset-status">
+        <button id="reset-button" class="primary-button" type="submit" disabled>清除全部工作單並重置限量限流</button>
+      </form>
+      <p id="reset-status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+</body>
+</html>

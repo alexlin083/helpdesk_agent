@@ -1,7 +1,11 @@
+import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, pageIds, fakeAuth } from './helpers/fakeDom.js';
-import { initTicketsPage, buildTicketCard, describeTarget, formatTime, TICKETS_TEXT } from '../src/tickets.js';
+import { initTicketsPage } from '../src/tickets.js';
+import { buildTicketCard } from '../src/components/ticketCard.js';
+import { describeTarget, formatTime } from '../src/utils/ticketFormatters.js';
+import { TICKETS_TEXT } from '../src/components/ticketText.js';
 import { TicketServiceError, MESSAGES, normalizeStoredTicket, DRAFT_KEY } from '../src/services/ticketService.js';
 
 const user = { username: 'amy.chen', userID: 'user-amy.chen', department: { id: 'dept-it-1', name: '資訊管理一部' } };
@@ -131,7 +135,7 @@ test.afterEach(cleanup);
  * @returns {void}
  */
 function pageStructure() {
-  const ids = pageIds(new URL('../tickets.html', import.meta.url));
+  const ids = pageIds(new URL('../tickets/tickets.html', import.meta.url));
   for (const id of ['account-avatar', 'account-name', 'account-id', 'account-department', 'logout-button', 'refresh-button', 'tab-tracking', 'tab-completed', 'count-tracking',
     'panel-tracking', 'notice-tracking', 'count-pending', 'pending-hint', 'empty-pending', 'list-pending', 'count-rejected', 'empty-rejected', 'list-rejected',
     'panel-completed', 'completed-title', 'filter-form', 'filter-q', 'filter-status', 'filter-from', 'filter-to', 'filter-reset', 'filter-submit',
@@ -423,14 +427,14 @@ async function loadFailures(context) {
   cleanup();
   const expired = mountPage({ loadDepartmentTickets: async () => { throw new TicketServiceError(MESSAGES.loginRequired, { status: 401, code: 'UNAUTHORIZED' }); } });
   await expired.page.ready;
-  assert.deepEqual(expired.win.redirects, ['./index.html']);
+  assert.deepEqual(expired.win.redirects, [PAGE_URLS.login]);
   assert.deepEqual(expired.auth.calls, ['logout']);
   cleanup();
   const doc = createFakeDocument();
   const win = createFakeWindow();
   buildTicketsDom(doc);
   assert.equal(initTicketsPage(doc, win, { auth: fakeAuth(null) }), null);
-  assert.deepEqual(win.redirects, ['./index.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.login]);
 }
 test('清單載入失敗的提示、轉單停用與登入守門', loadFailures);
 
@@ -503,7 +507,7 @@ async function resubmit() {
   await page.ready;
   await nodes.listRejected.children[0].querySelector('.resubmit-button').click();
   assert.deepEqual(JSON.parse(stored.get(DRAFT_KEY)), { subject: '申請 VPN', content: '新人需要 VPN' });
-  assert.equal(win.location.href, './propose.html');
+  assert.equal(win.location.href, PAGE_URLS.propose);
   cleanup();
   const broken = createFakeWindow();
   broken.sessionStorage = { /** 模擬儲存體不可用。@returns {never} @throws {Error} 失敗。 */ setItem() { throw new Error('quota'); } };
@@ -513,6 +517,6 @@ async function resubmit() {
   }, broken);
   await second.page.ready;
   await second.nodes.listRejected.children[0].querySelector('.resubmit-button').click();
-  assert.equal(broken.location.href, './propose.html', '儲存失敗仍前往提出需求單頁');
+  assert.equal(broken.location.href, PAGE_URLS.propose, '儲存失敗仍前往提出需求單頁');
 }
 test('重新提出被退回的需求單', resubmit);

@@ -1,3 +1,4 @@
+import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildLoginDom, pageIds, fakeAuth } from './helpers/fakeDom.js';
@@ -24,7 +25,7 @@ function alreadyLoggedIn() {
   const win = createFakeWindow();
   buildLoginDom(doc);
   initLoginPage(doc, win, fakeAuth({ username: 'racky.huang', userID: 'user-racky.huang', department: { id: 'dept-it-1', name: '資訊管理一部' } }));
-  assert.deepEqual(win.redirects, ['./propose.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.propose]);
   win.events.get('pageshow')();
   assert.equal(win.redirects.length, 2);
 }
@@ -100,7 +101,7 @@ async function loginFlow() {
   assert.deepEqual(attempts, [['racky.huang', 'wrong'], ['racky.huang', 'test-only-password']]);
   assert.equal(nodes.password.value, '');
   assert.equal(nodes.error.textContent, '');
-  assert.deepEqual(win.redirects, ['./propose.html']);
+  assert.deepEqual(win.redirects, [PAGE_URLS.propose]);
   /** 模擬連線失敗。@returns {Promise<never>} @throws {Error} 連線失敗提示。 */
   auth.login = async () => { throw new Error('無法連線登入服務，請確認後端已啟動並稍後再試'); };
   auth.user = null;

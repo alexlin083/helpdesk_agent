@@ -1,3 +1,4 @@
+import { PAGE_URLS } from './pageUrls.js';
 import { authService } from './services/authService.js';
 
 export const LOGIN_TEXT = {
@@ -9,7 +10,7 @@ export const LOGIN_TEXT = {
 };
 
 /**
- * 初始化登入頁：已登入時直接前往提出需求單頁；提交時先做必填檢查，再呼叫後端登入。
+ * 初始化登入頁：已登入時依後端角色前往管理頁或提出需求單頁；提交時先做必填檢查，再呼叫後端登入。
  * @param {Document} [doc=document] 頁面文件，測試可注入替身。
  * @param {Window} [win=window] 視窗物件，提供導頁與 pageshow 事件。
  * @param {object} [auth=authService] 登入服務。
@@ -24,11 +25,12 @@ export function initLoginPage(doc = document, win = window, auth = authService) 
   const button = doc.querySelector('#login-button');
 
   /**
-   * 已登入時直接進入提出需求單頁；相對位址支援 GitHub Pages 的專案子路徑。
+   * 已登入時依身分進入管理頁或提出需求單頁；由模組位置建立網址，支援頁面子資料夾與 GitHub Pages 的專案子路徑。
    * @returns {void} 含從瀏覽器快取恢復登入頁時的狀態檢查。
    */
   function checkSession() {
-    if (auth.getCurrentUser()) win.location.replace('./propose.html');
+    const user = auth.getCurrentUser();
+    if (user) win.location.replace(user.role === 'ADMIN' ? PAGE_URLS.admin : PAGE_URLS.propose);
   }
 
   /**
@@ -45,7 +47,7 @@ export function initLoginPage(doc = document, win = window, auth = authService) 
 
   /**
    * 提交帳密：兩欄只有空白也算空白，此時不清空密碼；請求結束後不論成功、失敗或連線失敗一律清空密碼。
-   * 成功後進入提出需求單頁；失敗顯示後端或連線提示，不標示欄位。
+   * 成功後一般帳號進入提出需求單頁，管理員進入管理頁；失敗顯示後端或連線提示，不標示欄位。
    * @param {SubmitEvent} event 原生登入表單提交事件。
    * @returns {Promise<void>} 等待後端登入，期間鎖定按鈕防止重複送出；不呼叫 Gemini。
    */
@@ -61,9 +63,9 @@ export function initLoginPage(doc = document, win = window, auth = authService) 
     button.disabled = true;
     button.textContent = LOGIN_TEXT.submitting;
     try {
-      await auth.login(username.value, password.value);
+      const user = await auth.login(username.value, password.value);
       password.value = '';
-      win.location.replace('./propose.html');
+      win.location.replace(user.role === 'ADMIN' ? PAGE_URLS.admin : PAGE_URLS.propose);
     } catch (error) {
       password.value = '';
       errorMessage.textContent = error instanceof Error && error.message ? error.message : '登入失敗，請稍後再試';

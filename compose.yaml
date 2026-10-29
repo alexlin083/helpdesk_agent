@@ -1,0 +1,55 @@
+name: helpdesk
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  backend:
+    image: helpdesk-backend:latest
+    build:
+      context: ./backend
+    env_file: ${HELPDESK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: ${NODE_ENV:-local}
+      PORT: "3000"
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      TICKETS_FILE: /app/storage/tickets.json
+      LIMIT_STORE: memory
+      # 僅 Caddy 對外；Caddy 覆寫來源資訊，後端只信任這一跳。
+      TRUST_PROXY: "1"
+      # 單站點架構不使用 CloudFront 來源秘密，避免舊設定阻擋登入。
+      ORIGIN_VERIFY_SECRET: ""
+      SHUTDOWN_TIMEOUT_MS: "75000"
+    volumes:
+      - tickets:/app/storage
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 90s
+    logging: *logging
+
+  web:
+    image: helpdesk-web:latest
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+      - "${HTTPS_BIND:-127.0.0.1}:${HTTPS_PORT:-8443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  tickets:
+  caddy_data:
+  caddy_config:

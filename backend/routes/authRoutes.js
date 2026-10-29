@@ -1,13 +1,14 @@
+import { trackRequest } from '../services/chatTasks.js';
 import { Router } from 'express';
 import { accountFor, authService } from '../services/authService.js';
 import { usageService } from '../services/usageService.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
 const router = Router();
-router.post('/login', login);
+router.post('/login', trackRequest(login));
 
 /**
- * 驗證十組展示帳號，原子套用 IP 整體及已知帳號＋IP 的失敗限制，再簽發憑證。
+ * 驗證一般展示帳號或獨立管理員，原子套用 IP 整體及已知帳號＋IP 的失敗限制，再簽發憑證。
  * 未知帳號只累積 IP 失敗，不以任意輸入建立計數；不寫入密碼或憑證日誌。
  * @param {import('express').Request} req 包含 username 與 password。
  * @param {import('express').Response} res 回傳 token 與身分。

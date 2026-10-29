@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="企業智慧服務台：追蹤我提出的需求單狀態、簽核或轉送送達本部門的需求單、查詢本部門的簽核紀錄">
     <title>狀態追蹤 · 企業智慧服務台</title>
-    <link rel="stylesheet" href="./base.css">
-    <link rel="stylesheet" href="./propose.css">
+    <link rel="stylesheet" href="../base.css">
+    <link rel="stylesheet" href="../shared/layout.css">
     <link rel="stylesheet" href="./tickets.css">
-    <script type="module" src="./src/tickets.js"></script>
+    <script type="module" src="../src/tickets.js"></script>
   </head>
   <body class="tickets-page" hidden>
     <header class="top-bar">
@@ -19,7 +19,7 @@
         <div><p class="brand-name">企業智慧服務台</p><p class="brand-sub">需求單提案</p></div>
       </div>
       <nav class="top-nav" aria-label="主要頁面">
-        <a href="./propose.html">提出需求單</a>
+        <a href="../propose.html">提出需求單</a>
         <a href="./tickets.html" aria-current="page">狀態追蹤</a>
       </nav>
       <details id="account-menu" class="account-menu">
@@ -55,7 +55,7 @@
         <section class="tracking-section" aria-labelledby="pending-title">
           <h2 id="pending-title" class="section-title">待簽核 <span id="count-pending" class="tab-count"></span></h2>
           <p id="pending-hint" class="department-title"></p>
-          <p id="empty-pending" class="empty" hidden>目前沒有等待簽核的需求單，<a href="./propose.html">前往提出需求單</a></p>
+          <p id="empty-pending" class="empty" hidden>目前沒有等待簽核的需求單，<a href="../propose.html">前往提出需求單</a></p>
           <div id="list-pending" class="ticket-list" aria-live="polite"></div>
         </section>
         <section class="tracking-section" aria-labelledby="rejected-title">

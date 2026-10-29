@@ -7,7 +7,7 @@ import { ipKeyGenerator } from 'express-rate-limit';
 import { accountFor } from './authService.js';
 
 /**
- * 計算台北日期與下一個午夜，不依主機時區或資料庫 TTL 決定重置。
+ * 計算台北日期與下一個午夜，不依主機時區決定重置。
  * @param {number} now 目前 epoch 毫秒。
  * @returns {{day: string, resetAt: number}} 日期鍵及下一個午夜 epoch 毫秒。
  */
@@ -113,7 +113,7 @@ export function createUsageService({ store = limitStore, config = env, clock = D
      * 成功只清除該帳號組合，IP 失敗總數保留至到期；未知帳號不建立任意帳號桶。
      * @param {string} ip Express 依 trust proxy 取得的來源 IP，不信任任意標頭。
      * @param {boolean} valid 帳密是否有效。
-     * @param {string} [username] 已知帳號；服務再次核對十組固定帳號，未知值只計入 IP。
+     * @param {string} [username] 已知帳號；服務再次核對後端設定帳號，未知值只計入 IP。
      * @returns {Promise<void>}
      * @throws {HttpError} 超過失敗上限或儲存故障。
      */

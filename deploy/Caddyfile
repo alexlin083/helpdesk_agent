@@ -1,0 +1,27 @@
+{$SITE_ADDRESS:http://localhost} {
+	encode zstd gzip
+
+	# 主網域保留為多專案入口；目前首頁暫時導向服務台。
+	redir / /helpdesk/ 302
+	redir /helpdesk /helpdesk/ 308
+
+	# 只移除 /helpdesk；後端仍收到既有的 /api 路由與查詢參數。
+	handle_path /helpdesk/* {
+		@api path /api /api/*
+		handle @api {
+			reverse_proxy backend:3000
+		}
+
+		handle {
+			root * /srv
+			# 更新部署後重新驗證資產，避免舊 JS 沿用過期的 API 設定。
+			header Cache-Control "no-cache"
+			file_server
+		}
+	}
+
+	# 尚未部署的專案不回傳服務台頁面，也不共用根目錄 /api。
+	handle {
+		respond "Not found" 404
+	}
+}
