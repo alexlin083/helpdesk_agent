@@ -24,9 +24,9 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 
 ## 1. 系統概觀與傳輸規範
 
-前後端通訊採用 RESTful API。正式架構為單台 Lightsail Linux 主機執行 Docker Compose：Caddy 提供前端與公開 HTTPS，將同站點 `/api` 轉送至單一 Node.js 22 後端程序；不使用 GitHub Pages、CloudFront、ALB 或資料庫。Docker 本機驗證可使用 HTTP；保留 Python 前端與 Node 後端分開啟動的 local 方式。後端仍保留單一 CORS_ORIGIN 設定。
+前後端通訊採用 RESTful API。正式架構為單台 Lightsail Linux 主機執行 Docker Compose：Caddy 提供前端與公開 HTTPS，將同站點 `/helpdesk/api` 轉送至單一 Node.js 22 後端程序；不使用 GitHub Pages、CloudFront、ALB 或資料庫。Docker 本機驗證可使用 HTTP；保留 Python 前端與 Node 後端分開啟動的 local 方式。後端仍保留單一 CORS_ORIGIN 設定。
 
-* **基礎 API 網址**：正式 `https://<網站網域>`；Docker 本機 `http://localhost:8080`；分開啟動的本機後端 `http://localhost:3000`。前端在 localhost:5173 使用 localhost:3000，其餘網站使用目前 origin；所有端點都在 `/api` 之下。
+* **基礎 API 網址**：正式 `https://alex-lin-lab.com/helpdesk`；Docker 本機 `http://localhost:8080/helpdesk`；分開啟動的本機後端 `http://localhost:3000`。前端在 localhost:5173 使用 localhost:3000，其餘網站依設定模組位置保留專案前綴。下表及後文列出的 `/api/...` 為 Express 內部路徑，Docker／正式公開網址須加 `/helpdesk`；例如公開健康端點為 `/helpdesk/api/health`。JSON 請求、回應及驗證規則不變。
 * **資料格式**：`application/json; charset=utf-8`。請求須帶 `Content-Type: application/json`；JSON 本文上限 16 KB，超過回 413；本文不是有效 JSON 回 400。
 * **認證**：登入與健康檢查以外的端點都需 `Authorization: Bearer <token>`，缺少或格式不符回 401 `UNAUTHORIZED`。
 * **CORS**：只允許 `CORS_ORIGIN` 設定的單一來源；方法 GET、POST、OPTIONS；允許標頭 Content-Type、Accept、Authorization；公開標頭 Retry-After、X-User-Remaining、X-Global-Remaining；預檢請求回 204。
@@ -309,7 +309,7 @@ AI 判斷錯誤或指定錯處理人時，送達部門的成員可把「待簽�
 
 ### 3.13 Docker、反向代理與執行限制
 
-架構使用單台 Lightsail、Caddy 與單一 Node.js 22 後端程序，不使用 ALB 或資料庫。只有 Caddy 發布對外 port；後端僅在 Docker 網路可達。Caddy 保留 `/api` 前綴、查詢參數與 Authorization，並產生可信任的 X-Forwarded-For；Compose 固定 TRUST_PROXY=1，此值只適用唯一 Caddy 代理且後端沒有對外發布 port 的拓撲。正式 CORS_ORIGIN 為同站點 HTTPS origin，不含頁面路徑。API 保持 Cache-Control: no-store，Caddy 不快取 API。
+架構使用單台 Lightsail、Caddy 與單一 Node.js 22 後端程序，不使用 ALB 或資料庫。只有 Caddy 發布對外 port；後端僅在 Docker 網路可達。Caddy 移除公開路徑的 `/helpdesk`，保留 `/api` 前綴、查詢參數與 Authorization，並產生可信任的 X-Forwarded-For；Compose 固定 TRUST_PROXY=1，此值只適用唯一 Caddy 代理且後端沒有對外發布 port 的拓撲。正式 CORS_ORIGIN 為同站點 HTTPS origin（https://alex-lin-lab.com），不含 /helpdesk 或頁面路徑。首頁 / 暫時導向 /helpdesk/；/helpdesk 導向含尾斜線版本。根目錄 /api 與未部署的 /project-b/ 回 Caddy 的 404，不轉送服務台後端。API 保持 Cache-Control: no-store，Caddy 不快取 API。
 
 Docker Compose 固定 ORIGIN_VERIFY_SECRET 為空，避免舊 CloudFront 參數阻擋同站點 API；既有可選來源驗證功能仍保留供其他拓撲使用，設定後至少 32 bytes、除 GET /api/health 外需代理附上 X-Origin-Verify。一般瀏覽器不持有來源秘密。正式 Caddy 使用公開網域與持久化憑證資料，實際 DNS／防火牆及 HTTPS 依 [Docker 部署手冊](Docker與Lightsail部署操作手冊.md) 配置並驗收。
 

@@ -63,7 +63,7 @@ frontend/
 | `src/components/account.js` | 頂欄帳號選單（帳號、使用者代號、所屬部門、登出）與登入守門，一般頁與管理頁共用，角色不符時導回對應首頁 |
 | `src/pageUrls.js` | 由模組位置建立各頁網址，統一登入／登出／跨頁跳轉，支援 GitHub Pages 專案子路徑 |
 | `shared/layout.css` | 提單與追蹤頁共用的頂欄、導覽、帳號選單與介紹文字 |
-| `src/config.js` | localhost:5173 的開發頁面使用 localhost:3000；Docker／正式網站使用目前 origin，不含 `/api` |
+| `src/config.js` | localhost:5173 的開發頁面使用 localhost:3000；Docker／正式網站依設定模組位置保留專案前綴，例如 origin/helpdesk，不含 `/api` |
 | `src/services/authService.js` | 後端登入、sessionStorage 工作階段（含所屬部門）與登出；只檢查 `user-<名.姓>` 的格式，帳號名單由後端決定 |
 | `src/services/ticketService.js` | 部門名單、送單、我的需求單、部門需求單、已完成查詢、簽核、轉單與取消的存取、欄位驗證、回應整理與錯誤提示對應 |
 | `src/components/adminReset.js` | 管理重置表單：確認文字、防重送、結果與錯誤提示，以及重置期間協調監測暫停／恢復 |
@@ -79,7 +79,7 @@ frontend/
 
 `src/admin.js` 與 `src/tickets.js` 是頁面組裝入口：驗證登入、提供 service 依賴、協調元件與資料更新。管理頁分成監測與重置兩個獨立元件；工作單頁分成追蹤清單、卡片、操作表單與已完成篩選面板。元件透過明確的參數及回呼溝通；API 存取集中在 services，純顯示規則放在 utils。測試直接匯入對應元件或工具，頁面測試則驗證組裝後的完整流程。
 
-前端是原生 ES Modules，不會讀取任何 `.env`；要改後端網址就編輯 `src/config.js`。Gemini 金鑰只存在後端。
+前端是原生 ES Modules，不會讀取任何 `.env`；Docker 部署由 `src/config.js` 依模組位置推導 API 基底，支援 /helpdesk/ 子路徑；特殊的跨站部署才另行調整設定。Gemini 金鑰只存在後端。
 
 ## 流程
 
@@ -108,7 +108,7 @@ npm test
 
 管理頁要求完整輸入 `RESET_HELPDESK` 後才啟用按鈕，呼叫 `POST /api/admin/reset`。此操作永久清空工作單與全站一般限量限流；管理操作的 IP／帳號頻率保護不重置。等待時鎖定輸入與按鈕，完成顯示清除筆數與台北時間。401 回登入頁，403／429／503 顯示後端提示，網路中斷顯示結果尚未確認且不自動重試。
 
-目前使用單台 Lightsail＋Docker Compose＋Caddy 同站點部署，不再需要 GitHub Pages 或 CloudFront。Caddy 提供 HTML／CSS／JS，將 `/api` 轉送後端；`src/config.js` 自動使用目前網站的 origin，不必在部署時改 JS。原本 `localhost:5173` 的 Python 開發伺服器仍連到 `localhost:3000`。正式 CORS_ORIGIN 設為網站 HTTPS origin，不含頁面路徑。完整操作見 [Docker 與 Lightsail 部署操作手冊](../Docker與Lightsail部署操作手冊.md)。
+目前使用單台 Lightsail＋Docker Compose＋Caddy 同站點部署，不再需要 GitHub Pages 或 CloudFront。Caddy 提供 HTML／CSS／JS，提供 `/helpdesk/` 網站並將 `/helpdesk/api` 轉送後端；只移除 `/helpdesk` 前綴，保留內部 `/api`。`src/config.js` 依自身模組位置推導專案基底，不必在部署時寫死網域。首頁 `/` 暫時導向 `/helpdesk/`，未部署的專案路徑及根目錄 `/api` 回 404。原本 `localhost:5173` 的 Python 開發伺服器仍連到 `localhost:3000`。正式 CORS_ORIGIN 設為網站 HTTPS origin，不含頁面路徑。完整操作見 [Docker 與 Lightsail 部署操作手冊](../Docker與Lightsail部署操作手冊.md)。
 
 ## 管理監測更新方式
 

@@ -1,31 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { API_BASE_URL, resolveApiBaseUrl } from '../src/config.js';
 
 /**
- * 以隔離的模組實例驗證 API 網址選擇：Python 本機前端使用 3000，其餘網站沿用目前 origin。
- * 模擬瀏覽器 location；測試結束後還原原值，不發出 HTTP 請求或改動其他測試的設定。
- * @returns {Promise<void>} 所有部署情境完成驗證。
+ * 驗證分開的本機服務、網站根目錄與子路徑部署的 API 網址。
+ * 使用明確注入的模組位置，不改動全域 location，也不發送 HTTP 請求。
+ * 特別確認深層頁面不影響基底路徑，避免登入後的管理／工作單 API 掉回根目錄。
+ * @returns {void} 所有部署情境完成斷言。
  */
-async function apiOrigins() {
-  const previous = globalThis.location;
+function apiOrigins() {
+  assert.equal(API_BASE_URL, 'http://localhost:3000');
   const scenarios = [
-    [undefined, 'http://localhost:3000'],
-    ['http://localhost:5173/', 'http://localhost:3000'],
-    ['http://localhost:8080/', 'http://localhost:8080'],
-    ['http://127.0.0.1:8080/', 'http://127.0.0.1:8080'],
-    ['https://helpdesk.example.com/admin/admin.html', 'https://helpdesk.example.com'],
+    ['http://localhost:5173/', 'http://localhost:5173/src/config.js', 'http://localhost:3000'],
+    ['http://localhost:8080/', 'http://localhost:8080/src/config.js', 'http://localhost:8080'],
+    ['http://localhost:8080/helpdesk/', 'http://localhost:8080/helpdesk/src/config.js', 'http://localhost:8080/helpdesk'],
+    ['http://127.0.0.1:8080/helpdesk/', 'http://127.0.0.1:8080/helpdesk/src/config.js', 'http://127.0.0.1:8080/helpdesk'],
+    ['https://example.com/helpdesk/admin/admin.html', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
+    ['https://example.com/helpdesk/tickets/tickets.html?status=PENDING', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
+    ['https://example.com/nested/project/', 'https://example.com/nested/project/src/config.js', 'https://example.com/nested/project'],
   ];
-  try {
-    for (const [index, [href, expected]] of scenarios.entries()) {
-      globalThis.location = href ? new URL(href) : undefined;
-      const moduleUrl = new URL('../src/config.js', import.meta.url);
-      moduleUrl.searchParams.set('scenario', index);
-      assert.equal((await import(moduleUrl.href)).API_BASE_URL, expected);
-    }
-  } finally {
-    if (previous === undefined) delete globalThis.location;
-    else globalThis.location = previous;
+  for (const [page, moduleUrl, expected] of scenarios) {
+    const actual = resolveApiBaseUrl({ location: new URL(page), moduleUrl });
+    assert.equal(actual, expected);
+    assert.equal(new URL(`${actual}/api/auth/login`).pathname, `${new URL(expected).pathname.replace(/\/$/, '')}/api/auth/login`);
   }
 }
 
-test('分開的本機服務及 Docker／HTTPS 同站點 API 網址', apiOrigins);
+test('分開的本機服務、根目錄及子路徑部署使用正確 API 基底', apiOrigins);

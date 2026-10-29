@@ -189,7 +189,7 @@ curl -X POST http://localhost:3000/api/tickets/<TICKET_ID>/decision \
 
 只區分 `NODE_ENV=local` 與 `NODE_ENV=production`。本機預設 local，讀取 `backend/.env`，shell 參數優先；正式環境完全不讀 `.env`，必須由平台設定 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`（至少 32 bytes）、`DEMO_PASSWORD`、獨立的 `ADMIN_PASSWORD`。模式須設定在 shell 或平台；不接受第三種模式。測試使用隔離的 local 參數及假密碼。
 
-目前部署架構為 **單台 Lightsail Linux 主機 → Docker Compose → Caddy（HTTPS、靜態前端、/api 代理）→ 單一 Node.js 22 程序**，不使用 GitHub Pages、CloudFront、ALB 或資料庫。後端沒有發布主機 port，僅 Caddy 可由外部進入；Caddy 為唯一代理，因此 Compose 固定 `TRUST_PROXY=1`，並清空舊的 `ORIGIN_VERIFY_SECRET`。修改拓撲後須重新驗證來源 IP，不可直接沿用此跳數。
+目前部署架構為 **單台 Lightsail Linux 主機 → Docker Compose → Caddy（HTTPS、/helpdesk/ 前端、/helpdesk/api 代理）→ 單一 Node.js 22 程序**，不使用 GitHub Pages、CloudFront、ALB 或資料庫。公開 API 加上 /helpdesk 前綴；Caddy 只移除 /helpdesk，Express 路由、健康檢查與請求／回應仍維持 /api。CORS_ORIGIN 僅填 origin（例如 https://alex-lin-lab.com），不加 /helpdesk。後端沒有發布主機 port，僅 Caddy 可由外部進入；Caddy 為唯一代理，因此 Compose 固定 `TRUST_PROXY=1`，並清空舊的 `ORIGIN_VERIFY_SECRET`。修改拓撲後須重新驗證來源 IP，不可直接沿用此跳數。
 
 Compose 的參數來源是專案根目錄未追蹤的 `.env`，與原本 `backend/.env` 分開；後端容器固定 `PORT=3000`、`TICKETS_FILE=/app/storage/tickets.json`、`LIMIT_STORE=memory`、`SHUTDOWN_TIMEOUT_MS=75000`，停止寬限 90 秒。Node 使用非 root 的 node 帳號執行。`/api/health` 是容器健康檢查，不呼叫 Gemini；健康狀態本身不會自動重啟卡住的程序，restart policy 只處理程序結束或主機重啟等情況。
 
