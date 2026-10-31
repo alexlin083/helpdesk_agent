@@ -8,8 +8,29 @@ const HTTP_NAMES = { api: '一般 API 入口', login: '登入總請求', ticket:
 export function metricsTime(value) { return new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); }
 
 /**
+ * 將程序運行秒數依序拆成月、天、小時、分、秒，滿單位自動進位並省略零值單位。
+ * 月固定以 30 天換算，含月份時附上換算說明，不代表日曆月份；未滿一秒捨去小數。
+ * 非有限數值、非數字或負數顯示「未知」，零秒則顯示「0 秒」。不修改輸入資料。
+ * @param {number} seconds 後端提供的程序運行秒數。
+ * @returns {string} 可閱讀的運行時長，或無效數值的替代文字。
+ */
+export function metricsUptime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '未知';
+  let remaining = Math.floor(seconds);
+  const parts = [];
+  const hasMonths = remaining >= 2592000;
+  for (const [unit, size] of [['個月', 2592000], ['天', 86400], ['小時', 3600], ['分', 60], ['秒', 1]]) {
+    const value = Math.floor(remaining / size);
+    remaining %= size;
+    if (value > 0) parts.push(`${value} ${unit}`);
+  }
+  return parts.length ? `${parts.join(' ')}${hasMonths ? '（每月以 30 天計）' : ''}` : '0 秒';
+}
+
+/**
  * 繪製管理監測快照；動態資料只透過 textContent，避免將帳號或部門名稱解析為 HTML。
  * 表格數值表示目前有效視窗的合計，不當作每秒流量或啟動以來的累計。
+ * 程序啟動時間使用台北時區，運行秒數轉成自動進位的可讀時長。
  * @param {Document} doc 頁面文件，可注入測試替身。
  * @param {object} data 經 adminService 驗證的快照。
  * @returns {void} 更新指標、設定、帳號與 HTTP／登入摘要。
@@ -39,7 +60,7 @@ export function renderAdminMetrics(doc, data) {
   progress.max = Math.max(1, ai.dailyLimit);
   progress.value = Math.min(ai.used, ai.dailyLimit);
   write('metrics-updated', `最後成功取樣：${metricsTime(data.observedAt)}（台北時間）`);
-  write('metrics-runtime', `${runtime.environment} · 單程序記憶體 · 啟動於 ${metricsTime(runtime.startedAt)} · 已運行 ${runtime.uptimeSeconds} 秒`);
+  write('metrics-runtime', `${runtime.environment} · 單程序記憶體 · 啟動於 ${metricsTime(runtime.startedAt)} · 已運行 ${metricsUptime(runtime.uptimeSeconds)}`);
   write('metrics-policy', `每日 ${ai.day}（台北）· 下次額度重置 ${metricsTime(ai.resetAt)} · AI 冷卻 ${ai.cooldownSeconds} 秒 · 每 ${data.pollSeconds} 秒輪詢`);
   write('metrics-monitor-policy', `監測獨立保護：每 ${monitoring.windowSeconds} 秒，每管理員 ${monitoring.userLimit} 次、每來源 ${monitoring.ipLimit} 次；不消耗一般額度。`);
   const accounts = doc.querySelector('#metrics-users');
