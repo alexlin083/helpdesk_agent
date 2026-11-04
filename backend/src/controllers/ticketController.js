@@ -15,6 +15,7 @@ export const DRAFT_BASIS = '依 AI 對話確認送達';
 const LIMITS = { subject: 100, content: 2000, comment: 200, keyword: 100 };
 const DECISIONS = { APPROVE: 'APPROVED', REJECT: 'REJECTED' };
 const COMPLETED_STATUSES = ['APPROVED', 'REJECTED', 'CANCELLED'];
+const COMPLETED_SCOPES = ['mine', 'department'];
 const COMPLETED_DEFAULT_LIMIT = 100;
 const COMPLETED_MAX_LIMIT = 500;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -48,12 +49,13 @@ function isCalendarDate(value) {
  * - 空字串視同省略（status、from、to、limit）；q 去除首尾空白後最多 100 個 Unicode code points。
  * - from、to 必須是實際存在的 YYYY-MM-DD 日期（以 UTC 日期往返比對），from 不可晚於 to。
  * - limit 只接受純十進位整數字串（不接受 0x10、1e2、+5、空白等），範圍 1～500，預設 100。
+ * - scope 為 mine（只看本人提出的）、department（只看送達本人所屬部門的）或省略／空字串（兩者合併，與舊版相同）。
  * @param {object} [query={}] Express 解析後的查詢參數。
- * @returns {{status: string, keyword: string, from: string, to: string, limit: number}} 已驗證的條件。
+ * @returns {{status: string, keyword: string, from: string, to: string, limit: number, scope: string}} 已驗證的條件。
  * @throws {HttpError} 400 INVALID_PAYLOAD：參數型別、狀態、日期、範圍或筆數不合規定。
  */
 export function parseCompletedQuery(query = {}) {
-  for (const name of ['status', 'q', 'from', 'to', 'limit']) {
+  for (const name of ['status', 'q', 'from', 'to', 'limit', 'scope']) {
     if (query[name] !== undefined && typeof query[name] !== 'string') throw new HttpError(400, 'INVALID_PAYLOAD', `${name} 只能提供一次且必須是字串`);
   }
   const status = query.status || '';
@@ -71,7 +73,9 @@ export function parseCompletedQuery(query = {}) {
     limit = /^\d{1,4}$/.test(query.limit) ? Number(query.limit) : NaN;
     if (!Number.isInteger(limit) || limit < 1 || limit > COMPLETED_MAX_LIMIT) throw new HttpError(400, 'INVALID_PAYLOAD', `limit 必須是 1 到 ${COMPLETED_MAX_LIMIT} 的整數`);
   }
-  return { status, keyword, from, to, limit };
+  const scope = query.scope || '';
+  if (scope && !COMPLETED_SCOPES.includes(scope)) throw new HttpError(400, 'INVALID_PAYLOAD', 'scope 必須是 mine 或 department');
+  return { status, keyword, from, to, limit, scope };
 }
 
 /**
@@ -181,8 +185,7 @@ export function createTicketHandler({ departments = departmentService, accounts 
       accepted = evaluation;
       if (route === 'FORM') ticket.form = storedForm(type, evaluation);
     }
-    await store.insert(ticket, { guard: submissionGuard({ type, input, user, department, handler, content, types: registry, accounts, departments, clock, onAccepted }),
-      ledgerSpecOf: () => type.ledgerSpec });
+    await store.insert(ticket, { guard: submissionGuard({ type, input, user, department, handler, content, types: registry, accounts, departments, clock, onAccepted }) });
     logger('info', 'ticket.form.saved', { route, typeId: type.id, departmentId: department.id, withHandler: Boolean(handler), computedCount: Object.keys(accepted.computedMap).length });
     const shared = { ticket_id: ticket.ticket_id, route, department: department.name, ...(handler ? { handler: { name: handler.name } } : {}) };
     if (route === 'DEPARTMENT') return { ...shared, basis: DRAFT_BASIS, source: 'draft', status: ticket.status };
@@ -354,13 +357,14 @@ function readComment(raw) {
 
 /**
  * 建立「已完成」處理器：回傳憑證身分提出且已結案（已簽核、已退回、已取消）的需求單，加上其所屬部門已結案的需求單；
+ * scope=mine 只看本人提出的、scope=department 只看送達本人所屬部門的（狀態追蹤頁的「已完成表單」）；
  * 依簽核（或取消）時間由新到舊，預設最新 100 筆，可用狀態、關鍵字與台北日期範圍篩選。
  * @param {object} [store=dataStore] 需求單儲存。
  * @returns {Function} Express 非同步處理器。
  */
 export function createCompletedTicketsHandler(store = dataStore) {
   /**
-   * 處理 GET /api/tickets/completed?status=&q=&from=&to=&limit=。
+   * 處理 GET /api/tickets/completed?status=&q=&from=&to=&limit=&scope=。
    * @param {import('express').Request} req 已驗證請求。
    * @param {import('express').Response} res 回應 { department, total, limit, tickets }。
    * @returns {Promise<void>}
@@ -377,11 +381,15 @@ export function createCompletedTicketsHandler(store = dataStore) {
      */
     function newestFirst(left, right) { return (right.decision?.at ?? right.updated_at).localeCompare(left.decision?.at ?? left.updated_at); }
     /**
-     * 是否與憑證身分有關：提單人是本人，或送達部門是本人所屬部門。
+     * 是否在查詢範圍內：department 為送達部門是本人所屬部門，mine 為提單人是本人，省略時兩者皆可。
      * @param {object} ticket 需求單。
      * @returns {boolean} 是否可見。
      */
-    function visible(ticket) { return ticket.department_id === department.id || ticket.requester?.user_id === req.user.userID; }
+    function visible(ticket) {
+      const ours = ticket.department_id === department.id;
+      const mine = ticket.requester?.user_id === req.user.userID;
+      return conditions.scope === 'department' ? ours : conditions.scope === 'mine' ? mine : ours || mine;
+    }
     const matched = (await store.all()).filter((ticket) => visible(ticket) && matchesCompleted(ticket, conditions)).sort(newestFirst);
     res.set('Cache-Control', 'no-store');
     res.json({ department: { id: department.id, name: department.name }, total: matched.length, limit: conditions.limit, tickets: matched.slice(0, conditions.limit) });
@@ -389,19 +397,9 @@ export function createCompletedTicketsHandler(store = dataStore) {
 }
 
 /**
- * 依需求單的需求類型取得 ledger 規格，交給儲存層在狀態改變時寫入額度異動紀錄
- * @param {object} registry 需求類型目錄
- * @param {object} ticket 需求單
- * @returns {object|null} ledger 規格；沒有 form、類型已不存在或類型沒有額度設定時為 null（不記錄）
- */
-function ledgerSpecFor(registry, ticket) {
-  return ticket?.form?.id ? registry.find(ticket.form.id)?.ledgerSpec ?? null : null;
-}
-
-/**
  * 建立簽核處理器：送達部門的成員可對「待簽核」的需求單簽核或退回，並可附最多 200 字備註。
  * 帶表單的需求單（ticket.form）依其需求類型定義的 workflow.approver 判斷提單人本人能否簽核或退回，核准時在同一筆交易內執行定義中 approve 階段的檢查。
- * 有額度的需求類型在同一筆交易內寫入一列額度異動紀錄（APPROVED 或 REJECTED，含前後剩餘）
+ * 只改變需求單本身（狀態、簽核紀錄與歷程）；有額度的需求類型核准後不扣除額度，額度由人資在公司既有的系統處理。
  * @param {object} [store=dataStore] 需求單儲存。
  * @param {object} [types] 需求類型目錄；省略時使用預設目錄。
  * @returns {Function} Express 非同步處理器。
@@ -437,7 +435,7 @@ export function createDecisionHandler(store = dataStore, types) {
       ticket.history.push({ at: now, event: DECISIONS[action], by_user_id: user.userID, by_username: user.username, ...(comment ? { comment } : {}) });
       return ticket;
     }
-    const ticket = await store.update(String(req.params.id), apply, { ledgerSpecOf: (current) => ledgerSpecFor(types ?? getRequestTypes(), current) });
+    const ticket = await store.update(String(req.params.id), apply);
     logger('info', 'ticket.decided', { status: ticket.status, departmentId: ticket.department_id });
     res.set('Cache-Control', 'no-store');
     res.json({ ticket });
@@ -446,12 +444,11 @@ export function createDecisionHandler(store = dataStore, types) {
 
 /**
  * 建立取消處理器：提單人可取消自己「待簽核」的需求單；送達部門的成員也可替提單人取消，但必須填原因。
- * 取消後狀態為 CANCELLED，記錄保留在「已完成」清單，不刪除資料；有額度的需求類型同時寫入一列額度異動紀錄（釋放的時數與前後剩餘）
+ * 取消後狀態為 CANCELLED，記錄保留在「已完成」清單，不刪除資料；只改變需求單本身，不寫入額度相關資料表。
  * @param {object} [store=dataStore] 需求單儲存。
- * @param {object} [types] 需求類型目錄（查需求單類型的 ledger 規格）；省略時使用預設目錄
  * @returns {Function} Express 非同步處理器。
  */
-export function createCancelHandler(store = dataStore, types) {
+export function createCancelHandler(store = dataStore) {
   /**
    * 處理 POST /api/tickets/:id/cancel。
    * @param {import('express').Request} req 已驗證請求，params.id 為單號，body 為 { comment? }。
@@ -482,7 +479,7 @@ export function createCancelHandler(store = dataStore, types) {
       ticket.history.push({ at: now, event: 'CANCELLED', by_user_id: user.userID, by_username: user.username, cancelled_by: role, ...(comment ? { comment } : {}) });
       return ticket;
     }
-    const ticket = await store.update(String(req.params.id), apply, { ledgerSpecOf: (current) => ledgerSpecFor(types ?? getRequestTypes(), current) });
+    const ticket = await store.update(String(req.params.id), apply);
     logger('info', 'ticket.cancelled', { cancelledBy: ticket.decision.cancelled_by, departmentId: ticket.department_id });
     res.set('Cache-Control', 'no-store');
     res.json({ ticket });

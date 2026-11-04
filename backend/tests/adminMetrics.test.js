@@ -37,7 +37,7 @@ async function projectedMetrics() {
   await tickets.insert({ ticket_id: 'TK-metrics-2', status: 'APPROVED', subject: 'private-subject', content: 'private-content' });
   const get = createAdminMetrics({ store, accounts, rates, tasks, tickets, clock, config: { ...env, nodeEnv: 'production' } });
   const current = await get();
-  assert.deepEqual(current.ticketStore, { engine: 'sqlite', available: true, schemaVersion: 4, total: 2, pending: 1, approved: 1, rejected: 0, cancelled: 0, fileBytes: null, walBytes: null });
+  assert.deepEqual(current.ticketStore, { engine: 'sqlite', available: true, schemaVersion: 8, total: 2, pending: 1, approved: 1, rejected: 0, cancelled: 0, fileBytes: null, walBytes: null });
   assert.equal(current.runtime.storage, 'memory', 'runtime.storage 仍描述限流計數');
   assert.equal(current.ai.used, 3);
   assert.equal(current.ai.remaining, 97);

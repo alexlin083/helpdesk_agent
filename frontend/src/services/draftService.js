@@ -12,6 +12,7 @@ export const DRAFT_META_KEYS = ['department_id', 'handler_id'];
 export const DESCRIPTION_MAX = 1000;
 export const DESCRIPTION_FIELD = Object.freeze({
   key: 'description', label: '需求說明', type: 'text', required: true, options: [], max_length: DESCRIPTION_MAX, min: null, max: null, integer: false,
+  rules: Object.freeze({ after: null, not_before_today: false }),
 });
 
 /**
@@ -53,17 +54,45 @@ function unreadable() { return new TicketServiceError(MESSAGES.draftUnreadable, 
  * 整理需求類型的一個欄位定義（來自後端的定義檔，前端不認得任何特定欄位代號）：key、label、type 必須是非空白文字，否則整份類型視為無法辨識。
  * options 只保留文字項目（enum 的選項）；max_length 只接受正整數；min、max 只接受有限數字；required、integer 轉成布林值。
  * 不認得的欄位型別照樣保留，畫面以一般文字輸入框顯示，讓後端新增的型別不會讓整個面板失效。
+ * rules（只有「自動生成」回應的日期類欄位會帶）整理成 { after, not_before_today }：after 為必須晚於的欄位代號（沒有時 null），
+ * not_before_today 只接受 true；兩者只供日期時間選擇器合併起訖欄位與停用日期，格式不符時視為沒有規則。
  * @param {unknown} field 後端回傳的欄位定義。
- * @returns {{key: string, label: string, type: string, required: boolean, options: string[], max_length: number|null, min: number|null, max: number|null, integer: boolean}} 正規化的欄位。
+ * @returns {{key: string, label: string, type: string, required: boolean, options: string[], max_length: number|null, min: number|null, max: number|null, integer: boolean,
+ *   rules: {after: string|null, not_before_today: boolean}}} 正規化的欄位。
  * @throws {TicketServiceError} 欄位缺少 key、label 或 type。
  */
 export function normalizeTypeField(field) {
   if (!isPlainObject(field) || !isText(field.key) || !isText(field.label) || !isText(field.type)) throw unreadable();
+  const rules = isPlainObject(field.rules) ? field.rules : {};
   return {
     key: field.key, label: field.label.trim(), type: field.type.trim(), required: field.required === true,
     options: Array.isArray(field.options) ? field.options.filter(isText) : [],
     max_length: Number.isInteger(field.max_length) && field.max_length > 0 ? field.max_length : null,
     min: finiteOrNull(field.min), max: finiteOrNull(field.max), integer: field.integer === true,
+    rules: { after: isText(rules.after) ? rules.after : null, not_before_today: rules.not_before_today === true },
+  };
+}
+
+/**
+ * 整理需求類型的工作日曆摘要（「自動生成」回應的 type.calendars[]），供日期時間選擇器只列上班時段、停用非工作日：
+ * start、end 為對應的起訖欄位代號；work_windows 為 [起, 訖]（HH:mm，起早於訖）陣列；workdays 為 0～6（0 為週日）；
+ * holidays 為 YYYY-MM-DD；open_years 為四位數年度。整筆格式不符（缺欄位代號、沒有有效的上班時段或工作日）時回傳 null，由呼叫端略過。
+ * @param {unknown} item 後端回傳的日曆摘要。
+ * @returns {{start: string, end: string, workWindows: Array<[string, string]>, workdays: number[], holidays: string[], openYears: number[], timezoneOffset: string}|null} 正規化的日曆。
+ */
+export function normalizeCalendar(item) {
+  if (!isPlainObject(item) || !isText(item.start) || !isText(item.end)) return null;
+  const clock = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const windows = (Array.isArray(item.work_windows) ? item.work_windows : [])
+    .filter(/** 是否為有效時段。@param {unknown} pair 時段。@returns {boolean} 有效時 true。 */ (pair) => Array.isArray(pair) && pair.length === 2 && clock.test(pair[0]) && clock.test(pair[1]) && pair[0] < pair[1])
+    .map(/** 複製時段。@param {[string, string]} pair 時段。@returns {[string, string]} 時段。 */ (pair) => [pair[0], pair[1]]);
+  const workdays = [...new Set((Array.isArray(item.workdays) ? item.workdays : []).filter(/** 是否為星期。@param {unknown} day 星期。@returns {boolean} 是時 true。 */ (day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+  if (!windows.length || !workdays.length) return null;
+  return {
+    start: item.start, end: item.end, workWindows: windows, workdays,
+    holidays: (Array.isArray(item.holidays) ? item.holidays : []).filter(/** 是否為日期。@param {unknown} date 日期。@returns {boolean} 是時 true。 */ (date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)),
+    openYears: (Array.isArray(item.open_years) ? item.open_years : []).filter(/** 是否為年度。@param {unknown} year 年度。@returns {boolean} 是時 true。 */ (year) => Number.isInteger(year) && year >= 1000 && year <= 9999),
+    timezoneOffset: typeof item.timezone_offset === 'string' && /^[+-]\d{2}:\d{2}$/.test(item.timezone_offset) ? item.timezone_offset : '+08:00',
   };
 }
 
@@ -84,15 +113,17 @@ function toOption(item) { return isPlainObject(item) && isText(item.id) && isTex
 /**
  * 整理需求類型（POST /api/tickets/draft 回應的 type，或 GET /api/forms 的 types[]）：id、name 必須是文字，version 必須是正整數，
  * fields 必須是陣列且欄位代號不可重複。department（類型固定的處理部門）有值時整理成 { id, name }，沒有或格式不符時為 null（代表部門由對話決定）。
+ * calendars（只有「自動生成」回應會帶）以 normalizeCalendar 整理，略過格式不符的項目；沒有時為空陣列。
  * @param {unknown} type 後端回傳的需求類型。
- * @returns {{id: string, version: number, name: string, department: {id: string, name: string}|null, fields: Array<object>}} 正規化的需求類型。
+ * @returns {{id: string, version: number, name: string, department: {id: string, name: string}|null, fields: Array<object>, calendars: Array<object>}} 正規化的需求類型。
  * @throws {TicketServiceError} 類型格式不正確。
  */
 export function normalizeRequestType(type) {
   if (!isPlainObject(type) || !isText(type.id) || !isText(type.name) || !Number.isInteger(type.version) || type.version < 1 || !Array.isArray(type.fields)) throw unreadable();
   const fields = type.fields.map(normalizeTypeField);
   if (new Set(fields.map(fieldKey)).size !== fields.length) throw unreadable();
-  return { id: type.id, version: type.version, name: type.name.trim(), department: toOption(type.department), fields };
+  const calendars = (Array.isArray(type.calendars) ? type.calendars : []).map(normalizeCalendar).filter(Boolean);
+  return { id: type.id, version: type.version, name: type.name.trim(), department: toOption(type.department), fields, calendars };
 }
 
 /**

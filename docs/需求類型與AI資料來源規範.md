@@ -222,7 +222,7 @@ backend/data/requestTypes/
 - 每個欄位值（不分型別）最多 500 字；`text` 的 `max_length` 較大時以它為準。超過時視為格式錯誤的請求（400）。
 - `rules` 只能用在 date 與 datetime；`rules.after` 必須指向另一個**相同型別**的欄位。`options_tool` 只能用在 account 與 department。
 - AI 送來的值也會先依型別整理格式，再做同樣的檢查；AI 填錯只會讓欄位顯示「格式不符」，不會被直接採用。
-- 前端「自動生成」視窗依回應 `type.fields` 的型別產生輸入元件：`self` 唯讀、`enum` 下拉、`text` 在 `max_length` 超過 100 或沒有上限時為多行（`frontend/src/components/propose/draftDialog.js` 的 `TEXTAREA_THRESHOLD`）、`number` 依 `min`／`max` 產生（整數時 step 1）、`date`、`datetime`（日期輸入加 24 小時制時間輸入，時間可打字或從每 30 分鐘一筆的建議清單挑選）、`account`／`department` 為依 `field_options` 建立的下拉，不可選的項目停用並附原因（例如請假的代理人在期間內也請假）；多行輸入框只是畫面的呈現，與定義檔的 `multiline`（只影響是否保留換行）是兩件不同的事
+- 前端「自動生成」視窗依回應 `type.fields` 的型別產生輸入元件：`self` 唯讀、`enum` 下拉、`text` 在 `max_length` 超過 100 或沒有上限時為多行（`frontend/src/components/propose/draftDialog.js` 的 `TEXTAREA_THRESHOLD`）、`number` 依 `min`／`max` 產生（整數時 step 1）、`date`、`datetime`（日期時間選擇器：月曆加時間按鈕與「其他時間」輸入；`rules.after` 指向前面同型別欄位的兩個欄位合併成一個期間欄位，`not_before_today` 停用今天以前；計算 `work_minutes` 使用的工作日曆會以 `type.calendars` 交給畫面，讓期間只列上班時段、停用非工作日與假日，並提供整天與各時段的快捷；詳見 API 規格書第 3.18 節）、`account`／`department` 為依 `field_options` 建立的下拉，不可選的項目停用並附原因（例如請假的代理人在期間內也請假）；多行輸入框只是畫面的呈現，與定義檔的 `multiline`（只影響是否保留換行）是兩件不同的事
 
 ## 7. 計算、額度帳與檢查
 
@@ -292,7 +292,7 @@ backend/data/requestTypes/
 
 | 鍵 | 說明 |
 | --- | --- |
-| `capability` | `ledger_balance`（本次數量不可超過剩餘額度）或 `ledger_overlap`（本人在期間內不可已有同類型的待簽核或已核准單）；都需要這份定義有 `ledger` |
+| `capability` | `ledger_balance`（本次數量不可超過剩餘額度；剩餘＝額度表的年度額度，送出與核准都不會扣除，額度由人資在公司既有的系統處理）或 `ledger_overlap`（本人在期間內不可已有同類型的待簽核或已核准單）；都需要這份定義有 `ledger` |
 | `on` | 在哪些階段執行：`draft`（自動生成畫面，失敗時欄位顯示錯誤、不能套用）、`submit`（送出時，與寫入在同一筆交易內）、`approve`（核准時在同一筆交易內重新計算；這張單已算在待簽核內，剩餘小於 0 才失敗，失敗時回 409 且不改變狀態） |
 | `args` | `ledger_overlap` 需要 `{ start, end }`，兩個 date／datetime 欄位的 key |
 | `error` | `{ code, message }`：檢查失敗時的錯誤代碼與訊息（回應方式見 API 介面規格書第 3.3、3.7 節） |
@@ -337,7 +337,7 @@ backend/data/requestTypes/
 | `department_directory` | `department_directory` | 無 | `all` | 全部部門 `{ id, name, duty, business }` | 所有類型 |
 | `department_members` | `department_members` | `department_id`（必填） | `names_only` | 該部門啟用中的一般帳號，只有 `{ id, name }`（帳號名稱） | 目前沒有類型開放：2026-11-02 移除指定處理人時，全部需求類型一併拿掉 `handler` 設定與 `ai.tools` 的 `department_members`，招呼語不再提「可以指定誰處理」，一般需求的固定文字去掉「[指定處理人]」一行（版本維持 1，舊內容多一行仍可通過比對） |
 | `colleagues` | `colleagues` | `start_at`、`end_at`（選填，`YYYY-MM-DDTHH:mm`，需同時提供且終點晚於起點） | `same_department` | 目前使用者同部門、啟用中的一般帳號同事（不含本人）`{ id, name, available, reason? }`；提供期間時，在期間內已有待簽核或已核准申請（所有定義了 `ledger_overlap` 的類型）的同事 `available` 為 false；部門固定為本人部門，模型不能指定其他部門 | 請假 |
-| `my_leave_balance` | `my_ledger_balance` | `period`（integer，選填，四位數年度，省略為台北今天的年度） | `self_only` | 本人在**目前類型額度帳**的各類別額度 `{ period, unit, balances: [{ category, granted, adjusted, used, pending, remaining, remaining_text }] }`；數字由伺服器從資料庫計算，固定查本人，模型帶入其他帳號的參數一律忽略；目前類型沒有 `ledger` 時回錯誤；不作為任何欄位的候選 | 請假 |
+| `my_leave_balance` | `my_ledger_balance` | `period`（integer，選填，四位數年度，省略為台北今天的年度） | `self_only` | 本人在**目前類型額度帳**的各類別額度 `{ period, unit, balances: [{ category, granted, used, pending, remaining, remaining_text }] }`（`remaining` 為年度額度，`used`、`pending` 只是參考）；數字由伺服器從資料庫以唯讀查詢計算，固定查本人，模型帶入其他帳號的參數一律忽略；目前類型沒有 `ledger` 時回錯誤；不作為任何欄位的候選 | 請假 |
 | `request_type_definition` | `request_type_definition` | `type_id`（必填） | `all` | 指定類型給 AI 的完整定義（說明、範例、欄位、計算名稱、送達部門） | 目前沒有任何類型在 `ai.tools` 開放，AI 實際上不會呼叫（已實作並通過驗證，未啟用） |
 
 撰寫工具的注意事項：

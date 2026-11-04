@@ -2,9 +2,10 @@ import { statSync } from 'node:fs';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { logger } from '../../utils/logger.js';
-import { openTicketDatabase, importLegacyTickets, parseTicketRow, ensureMetaSecret, LEDGER_TABLES, LEDGER_LOG_EVENTS } from './database.js';
-import { ACTIVE_STATUSES, computeLedgerBalances, formPath, ledgerTable } from './ledger.js';
-import { normalizePersonnelSeed, seedPersonnelIfEmpty } from '../personnel/personnel.js';
+import { openTicketDatabase, importLegacyTickets, parseTicketRow, ensureMetaSecret, LEDGER_TABLES } from './database.js';
+import { ACTIVE_STATUSES, computeLedgerBalances, formPath } from './ledger.js';
+import { normalizePersonnelSeed, seedPersonnelIfEmpty, syncAccountDepartmentNames } from '../personnel/personnel.js';
+import { departmentService } from '../departmentService.js';
 import { demoPersonnelSeed } from '../personnel/demoPersonnel.js';
 
 export const TICKET_STATUSES = Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']);
@@ -23,31 +24,6 @@ const BUSY_TIMEOUT_MS = 5000;
 function unavailable(operation, error) {
   logger('error', 'tickets.store.unavailable', { operation, errorCode: typeof error?.code === 'string' ? error.code : undefined });
   return new HttpError(503, 'TICKET_STORE_UNAVAILABLE', '需求單儲存暫時無法使用，請稍後再試');
-}
-
-/**
- * 從需求單取出額度異動紀錄要用的資料：類別、數量、期間與起訖優先取自送出時保存的 form.ledger，
- * 沒有快照的舊版需求單改取 ledger 規格指定的欄位與計算結果（期間為期間欄位的年度，起訖為 null）
- * @param {object} ticket 需求單
- * @param {object|null} spec 需求類型的 ledger 規格；null 或需求單不屬於這個類型時不記錄
- * @returns {{username: string, category: string, period: number, amount: number, start: string|null, end: string|null}|null} 額度資料；不需記錄時 null
- */
-function ledgerEntry(ticket, spec) {
-  const form = ticket?.form;
-  if (!spec || !form || form.id !== spec.typeId || typeof ticket.requester?.username !== 'string') return null;
-  const snapshot = form.ledger ?? {};
-  const computed = form.computed ?? {};
-  const legacyAmount = Array.isArray(computed) ? computed.find(/** 找出數量的計算結果。@param {{key: string}} item 計算結果。@returns {boolean} 相符時 true。 */ (item) => item?.key === spec.amountKey)?.value : computed[spec.amountKey];
-  const entry = {
-    username: ticket.requester.username,
-    category: snapshot.category ?? form.fields?.[spec.categoryField],
-    period: snapshot.period ?? Number(String(form.fields?.[spec.periodField] ?? '').slice(0, 4)),
-    amount: snapshot.amount ?? legacyAmount,
-    start: snapshot.start ?? null,
-    end: snapshot.end ?? null,
-  };
-  if (typeof entry.category !== 'string' || !Number.isInteger(entry.period) || !Number.isInteger(entry.amount)) return null;
-  return entry;
 }
 
 /**
@@ -116,8 +92,9 @@ function toEmployees(rows, grants) {
 
 /**
  * 建立以 SQLite 保存全部需求單的儲存：每張需求單以 JSON 文件存一列，回傳的形狀與欄位順序和寫入時相同。
- * 同一個資料庫另存人員資料（結構版本 3：帳號、所屬部門、角色與啟用狀態；結構版本 2：員工、假別額度與人資調整），
- * 人員資料只存在資料庫，沒有對應的 JSON 檔；需求類型 ledger 的剩餘額度由額度表、人資調整與需求單即時計算（見 computeLedgerBalances）。
+ * 同一個資料庫另存人員資料（結構版本 3：帳號、所屬部門、角色與啟用狀態；結構版本 2：員工與假別額度；人資調整紀錄已在結構版本 6 移除），
+ * 人員資料只存在資料庫，沒有對應的 JSON 檔；需求類型 ledger 的剩餘額度只由額度表的年度額度決定（見 computeLedgerBalances），
+ * 需求單的送出、簽核、退回與取消只寫入 tickets，不寫入任何額度相關資料表。
  * 第一次使用時才開啟資料庫，讓只載入模組的測試與工具不會建立檔案；開啟時若 accounts 資料表為空（全新資料庫），
  * 在同一筆 IMMEDIATE 交易內寫入一次人員名冊（預設為 demoPersonnel.js 的假資料）；已有任何帳號時永遠不再寫入。
  * better-sqlite3 為同步 API，單一程序內每個操作都是完整的交易，不需要另外排隊；只適用單一程序。
@@ -129,10 +106,11 @@ function toEmployees(rows, grants) {
  * @param {{accounts: Array<object>, employees: Array<object>}|null} [options.seed=demoPersonnelSeed()] 全新資料庫要寫入的人員名冊（原始形狀，
  *   開啟時以 normalizePersonnelSeed 驗證）；null 時不寫入任何人員資料。
  * @param {object} [options.ledgerTables=LEDGER_TABLES] 允許的額度資料表（測試可注入）。
- * @returns {object} all、find、insert、update、clear、stats、withLedger、ledgerBalances、addLedgerAdjustment、ledgerLog、
+ * @param {{findDepartment: Function}} [options.departments=departmentService] 部門查詢服務，開啟資料庫時用來同步 accounts.department_name。
+ * @returns {object} all、find、insert、update、clear、stats、withLedger、ledgerBalances、
  *   listAccounts、findAccount、departmentAccounts、listEmployees、findEmployee、prepare、localAuthSecret、close 操作。
  */
-export function createSqliteDataStore({ file = env.databaseFile, seed = demoPersonnelSeed(), ledgerTables = LEDGER_TABLES } = {}) {
+export function createSqliteDataStore({ file = env.databaseFile, seed = demoPersonnelSeed(), ledgerTables = LEDGER_TABLES, departments = departmentService } = {}) {
   let db;
   let statements;
   // 依 SQL 文字快取的動態語句（額度表查詢等，SQL 只由允許清單與固定文字組成）；關閉連線時清空。
@@ -140,7 +118,7 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
   let seeded = { accounts: 0, employees: 0, entitlements: 0 };
 
   /**
-   * 開啟連線、預先編譯語句，並在帳號表為空時寫入人員名冊；錯誤原樣拋出（含 NODE_TOO_OLD、FOREIGN_DATABASE、SCHEMA_TOO_NEW、
+   * 開啟連線、預先編譯語句，並在帳號表為空時寫入人員名冊，接著依部門設定檔同步 accounts.department_name（只供直接檢視資料庫，名稱不同時才更新）；錯誤原樣拋出（含 NODE_TOO_OLD、FOREIGN_DATABASE、SCHEMA_TOO_NEW、
    * PERSONNEL_UNMAPPED、PERSONNEL_INVALID 等代碼），開啟失敗時不快取。
    * @returns {object} db 與 statements。
    * @throws {Error} 資料庫無法開啟、結構遷移、名冊驗證或寫入失敗。
@@ -158,14 +136,16 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
         clear: opened.prepare('DELETE FROM tickets'),
         stats: opened.prepare("SELECT json_extract(document, '$.status') AS status, COUNT(*) AS total FROM tickets GROUP BY 1"),
         // rowid 保留寫入順序（名冊順序，之後新增的帳號排在後面）。
+        // 結構版本 8 起員工資料與額度以員工編號關聯，這裡以 accounts.employee_no 串回帳號，對外的形狀仍以帳號辨識。
         allAccounts: opened.prepare('SELECT username, department_id, role, active FROM accounts ORDER BY rowid'),
         findAccount: opened.prepare('SELECT username, department_id, role, active FROM accounts WHERE username = ?'),
         departmentAccounts: opened.prepare("SELECT username, department_id, role, active FROM accounts WHERE department_id = ? AND role = 'USER' AND active = 1 ORDER BY rowid"),
-        allEmployees: opened.prepare('SELECT username, display_name, employee_no, hire_date FROM employees ORDER BY rowid'),
-        findEmployee: opened.prepare('SELECT username, display_name, employee_no, hire_date FROM employees WHERE username = ?'),
-        allEntitlements: opened.prepare('SELECT username, leave_type, year, granted_minutes FROM leave_entitlements ORDER BY year, rowid'),
-        employeeEntitlements: opened.prepare('SELECT username, leave_type, year, granted_minutes FROM leave_entitlements WHERE username = ? ORDER BY year, rowid'),
-        employeeExists: opened.prepare('SELECT 1 AS found FROM employees WHERE username = ?'),
+        allEmployees: opened.prepare('SELECT a.username, e.display_name, e.employee_no, e.hire_date FROM employees e JOIN accounts a ON a.employee_no = e.employee_no ORDER BY e.rowid'),
+        findEmployee: opened.prepare('SELECT a.username, e.display_name, e.employee_no, e.hire_date FROM employees e JOIN accounts a ON a.employee_no = e.employee_no WHERE a.username = ?'),
+        allEntitlements: opened.prepare('SELECT a.username, l.leave_type, l.year, l.granted_minutes FROM leave_entitlements l JOIN accounts a ON a.employee_no = l.employee_no ORDER BY l.year, l.rowid'),
+        employeeEntitlements: opened.prepare(`SELECT a.username, l.leave_type, l.year, l.granted_minutes FROM leave_entitlements l JOIN accounts a ON a.employee_no = l.employee_no
+          WHERE a.username = ? ORDER BY l.year, l.rowid`),
+        employeeExists: opened.prepare('SELECT 1 AS found FROM accounts a JOIN employees e ON e.employee_no = a.employee_no WHERE a.username = ?'),
         // 參數依序為類型 id、帳號、起點路徑、新單終點、終點路徑、新單起點、排除單號：既有起點 < 新終點 且 既有終點 > 新起點 即重疊。
         ledgerOverlap: opened.prepare(`SELECT COUNT(*) AS total FROM tickets
           WHERE json_extract(document, '$.form.id') = ? AND json_extract(document, '$.requester.username') = ?
@@ -175,6 +155,8 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
             AND ticket_id <> ?`),
       };
       seeded = seedPersonnelIfEmpty(opened, seed ? normalizePersonnelSeed(seed) : null);
+      const synced = opened.transaction(/** 依部門設定檔同步帳號的部門名稱。@returns {number} 更新筆數。 */ () => syncAccountDepartmentNames(opened, departments)).immediate();
+      if (synced) logger('info', 'storage.department_names.synced', { accounts: synced });
     } catch (error) {
       opened.close();
       throw error;
@@ -201,43 +183,6 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
    */
   function helpersOf() {
     return transactionHelpers(statements, statement, ledgerTables);
-  }
-
-  /**
-   * 計算某員工某類別某期間目前的剩餘（額度＋調整－已核准－待簽核）；只在交易內同步呼叫
-   * @param {object} spec ledger 規格
-   * @param {{username: string, category: string, period: number}} entry 員工、類別與期間
-   * @returns {number} 剩餘數量；類別不在規格內時為 0
-   */
-  function remainingOf(spec, entry) {
-    const balance = helpersOf().ledgerBalances(spec, entry.username, entry.period)
-      .find(/** 找出同類別的額度。@param {{category: string}} item 額度。@returns {boolean} 相符時 true。 */ (item) => item.category === entry.category);
-    return balance ? balance.remaining : 0;
-  }
-
-  /**
-   * 寫入一列額度異動紀錄（source 為 live）；額度表沒有 log 設定時不寫。只在交易內同步呼叫，與觸發它的寫入一起提交或回滾
-   * @param {object} spec ledger 規格（決定寫入哪一張紀錄表）
-   * @param {object} row 紀錄內容
-   * @param {string} row.at 異動時間（ISO 字串）
-   * @param {string} row.event LEDGER_LOG_EVENTS 之一
-   * @param {{username: string, category: string, period: number, amount: number, start: string|null, end: string|null}} row.entry 員工、類別、期間、數量與起訖
-   * @param {number} row.before 異動前的剩餘
-   * @param {number} row.after 異動後的剩餘
-   * @param {string|null} [row.ticketId=null] 需求單號
-   * @param {string|null} [row.typeId=null] 需求類型 id
-   * @param {number|null} [row.adjustmentId=null] 人資調整紀錄 id
-   * @param {string} row.by 操作者帳號
-   * @param {string|null} [row.comment=null] 備註、退回原因或調整原因
-   * @returns {void}
-   */
-  function writeLedgerLog(spec, { at, event, entry, before, after, ticketId = null, typeId = null, adjustmentId = null, by, comment = null }) {
-    const table = ledgerTable(ledgerTables, spec.table);
-    const log = table.log;
-    if (!log) return;
-    statement(`INSERT INTO ${log.table} (at, event, ${table.owner}, ${table.category}, ${table.period}, ${log.amount}, start_at, end_at, ${log.before}, ${log.after},
-      ticket_id, type_id, adjustment_id, by_username, comment, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`)
-      .run(at, event, entry.username, entry.category, entry.period, entry.amount, entry.start, entry.end, before, after, ticketId, typeId, adjustmentId, by, comment || null);
   }
 
   /**
@@ -316,18 +261,14 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
       return guarded('load', summarize);
     },
     /**
-     * 在維護鎖內清空所有需求單（secure_delete 覆寫頁面），同一筆交易內刪除額度異動紀錄中屬於需求單的列（人資調整與年度額度變更保留），
-     * 再把 WAL 合併回主檔。呼叫端必須先阻擋新請求並排空既有工作，避免 AI 回覆在清空後重新寫入。
+     * 在維護鎖內清空所有需求單（secure_delete 覆寫頁面；帳號、員工與額度保留），再把 WAL 合併回主檔。呼叫端必須先阻擋新請求並排空既有工作，避免 AI 回覆在清空後重新寫入。
      * @returns {Promise<number>} 已清除的工作單筆數。
      * @throws {HttpError} 資料庫無法開啟或刪除失敗；失敗時整筆回滾，不重置其他保護計數。
      */
     async clear() {
       const { db: database, statements: sql } = connection();
-      /** 刪除全部需求單與它們的額度異動紀錄。@returns {number} 刪除的需求單筆數。 */
-      function deleteAll() {
-        for (const table of Object.values(ledgerTables)) if (table.log) statement(`DELETE FROM ${table.log.table} WHERE ticket_id IS NOT NULL`).run();
-        return sql.clear.run().changes;
-      }
+      /** 刪除全部需求單。@returns {number} 刪除的需求單筆數。 */
+      function deleteAll() { return sql.clear.run().changes; }
       const deleted = guarded('persist', database.transaction(deleteAll).immediate);
       checkpoint(database);
       return deleted;
@@ -353,61 +294,40 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
     },
     /**
      * 新增一張需求單；單號重複視為程式錯誤。寫入失敗時不留下任何資料，呼叫端重送不會產生重複的需求單。
-     * 提供 guard 時，guard 與寫入在同一筆 IMMEDIATE 交易內執行（例如需求類型 ledger 的重疊與剩餘額度檢查），guard 拒絕時不寫入；
-     * 提供 ledgerSpecOf 且需求單屬於有額度的類型時，同一筆交易內另寫一列 SUBMITTED 額度異動紀錄（含送出前後的剩餘）
+     * 提供 guard 時，guard 與寫入在同一筆 IMMEDIATE 交易內執行（例如需求類型 ledger 的重疊與剩餘額度檢查，只讀取），guard 拒絕時不寫入；
+     * 只寫入 tickets 一列，不寫入額度相關資料表。
      * @param {object} ticket 已組好的需求單。
      * @param {object} [options={}] 選項。
      * @param {(helpers: object) => void} [options.guard] 同步檢查函式，收到 transactionHelpers 的交易內查詢；可拋出 HttpError 拒絕寫入。
-     * @param {(ticket: object) => object|null} [options.ledgerSpecOf] 依需求單取得需求類型的 ledger 規格，在 guard 之後呼叫（guard 會補上 form）；回傳 null 時不記錄
      * @returns {Promise<object>} 寫入內容的複本。
      * @throws {HttpError} guard 拋出的錯誤，或 503 單號重複、寫入失敗。
      */
-    async insert(ticket, { guard, ledgerSpecOf } = {}) {
+    async insert(ticket, { guard } = {}) {
       const { db: database, statements: sql } = connection();
-      /** 執行檢查後寫入一列，必要時記錄額度異動。@returns {object} SQLite 執行結果。@throws {HttpError} guard 拒絕。 */
+      /** 執行檢查後寫入一列。@returns {object} SQLite 執行結果。@throws {HttpError} guard 拒絕。 */
       function writeOne() {
         if (guard) guard(helpersOf());
-        const spec = ledgerSpecOf ? ledgerSpecOf(ticket) : null;
-        const entry = ledgerEntry(ticket, spec);
-        const before = entry ? remainingOf(spec, entry) : 0;
-        const result = sql.insert.run(ticket.ticket_id, JSON.stringify(ticket));
-        if (entry) {
-          writeLedgerLog(spec, { at: ticket.created_at, event: 'SUBMITTED', entry, before, after: remainingOf(spec, entry), ticketId: ticket.ticket_id,
-            typeId: ticket.form.id, by: entry.username });
-        }
-        return result;
+        return sql.insert.run(ticket.ticket_id, JSON.stringify(ticket));
       }
-      guarded('persist', guard || ledgerSpecOf ? database.transaction(writeOne).immediate : writeOne);
+      guarded('persist', guard ? database.transaction(writeOne).immediate : writeOne);
       return structuredClone(ticket);
     },
     /**
-     * 以修改函式更新一張需求單；讀取、修改與寫回在同一筆 IMMEDIATE 交易內完成，修改函式拋錯時不寫入；
-     * 提供 ledgerSpecOf、需求單屬於有額度的類型且狀態改變（簽核、退回、取消）時，同一筆交易內另寫一列額度異動紀錄（含異動前後的剩餘）
+     * 以修改函式更新一張需求單（簽核、退回、轉單、取消）；讀取、修改與寫回在同一筆 IMMEDIATE 交易內完成，修改函式拋錯時不寫入；
+     * 只改寫 tickets 這一列，不寫入額度相關資料表（額度的扣除由人資在公司既有的系統處理）。
      * @param {string} ticketId 單號。
      * @param {(ticket: object, helpers: object) => object} mutate 同步修改函式，收到複本與交易內查詢（transactionHelpers），回傳的物件取代原記錄；可拋出 HttpError 拒絕更新。
-     * @param {object} [options={}] 選項
-     * @param {(ticket: object) => object|null} [options.ledgerSpecOf] 依需求單取得需求類型的 ledger 規格；回傳 null 時不記錄
      * @returns {Promise<object>} 更新後的複本。
      * @throws {HttpError} 404 TICKET_NOT_FOUND、修改函式拋出的錯誤或 503 寫入失敗。
      */
-    async update(ticketId, mutate, { ledgerSpecOf } = {}) {
+    async update(ticketId, mutate) {
       const { db: database, statements: sql } = connection();
-      /** 讀取、修改並寫回單張需求單，狀態改變時記錄額度異動。@returns {object} 更新後的需求單。@throws {HttpError} 查無或修改函式拒絕。 */
+      /** 讀取、修改並寫回單張需求單。@returns {object} 更新後的需求單。@throws {HttpError} 查無或修改函式拒絕。 */
       function apply() {
         const row = sql.find.get(ticketId);
         if (!row) throw new HttpError(404, 'TICKET_NOT_FOUND', '找不到這張需求單');
-        const current = parseTicketRow(row);
-        const previousStatus = current.status;
-        const spec = ledgerSpecOf ? ledgerSpecOf(current) : null;
-        const entry = ledgerEntry(current, spec);
-        const before = entry ? remainingOf(spec, entry) : 0;
-        const next = mutate(current, helpersOf());
+        const next = mutate(parseTicketRow(row), helpersOf());
         sql.update.run(JSON.stringify(next), ticketId);
-        if (entry && next.status !== previousStatus && LEDGER_LOG_EVENTS.includes(next.status)) {
-          const last = Array.isArray(next.history) ? next.history.at(-1) ?? {} : {};
-          writeLedgerLog(spec, { at: next.updated_at ?? last.at, event: next.status, entry, before, after: remainingOf(spec, entry), ticketId,
-            typeId: next.form.id, by: last.by_username ?? next.decision?.by_username ?? '', comment: next.decision?.comment ?? last.comment ?? null });
-        }
         return next;
       }
       return structuredClone(guarded('persist', database.transaction(apply).immediate));
@@ -439,66 +359,6 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
       /** 在讀取交易內計算。@returns {{known: boolean, balances: Array<object>}} 結果。 */
       function run() { return read(helpersOf()); }
       return guarded('load', database.transaction(run).deferred);
-    },
-    /**
-     * 新增一筆人資額度調整並回傳調整後的額度；檢查員工存在、寫入與重新計算在同一筆 IMMEDIATE 交易內完成。
-     * 寫入的資料表與欄位取自允許清單中 spec.table 的 adjustments 設定。
-     * 同一筆交易內另寫一列 ADJUSTED 額度異動紀錄（含調整前後的剩餘）
-     * @param {object} spec ledger 規格。
-     * @param {object} adjustment 已驗證的調整內容。
-     * @param {string} adjustment.username 員工帳號。
-     * @param {string} adjustment.category 類別。
-     * @param {number} adjustment.period 期間（年度）。
-     * @param {number} adjustment.delta 增減數量（非零整數）。
-     * @param {string} adjustment.reason 調整原因。
-     * @param {string} adjustment.byUserId 操作者 userID。
-     * @param {string} [adjustment.byUsername] 操作者帳號，寫進額度異動紀錄；省略時由 byUserId 去掉 user- 前綴
-     * @param {string} adjustment.at ISO 時間。
-     * @returns {Promise<{adjustment: object, balances: Array<object>}>} 寫入的調整（id、username、category、period、delta、reason、by_user_id、at）與該員工該期間的額度。
-     * @throws {HttpError} 404 EMPLOYEE_NOT_FOUND 員工不存在；503 寫入失敗。
-     * @throws {Error} 資料表沒有調整紀錄設定（程式錯誤）。
-     */
-    async addLedgerAdjustment(spec, { username, category, period, delta, reason, byUserId, byUsername, at }) {
-      const { db: database } = connection();
-      const target = ledgerTable(ledgerTables, spec.table).adjustments;
-      if (!target) throw new Error(`額度資料表 ${spec.table} 沒有調整紀錄設定`);
-      /** 檢查員工後寫入、記錄額度異動（ADJUSTED）並重新計算。@returns {{adjustment: object, balances: Array<object>}} 結果。@throws {HttpError} 員工不存在。 */
-      function apply() {
-        const helpers = helpersOf();
-        if (!helpers.employeeExists(username)) throw new HttpError(404, 'EMPLOYEE_NOT_FOUND', '找不到這位員工');
-        const entry = { username, category, period, amount: delta, start: null, end: null };
-        const before = remainingOf(spec, entry);
-        const insert = statement(`INSERT INTO ${target.table} (${target.owner}, ${target.category}, ${target.period}, ${target.amount}, ${target.reason}, ${target.actor}, ${target.at}) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-        const { lastInsertRowid } = insert.run(username, category, period, delta, reason, byUserId, at);
-        writeLedgerLog(spec, { at, event: 'ADJUSTED', entry, before, after: remainingOf(spec, entry), adjustmentId: Number(lastInsertRowid),
-          by: byUsername ?? String(byUserId).replace(/^user-/u, ''), comment: reason });
-        return { adjustment: { id: Number(lastInsertRowid), username, category, period, delta, reason, by_user_id: byUserId, at },
-          balances: helpers.ledgerBalances(spec, username, period) };
-      }
-      return guarded('persist', database.transaction(apply).immediate);
-    },
-    /**
-     * 讀取額度異動紀錄（例如請假的 leave_log），依寫入順序排列；可依員工與期間篩選，在同一個讀取快照內查詢
-     * @param {object} spec ledger 規格（決定讀哪一張紀錄表）
-     * @param {object} [filters={}] 篩選條件
-     * @param {string|null} [filters.username=null] 員工帳號；null 為全部
-     * @param {number|null} [filters.period=null] 期間（年度）；null 為全部
-     * @returns {Promise<Array<object>>} 紀錄列：id、at、event、username、category、period、amount、start_at、end_at、remaining_before、remaining_after、
-     *   ticket_id、type_id、adjustment_id、by_username、comment、source；額度表沒有紀錄表時為空陣列
-     * @throws {HttpError} 503 資料庫無法讀取
-     */
-    async ledgerLog(spec, { username = null, period = null } = {}) {
-      const { db: database } = connection();
-      const table = ledgerTable(ledgerTables, spec.table);
-      if (!table.log) return [];
-      const log = table.log;
-      /** 依條件讀出紀錄列。@returns {Array<object>} 紀錄列。 */
-      function read() {
-        return statement(`SELECT id, at, event, ${table.owner} AS username, ${table.category} AS category, ${table.period} AS period, ${log.amount} AS amount,
-            start_at, end_at, ${log.before} AS remaining_before, ${log.after} AS remaining_after, ticket_id, type_id, adjustment_id, by_username, comment, source
-          FROM ${log.table} WHERE (? IS NULL OR ${table.owner} = ?) AND (? IS NULL OR ${table.period} = ?) ORDER BY id`).all(username, username, period, period);
-      }
-      return guarded('load', database.transaction(read).deferred);
     },
     /**
      * 依寫入順序取得全部帳號列（含已停用與部門已不存在者），同步查詢、每次呼叫都讀取資料庫目前內容，不快取。

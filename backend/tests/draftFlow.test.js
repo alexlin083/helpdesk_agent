@@ -32,7 +32,7 @@ const { createTaskTracker } = await import('../src/services/taskTracker.js');
 const { createAuthService, authService } = await import('../src/services/authService.js');
 const { createDraftHandler, createRequestTypesHandler, AI_NOTICES } = await import('../src/controllers/requestTypeController.js');
 const { createTicketHandler, createDecisionHandler, createTransferHandler, createCancelHandler, DRAFT_BASIS } = await import('../src/controllers/ticketController.js');
-const { createMyLeaveBalanceHandler, createLeaveBalancesHandler, createLeaveAdjustmentHandler } = await import('../src/controllers/leaveController.js');
+const { createMyLeaveBalanceHandler, createLeaveBalancesHandler } = await import('../src/controllers/leaveController.js');
 const { errorHandler, notFound, HttpError } = await import('../src/middleware/errorHandler.js');
 const { SCHEMA_VERSION, APPLICATION_ID } = await import('../src/services/storage/database.js');
 const Database = createRequire(import.meta.url)('better-sqlite3');
@@ -130,6 +130,23 @@ async function testAuthenticate(req, res, next) {
  * @param {object} [options.registry=types] 需求類型目錄；預設為實際定義檔，測試新增類型時可傳入從暫存目錄載入的目錄。
  * @returns {object} store、usage、calls、setAI、judged、application。
  */
+/**
+ * 直接改寫測試資料庫中某位員工的年度額度，模擬人資在公司既有的系統更新額度（本系統不提供寫入額度的 API）。
+ * @param {string} name setup 使用的資料庫檔名。
+ * @param {string} username 員工帳號。
+ * @param {string} leaveType 假別。
+ * @param {number} year 年度。
+ * @param {number} minutes 新的年度額度（分鐘）。
+ * @returns {void}
+ */
+function setGranted(name, username, leaveType, year, minutes) {
+  const raw = new Database(join(scratch, name));
+  try {
+    raw.prepare('UPDATE leave_entitlements SET granted_minutes = ? WHERE employee_no = (SELECT employee_no FROM accounts WHERE username = ?) AND leave_type = ? AND year = ?')
+      .run(minutes, username, leaveType, year);
+  } finally { raw.close(); }
+}
+
 function setup(name, { key = '', limits = {}, registry = types } = {}) {
   const store = createSqliteDataStore({ file: join(scratch, name), seed: personnel });
   openedStores.push(store);
@@ -170,7 +187,6 @@ function setup(name, { key = '', limits = {}, registry = types } = {}) {
   application.post('/tickets/:id/cancel', testAuthenticate, createCancelHandler(store, registry));
   application.get('/me/leave-balance', testAuthenticate, createMyLeaveBalanceHandler({ store, types: registry, clock }));
   application.get('/leave/balances', testAuthenticate, createLeaveBalancesHandler({ store, types: registry, clock }));
-  application.post('/leave/adjustments', testAuthenticate, createLeaveAdjustmentHandler({ store, types: registry, accounts, clock }));
   application.use(notFound);
   application.use(errorHandler);
   return { store, usage, calls, setAI, judged, application };
@@ -265,7 +281,10 @@ async function draftWithoutAI() {
     assert.deepEqual(Object.keys(body), ['intent', 'type', 'department', 'department_options', 'handler', 'handler_options', 'values', 'sources', 'missing', 'invalid',
       'field_options', 'computed', 'summaries', 'reply', 'prompt', 'ai_available', 'ai_error', 'complete', 'rendered_content', 'preview_content', 'tools_used']);
     assert.equal(body.intent, '請假申請');
-    assert.deepEqual(Object.keys(body.type), ['id', 'version', 'name', 'department', 'fields']);
+    assert.deepEqual(Object.keys(body.type), ['id', 'version', 'name', 'department', 'fields', 'calendars']);
+    assert.deepEqual(body.type.fields[3], { key: 'end_at', label: '請假截止時間', type: 'datetime', required: true, rules: { after: 'start_at' } }, '日期類欄位帶規則供選擇器使用');
+    assert.deepEqual(body.type.calendars, [{ start: 'start_at', end: 'end_at', timezone_offset: '+08:00', work_windows: [['09:00', '12:00'], ['13:00', '18:00']],
+      workdays: [1, 2, 3, 4, 5], holidays: [], open_years: [2026, 2027] }], '工作日曆摘要只含選擇器需要的資料');
     assert.equal(body.type.id, 'leave');
     assert.equal(body.type.version, LEAVE_VERSION);
     assert.deepEqual(body.department, { id: 'dept-hr-1', name: '人力資源部' });
@@ -480,8 +499,7 @@ async function agentAvailability() {
     assert.equal(other.complete, true, '不重疊的期間可以選同一位同事');
     const overlap = (await call('POST', '/tickets/draft', 'two.it', { subject: '請假', state: stateOf('leave', leaveFields({ agent: 'one.it' })) })).body;
     assert.deepEqual(overlap.invalid, [{ key: 'start_at', message: '這段時間已有請假單' }]);
-    const spec = types.find('leave').ledgerSpec;
-    await store.addLedgerAdjustment(spec, { username: 'one.it', category: '病假', period: 2026, delta: -14100, reason: '測試調減', byUserId: 'user-hr.one', at: new Date(NOW).toISOString() });
+    setGranted('agents.db', 'one.it', '病假', 2026, 300);
     const short = (await call('POST', '/tickets/draft', 'one.it', { subject: '請假', state: stateOf('leave', leaveFields({ leave_type: '病假', agent: 'three.it' })) })).body;
     assert.deepEqual(short.summaries, ['病假剩餘時數：5 小時 0 分鐘 → -2 小時 0 分鐘']);
     assert.deepEqual(short.invalid, [{ key: 'leave_type', message: '假別剩餘時數不足' }]);
@@ -505,9 +523,9 @@ async function leaveSubmission() {
     const start = await call('GET', '/me/leave-balance', 'one.it');
     assert.equal(start.status, 200);
     assert.deepEqual(start.body, { year: 2026, balances: [
-      { leave_type: '事假', granted_minutes: 6720, adjusted_minutes: 0, used_minutes: 0, pending_minutes: 0, remaining_minutes: 6720 },
-      { leave_type: '病假', granted_minutes: 14400, adjusted_minutes: 0, used_minutes: 0, pending_minutes: 0, remaining_minutes: 14400 },
-      { leave_type: '特休', granted_minutes: 6720, adjusted_minutes: 0, used_minutes: 0, pending_minutes: 0, remaining_minutes: 6720 },
+      { leave_type: '事假', granted_minutes: 6720, used_minutes: 0, pending_minutes: 0, remaining_minutes: 6720 },
+      { leave_type: '病假', granted_minutes: 14400, used_minutes: 0, pending_minutes: 0, remaining_minutes: 14400 },
+      { leave_type: '特休', granted_minutes: 6720, used_minutes: 0, pending_minutes: 0, remaining_minutes: 6720 },
     ] });
     const submitted = await submitType(call, 'one.it', 'leave', leaveFields(), { handler_id: 'hr.one' });
     assert.equal(submitted.status, 200);
@@ -525,7 +543,8 @@ async function leaveSubmission() {
     assert.equal(judged.count, 0, '表單不呼叫 AI 判斷');
     assert.equal((await usage.usage('user-one.it')).userRemaining, env.userDailyLimit, '表單不扣判斷額度');
     const pending = (await call('GET', '/me/leave-balance?year=2026', 'one.it')).body.balances[2];
-    assert.deepEqual(pending, { leave_type: '特休', granted_minutes: 6720, adjusted_minutes: 0, used_minutes: 0, pending_minutes: 420, remaining_minutes: 6300 });
+    assert.deepEqual(pending, { leave_type: '特休', granted_minutes: 6720, used_minutes: 0, pending_minutes: 420, remaining_minutes: 6720 },
+      '送出不改變剩餘，待簽核只列為參考');
     const overlapDraft = (await call('POST', '/tickets/draft', 'one.it', { subject: '請假', state: stateOf('leave', leaveFields({ start_at: '2026-12-01T13:00', agent: 'three.it' })) })).body;
     assert.deepEqual(overlapDraft.invalid, [{ key: 'start_at', message: '這段時間已有請假單' }], '草稿先提醒本人已有重疊的請假單');
     const overlap = await call('POST', '/tickets', 'one.it', { subject: '請假', content: overlapDraft.preview_content, form: { id: 'leave', version: LEAVE_VERSION, fields: leaveFields({ start_at: '2026-12-01T13:00', agent: 'three.it' }) } });
@@ -549,7 +568,7 @@ async function leaveSubmission() {
     const agentSubmit = await call('POST', '/tickets', 'two.it', { subject: '請假', content: agentDraft.body.preview_content, form: { id: 'leave', version: LEAVE_VERSION, fields: leaveFields({ agent: 'one.it', start_at: '2026-12-01T10:00' }) } });
     assert.equal(agentSubmit.status, 400);
     assert.equal(agentSubmit.body.error.message, '這位同事在此期間也有請假，不能擔任代理人', '送出時在交易內重新檢查');
-    await call('POST', '/leave/adjustments', 'hr.two', { username: 'one.it', leave_type: '特休', year: 2026, delta_minutes: -6000, reason: '測試調減' });
+    setGranted('submit.db', 'one.it', '特休', 2026, 420);
     const insufficient = await call('POST', '/tickets', 'one.it', { subject: '請假', content: secondContent, form: { id: 'leave', version: LEAVE_VERSION, fields: second } });
     assert.equal(insufficient.status, 409);
     assert.deepEqual(insufficient.body.error, { code: 'LEAVE_BALANCE_INSUFFICIENT', message: '假別剩餘時數不足' });
@@ -558,16 +577,17 @@ async function leaveSubmission() {
     assert.equal(transfer.status, 409);
     assert.deepEqual(transfer.body.error, { code: 'FORM_TICKET_LOCKED', message: '請假單不能轉出人資部' });
     assert.equal((await call('POST', `/tickets/${ticketId}/decision`, 'two.it', { action: 'APPROVE' })).status, 403, '不是人資不能簽核');
-    await call('POST', '/leave/adjustments', 'hr.two', { username: 'one.it', leave_type: '特休', year: 2026, delta_minutes: -1000, reason: '測試調減到負值' });
+    setGranted('submit.db', 'one.it', '特休', 2026, 300);
     const blocked = await call('POST', `/tickets/${ticketId}/decision`, 'hr.one', { action: 'APPROVE' });
     assert.equal(blocked.status, 409, '核准時重新檢查剩餘時數');
     assert.equal(blocked.body.error.code, 'LEAVE_BALANCE_INSUFFICIENT');
-    await call('POST', '/leave/adjustments', 'hr.two', { username: 'one.it', leave_type: '特休', year: 2026, delta_minutes: 7000, reason: '測試補回' });
+    setGranted('submit.db', 'one.it', '特休', 2026, 6720);
     const approved = await call('POST', `/tickets/${ticketId}/decision`, 'hr.one', { action: 'APPROVE', comment: '已核准' });
     assert.equal(approved.status, 200);
     assert.equal(approved.body.ticket.status, 'APPROVED');
     const used = (await call('GET', '/me/leave-balance', 'one.it')).body.balances[2];
-    assert.deepEqual(used, { leave_type: '特休', granted_minutes: 6720, adjusted_minutes: 0, used_minutes: 420, pending_minutes: 0, remaining_minutes: 6300 });
+    assert.deepEqual(used, { leave_type: '特休', granted_minutes: 6720, used_minutes: 420, pending_minutes: 0, remaining_minutes: 6720 },
+      '核准不扣除剩餘，額度由人資在公司既有的系統處理');
     const hrLeave = await submitType(call, 'hr.one', 'leave', leaveFields({ agent: 'hr.two', start_at: '2026-12-10T09:00', end_at: '2026-12-10T12:00' }));
     assert.equal(hrLeave.status, 200);
     const self = await call('POST', `/tickets/${hrLeave.body.ticket_id}/decision`, 'hr.one', { action: 'APPROVE' });
@@ -581,11 +601,11 @@ async function leaveSubmission() {
     const cancellable = await submitType(call, 'three.it', 'leave', leaveFields({ agent: 'one.it', start_at: '2026-12-15T09:00', end_at: '2026-12-15T18:00' }));
     assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[2].pending_minutes, 480);
     assert.equal((await call('POST', `/tickets/${cancellable.body.ticket_id}/cancel`, 'three.it', {})).status, 200);
-    assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[2].remaining_minutes, 6720, '取消後時數恢復');
+    assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[2].remaining_minutes, 6720, '送出與取消都不改變剩餘');
     const rejected = await submitType(call, 'three.it', 'leave', leaveFields({ agent: 'one.it', start_at: '2026-12-15T09:00', end_at: '2026-12-15T18:00' }));
     assert.equal(rejected.status, 200, '取消後同一期間可以重新申請');
     assert.equal((await call('POST', `/tickets/${rejected.body.ticket_id}/decision`, 'hr.one', { action: 'REJECT' })).status, 200);
-    assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[2].remaining_minutes, 6720, '退回的請假單不計時數');
+    assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[2].pending_minutes, 0, '退回的請假單不列為待簽核');
     // 改版前（version 1）保存的請假單：沒有 ledger 快照與 labels，仍計入額度、阻擋重疊並可簽核。
     const legacy = { ticket_id: 'TK-legacy-leave', created_at: '2026-10-20T01:00:00.000Z', updated_at: '2026-10-20T01:00:00.000Z',
       requester: { user_id: 'user-three.it', username: 'three.it', department_id: 'dept-it-1', department_name: '資訊管理一部' }, subject: '舊請假單', content: '舊內容',
@@ -602,29 +622,6 @@ async function leaveSubmission() {
     assert.equal(legacyApproved.body.ticket.form.version, 1, '保存的版本不變');
     assert.equal((await call('GET', '/me/leave-balance', 'three.it')).body.balances[0].used_minutes, 480);
     assert.equal((await call('GET', '/me/leave-balance?year=26', 'one.it')).status, 400);
-    // 請假額度異動紀錄（leave_log）：每次送出、人資調整、簽核、退回與取消各一列，含異動前後的剩餘；被拒絕的送出不留紀錄
-    const leaveSpec = types.find('leave').ledgerSpec;
-    /** 取出某員工 2026 年的紀錄重點欄位。@param {string} username 帳號。@returns {Promise<Array<Array>>} 紀錄。 */
-    const rowsOf = async (username) => (await store.ledgerLog(leaveSpec, { username, period: 2026 })).map(/** 取重點欄位。@param {object} row 紀錄列。@returns {Array} 欄位。 */ (row) =>
-      [row.event, row.category, row.amount, row.remaining_before, row.remaining_after, row.by_username, row.comment]);
-    assert.deepEqual(await rowsOf('one.it'), [
-      ['SUBMITTED', '特休', 420, 6720, 6300, 'one.it', null],
-      ['ADJUSTED', '特休', -6000, 6300, 300, 'hr.two', '測試調減'],
-      ['ADJUSTED', '特休', -1000, 300, -700, 'hr.two', '測試調減到負值'],
-      ['ADJUSTED', '特休', 7000, -700, 6300, 'hr.two', '測試補回'],
-      ['APPROVED', '特休', 420, 6300, 6300, 'hr.one', '已核准'],
-    ], '送出先扣、調整增減、簽核前後剩餘相同');
-    assert.deepEqual(await rowsOf('three.it'), [
-      ['SUBMITTED', '特休', 480, 6720, 6240, 'three.it', null],
-      ['CANCELLED', '特休', 480, 6240, 6720, 'three.it', null],
-      ['SUBMITTED', '特休', 480, 6720, 6240, 'three.it', null],
-      ['REJECTED', '特休', 480, 6240, 6720, 'hr.one', null],
-      ['APPROVED', '事假', 480, 6240, 6240, 'hr.one', null],
-    ], '取消與退回把時數還回去；沒有快照的舊請假單簽核時依定義的欄位記錄');
-    const [first] = await store.ledgerLog(leaveSpec, { username: 'one.it', period: 2026 });
-    assert.deepEqual([first.ticket_id, first.type_id, first.start_at, first.end_at, first.source], [ticketId, 'leave', '2026-12-01T09:30', '2026-12-01T17:30', 'live']);
-    const adjustmentRow = (await store.ledgerLog(leaveSpec, { username: 'one.it' }))[1];
-    assert.ok(Number.isInteger(adjustmentRow.adjustment_id) && adjustmentRow.ticket_id === null, '人資調整記錄調整 id、沒有單號');
   }
   await withServer(application, check);
 }
@@ -738,7 +735,7 @@ async function generalSubmission() {
 test('一般需求的送出與既有流程相容', generalSubmission);
 
 /**
- * 驗證人資假別時數 API（讀取通用 ledger）：只有人資部門成員可以查詢與調整、參數與本文驗證、員工不存在 404，以及調整結果反映在剩餘時數。
+ * 驗證人資假別時數查詢（唯讀）：只有人資部門成員可以查詢、參數驗證、員工不存在 404；本系統不提供寫入額度的端點。
  * @returns {Promise<void>}
  */
 async function hrBalances() {
@@ -746,36 +743,18 @@ async function hrBalances() {
   /** 執行檢查。@param {Function} call 呼叫函式。@returns {Promise<void>} */
   async function check(call) {
     assert.equal((await call('GET', '/leave/balances?username=one.it', 'one.it')).status, 403);
-    assert.equal((await call('POST', '/leave/adjustments', 'fin.one', { username: 'one.it', leave_type: '特休', year: 2026, delta_minutes: 60, reason: 'x' })).status, 403);
     const listed = await call('GET', '/leave/balances?username=two.it&year=2027', 'hr.one');
     assert.equal(listed.status, 200);
     assert.equal(listed.body.username, 'two.it');
     assert.equal(listed.body.year, 2027);
-    assert.equal(listed.body.balances.length, 3);
+    assert.deepEqual(Object.keys(listed.body.balances[0]), ['leave_type', 'granted_minutes', 'used_minutes', 'pending_minutes', 'remaining_minutes']);
     assert.equal((await call('GET', '/leave/balances?username=boss.admin', 'hr.one')).status, 404);
     assert.equal((await call('GET', '/leave/balances', 'hr.one')).status, 400);
     assert.equal((await call('GET', '/leave/balances?username=two.it&year=abcd', 'hr.one')).status, 400);
-    const adjusted = await call('POST', '/leave/adjustments', 'hr.one', { username: 'two.it', leave_type: '事假', year: 2026, delta_minutes: 120, reason: ' 補發 ' });
-    assert.equal(adjusted.status, 200);
-    assert.deepEqual(Object.keys(adjusted.body.adjustment), ['id', 'username', 'leave_type', 'year', 'delta_minutes', 'reason', 'by_user_id', 'at']);
-    assert.equal(adjusted.body.adjustment.reason, '補發');
-    assert.equal(adjusted.body.adjustment.leave_type, '事假');
-    assert.equal(adjusted.body.balances[0].remaining_minutes, 6840);
-    assert.equal((await call('GET', '/me/leave-balance', 'two.it')).body.balances[0].adjusted_minutes, 120);
-    for (const [body, pattern] of [[{ username: 'two.it', leave_type: '事假', year: 2026, delta_minutes: 0, reason: 'x' }, /delta_minutes/u],
-      [{ username: 'two.it', leave_type: '公假', year: 2026, delta_minutes: 1, reason: 'x' }, /leave_type 必須是 事假、病假、特休/u], [{ username: 'boss.admin' }, /username/u]]) {
-      const bad = await call('POST', '/leave/adjustments', 'hr.one', body);
-      assert.equal(bad.status, 400);
-      assert.match(bad.body.error.message, pattern);
-    }
-    const own = await call('POST', '/leave/adjustments', 'hr.one', { username: 'hr.one', leave_type: '特休', year: 2026, delta_minutes: 6000, reason: '自己加' });
-    assert.equal(own.status, 403, '人資不能調整自己的假別時數');
-    assert.ok((await call('GET', '/me/leave-balance', 'hr.one')).body.balances.every(/** 被拒絕的調整不寫入。@param {{adjusted_minutes: number}} entry 假別時數。@returns {boolean} 沒有調整時 true。 */ (entry) => entry.adjusted_minutes === 0));
-    assert.ok(!captured.join('\n').includes('補發'), '日誌不記錄調整原因');
   }
   await withServer(application, check);
 }
-test('人資假別時數查詢與調整的權限與驗證', hrBalances);
+test('人資假別時數查詢的權限與驗證', hrBalances);
 
 /**
  * 驗證結構版本 1 的資料庫就地升級到目前版本（4）並保留需求單；帳號表為空時寫入一次測試名冊，之後不再寫入；
@@ -797,15 +776,15 @@ async function migrationAndSeed() {
   openedStores.push(store);
   assert.equal((await store.find('TK-old')).status, 'PENDING', '升級後保留既有需求單');
   assert.equal((await store.stats()).schemaVersion, SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 4);
+  assert.equal(SCHEMA_VERSION, 8);
   assert.equal(store.listAccounts().length, rawAccounts.length, '版本 1 升級後帳號表為空，寫入測試名冊');
   assert.deepEqual(store.findEmployee('one.it'), employees.find('one.it'), 'SQLite 員工資料與記憶體版本形狀相同');
   const balances = await store.ledgerBalances(spec, 'one.it', 2026);
   assert.equal(balances.known, true);
   assert.equal(balances.balances[2].granted, 6720);
-  await store.addLedgerAdjustment(spec, { username: 'one.it', category: '特休', period: 2026, delta: -60, reason: '測試', byUserId: 'user-hr.one', at: new Date(NOW).toISOString() });
   await store.insert({ ticket_id: 'TK-leave', status: 'PENDING', requester: { username: 'one.it' }, form: { id: 'leave', fields: { leave_type: '特休', start_at: '2026-12-01T09:00', end_at: '2026-12-01T18:00' }, computed: { minutes: 480, year: 2026 } } });
-  assert.equal((await store.ledgerBalances(spec, 'one.it', 2026)).balances[2].remaining, 6720 - 60 - 480);
+  assert.deepEqual((({ remaining, pending }) => [remaining, pending])((await store.ledgerBalances(spec, 'one.it', 2026)).balances[2]), [6720, 480],
+    '舊請假單列為待簽核，剩餘只有年度額度');
   /** 在讀取交易內查詢期間內已有申請的帳號。@param {string[]} usernames 帳號。@param {string} startAt 起點。@param {string} endAt 終點。@returns {Promise<string[]>} 帳號。 */
   const busy = async (usernames, startAt, endAt) => [...await store.withLedger(/** 查詢。@param {object} helpers 交易內查詢。@returns {Set<string>} 帳號。 */ (helpers) => helpers.ledgerBusy(busySpecs, usernames, startAt, endAt))];
   assert.deepEqual(await busy(['one.it', 'two.it'], '2026-12-01T17:00', '2026-12-01T19:00'), ['one.it']);
@@ -821,64 +800,83 @@ async function migrationAndSeed() {
   assert.equal(reopened.findAccount('new.person'), null);
   const after = (await reopened.ledgerBalances(spec, 'one.it', 2026)).balances[2];
   assert.equal(after.granted, 6720);
-  assert.equal(after.adjusted, -60);
   assert.equal((await reopened.ledgerBalances(spec, 'one.it', 2028)).balances[2].granted, 0, '不補上名冊中的新年度');
-  assert.deepEqual((await reopened.ledgerLog(spec)).map(/** 取事件與前後剩餘。@param {object} row 紀錄列。@returns {Array} 欄位。 */ (row) => [row.event, row.remaining_before, row.remaining_after]),
-    [['ADJUSTED', 6720, 6660]], '人資調整記錄前後剩餘；沒有提供 ledgerSpecOf 的寫入不記錄');
   assert.equal(await reopened.clear(), 2);
-  assert.equal((await reopened.ledgerBalances(spec, 'one.it', 2026)).balances[2].remaining, 6660, '清空需求單只刪需求單，額度與調整保留');
-  assert.equal((await reopened.ledgerLog(spec)).length, 1, '清空需求單時保留人資調整的紀錄');
+  const cleared = (await reopened.ledgerBalances(spec, 'one.it', 2026)).balances[2];
+  assert.deepEqual([cleared.remaining, cleared.pending], [6720, 0], '清空需求單只刪需求單，額度保留');
   assert.equal((await reopened.ledgerBalances(spec, 'nobody.here', 2026)).known, false);
 }
 test('結構版本 1 升級到最新版本、全新帳號表才寫入名冊、通用 ledger 讀取舊請假單', migrationAndSeed);
 
 /**
- * 驗證結構版本 3 升級到 4 時以既有資料回填請假額度異動紀錄：需求單歷程（送出、簽核、退回）與人資調整依時間排序重播，
- * 每列記錄異動前後的剩餘；沒有快照的請假版本 1 舊單依當時的欄位回填；轉單與非請假的單不記錄；最後的剩餘與即時計算一致
+ * 驗證結構版本 3 的資料庫升級到最新版本：途中的版本 4 建立並回填 leave_log、版本 5 移除；版本 6 移除人資調整紀錄 leave_adjustments；
+ * 版本 7 在 accounts 加上部門的中文名稱；版本 8 改以員工編號關聯（employees 以 employee_no 為主鍵、accounts.employee_no 參照員工、
+ * leave_entitlements 以員工編號為主鍵，管理員的 employee_no 為 NULL）；需求單、帳號、員工與年度額度的內容都保留，剩餘只由年度額度決定。
  * @returns {Promise<void>}
  */
-async function ledgerLogBackfill() {
-  const file = join(scratch, 'backfill.db');
-  const store = createSqliteDataStore({ file, seed: personnel });
-  /** 組一張請假單。@param {string} id 單號。@param {object} form 表單。@param {string} status 狀態。@param {Array<object>} history 歷程。@returns {object} 需求單。 */
-  const leaveTicket = (id, form, status, history) => ({ ticket_id: id, status, requester: { username: 'one.it' }, form: { id: 'leave', ...form }, history });
-  await store.insert(leaveTicket('TK-a', { ledger: { category: '特休', amount: 420, period: 2026, start: '2026-12-01T09:30', end: '2026-12-01T17:30' } }, 'APPROVED', [
-    { at: '2026-11-01T01:00:00.000Z', event: 'SUBMITTED', by_username: 'one.it' },
-    { at: '2026-11-01T05:00:00.000Z', event: 'TRANSFERRED', by_username: 'hr.one' },
-    { at: '2026-11-02T01:00:00.000Z', event: 'APPROVED', by_username: 'hr.one', comment: '同意' }]));
-  await store.insert(leaveTicket('TK-b', { ledger: { category: '特休', amount: 480, period: 2026, start: '2026-12-02T09:00', end: '2026-12-02T18:00' } }, 'REJECTED', [
-    { at: '2026-11-03T01:00:00.000Z', event: 'SUBMITTED', by_username: 'one.it' },
-    { at: '2026-11-04T01:00:00.000Z', event: 'REJECTED', by_username: 'hr.two', comment: '期間有誤' }]));
-  await store.insert(leaveTicket('TK-c', { version: 1, fields: { leave_type: '事假', start_at: '2026-12-21T09:00', end_at: '2026-12-21T13:00' }, computed: { minutes: 240, year: 2026 } }, 'PENDING', [
-    { at: '2026-11-05T01:00:00.000Z', event: 'SUBMITTED', by_username: 'one.it' }]));
-  await store.insert({ ticket_id: 'TK-other', status: 'APPROVED', requester: { username: 'one.it' }, form: { id: 'equipment', fields: {} }, history: [{ at: '2026-11-01T02:00:00.000Z', event: 'SUBMITTED' }] });
-  store.close();
+async function upgradeFromVersion3() {
+  const file = join(scratch, 'v3-upgrade.db');
   const raw = new Database(file);
+  raw.exec(`CREATE TABLE tickets (seq INTEGER PRIMARY KEY, ticket_id TEXT NOT NULL UNIQUE, document TEXT NOT NULL CHECK (json_valid(document))) STRICT;
+    CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+    CREATE TABLE accounts (username TEXT PRIMARY KEY, department_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'USER', active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
+    CREATE INDEX accounts_department ON accounts (department_id, role, active);
+    CREATE TRIGGER accounts_no_delete BEFORE DELETE ON accounts BEGIN SELECT RAISE(ABORT, 'accounts 不可刪除'); END;
+    CREATE TABLE employees (username TEXT PRIMARY KEY REFERENCES accounts (username), display_name TEXT NOT NULL, employee_no TEXT NOT NULL UNIQUE, hire_date TEXT NOT NULL) STRICT;
+    CREATE TRIGGER employees_not_admin BEFORE INSERT ON employees WHEN (SELECT role FROM accounts WHERE username = NEW.username) = 'ADMIN' BEGIN SELECT RAISE(ABORT, 'admin'); END;
+    CREATE TABLE leave_entitlements (username TEXT NOT NULL REFERENCES employees (username), leave_type TEXT NOT NULL, year INTEGER NOT NULL, granted_minutes INTEGER NOT NULL,
+      PRIMARY KEY (username, leave_type, year)) STRICT;
+    CREATE TABLE leave_adjustments (id INTEGER PRIMARY KEY, username TEXT NOT NULL, leave_type TEXT NOT NULL, year INTEGER NOT NULL, delta_minutes INTEGER NOT NULL,
+      reason TEXT NOT NULL, by_user_id TEXT NOT NULL, at TEXT NOT NULL) STRICT;
+    CREATE INDEX leave_adjustments_lookup ON leave_adjustments (username, year, leave_type);`);
+  const at = '2026-10-01T00:00:00.000Z';
+  const account = raw.prepare('INSERT INTO accounts (username, department_id, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
+  account.run('one.it', 'dept-it-1', 'USER', 1, at, at);
+  account.run('two.it', 'dept-it-1', 'USER', 0, at, at);
+  account.run('boss.admin', 'dept-it-1', 'ADMIN', 1, at, at);
+  const employee = raw.prepare('INSERT INTO employees (username, display_name, employee_no, hire_date) VALUES (?, ?, ?, ?)');
+  employee.run('one.it', '測試員工一', 'T-0101', '2020-01-01');
+  employee.run('two.it', '測試員工二', 'T-0102', '2021-01-01');
+  const grant = raw.prepare('INSERT INTO leave_entitlements (username, leave_type, year, granted_minutes) VALUES (?, ?, ?, ?)');
+  grant.run('one.it', '特休', 2026, 6720);
+  grant.run('two.it', '事假', 2026, 480);
   raw.prepare('INSERT INTO leave_adjustments (username, leave_type, year, delta_minutes, reason, by_user_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run('one.it', '特休', 2026, -60, '補登調整', 'user-hr.two', '2026-11-02T12:00:00.000Z');
-  raw.exec('DROP TABLE leave_log');
+  raw.prepare('INSERT INTO tickets (ticket_id, document) VALUES (?, ?)').run('TK-a', JSON.stringify({ ticket_id: 'TK-a', status: 'APPROVED', requester: { username: 'one.it' },
+    form: { id: 'leave', ledger: { category: '特休', amount: 420, period: 2026, start: '2026-12-01T09:30', end: '2026-12-01T17:30' } },
+    history: [{ at: '2026-11-01T01:00:00.000Z', event: 'SUBMITTED', by_username: 'one.it' }, { at: '2026-11-02T01:00:00.000Z', event: 'APPROVED', by_username: 'hr.one' }] }));
+  raw.pragma(`application_id = ${APPLICATION_ID}`);
   raw.pragma('user_version = 3');
   raw.close();
   const upgraded = createSqliteDataStore({ file, seed: personnel });
   openedStores.push(upgraded);
-  assert.equal((await upgraded.stats()).schemaVersion, 4);
+  assert.equal((await upgraded.stats()).schemaVersion, 8);
   const spec = types.find('leave').ledgerSpec;
-  const rows = await upgraded.ledgerLog(spec, { username: 'one.it', period: 2026 });
-  assert.deepEqual(rows.map(/** 取重點欄位。@param {object} row 紀錄列。@returns {Array} 欄位。 */ (row) => [row.event, row.category, row.amount, row.remaining_before, row.remaining_after, row.by_username, row.comment, row.ticket_id]), [
-    ['SUBMITTED', '特休', 420, 6720, 6300, 'one.it', null, 'TK-a'],
-    ['APPROVED', '特休', 420, 6300, 6300, 'hr.one', '同意', 'TK-a'],
-    ['ADJUSTED', '特休', -60, 6300, 6240, 'hr.two', '補登調整', null],
-    ['SUBMITTED', '特休', 480, 6240, 5760, 'one.it', null, 'TK-b'],
-    ['REJECTED', '特休', 480, 5760, 6240, 'hr.two', '期間有誤', 'TK-b'],
-    ['SUBMITTED', '事假', 240, 6720, 6480, 'one.it', null, 'TK-c'],
-  ]);
-  assert.ok(rows.every(/** 是否為回填。@param {object} row 紀錄列。@returns {boolean} 回填時 true。 */ (row) => row.source === 'backfill'));
-  assert.deepEqual([rows[0].start_at, rows[0].end_at, rows[5].start_at], ['2026-12-01T09:30', '2026-12-01T17:30', '2026-12-21T09:00']);
-  const balances = (await upgraded.ledgerBalances(spec, 'one.it', 2026)).balances;
-  assert.equal(balances[2].remaining, 6240, '回填的最後剩餘與即時計算一致（特休）');
-  assert.equal(balances[0].remaining, 6480, '回填的最後剩餘與即時計算一致（事假）');
+  assert.equal((await upgraded.find('TK-a')).status, 'APPROVED', '需求單保留');
+  assert.deepEqual(upgraded.listAccounts().map(/** 取帳號。@param {{username: string}} row 帳號列。@returns {string} 帳號。 */ (row) => row.username), ['one.it', 'two.it', 'boss.admin'], '帳號與順序保留，不寫入示範名冊');
+  assert.deepEqual(upgraded.findEmployee('two.it'), { username: 'two.it', displayName: '測試員工二', employeeNo: 'T-0102', hireDate: '2021-01-01', entitlements: [{ year: 2026, leaveType: '事假', minutes: 480 }] },
+    '員工資料與額度以員工編號串回帳號');
+  const [, , special] = (await upgraded.ledgerBalances(spec, 'one.it', 2026)).balances;
+  assert.deepEqual([special.remaining, special.used], [6720, 420], '剩餘＝年度額度（人資調整紀錄已移除），已核准只列為參考');
+  upgraded.close();
+  const check = new Database(file, { readonly: true });
+  /** 取欄位名稱。@param {string} table 資料表。@returns {string[]} 欄位。 */
+  const columns = (table) => check.pragma(`table_info(${table})`).map(/** 欄位名稱。@param {{name: string}} column 欄位。@returns {string} 名稱。 */ (column) => column.name);
+  assert.deepEqual(columns('employees'), ['employee_no', 'display_name', 'hire_date']);
+  assert.deepEqual(columns('accounts'), ['username', 'employee_no', 'department_id', 'department_name', 'role', 'active', 'created_at', 'updated_at']);
+  assert.deepEqual(columns('leave_entitlements'), ['employee_no', 'leave_type', 'year', 'granted_minutes']);
+  assert.deepEqual(check.prepare('SELECT username, employee_no, department_name FROM accounts ORDER BY rowid').all(), [
+    { username: 'one.it', employee_no: 'T-0101', department_name: '資訊管理一部' },
+    { username: 'two.it', employee_no: 'T-0102', department_name: '資訊管理一部' },
+    { username: 'boss.admin', employee_no: null, department_name: '資訊管理一部' },
+  ], '一般帳號帶員工編號、管理員為 NULL');
+  assert.equal(check.prepare("SELECT COUNT(*) AS total FROM sqlite_master WHERE name LIKE 'leave_log%' OR name LIKE 'leave_adjustments%' OR name LIKE '%_v8'").get().total, 0, '舊表、索引與暫存表都已移除');
+  assert.deepEqual(check.prepare("SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger') AND tbl_name = 'accounts' AND sql IS NOT NULL ORDER BY name").all()
+    .map(/** 取名稱。@param {{name: string}} row 物件。@returns {string} 名稱。 */ (row) => row.name), ['accounts_department', 'accounts_no_delete'], '索引與禁止刪除帳號的觸發器重建');
+  check.close();
 }
-test('結構版本 3 升級到 4 時回填請假額度異動紀錄', ledgerLogBackfill);
+test('結構版本 3 升級到最新版本：移除兩張紀錄表並改以員工編號關聯', upgradeFromVersion3);
 
 /**
  * 驗證完整 app 已掛載端點：需求類型清單、自動生成（未登入 401、管理員 403、沒有金鑰時 200 並回 ai_error）、本人假別時數與人資端點的權限。
@@ -921,6 +919,10 @@ async function mountedEndpoints() {
     const hr = await headersFor('emily.wu');
     assert.equal((await fetch(`${base}/api/leave/balances?username=racky.huang`, { headers: hr })).status, 200);
     assert.equal((await fetch(`${base}/api/me/leave-balance`, { method: 'POST', headers: user, body: '{}' })).status, 404);
+    for (const path of ['/api/leave/adjustments', '/api/leave/access', '/api/leave/employees']) {
+      assert.equal((await fetch(`${base}${path}`, { headers: hr })).status, 404, `${path} 已移除`);
+    }
+    assert.equal((await fetch(`${base}/api/leave/adjustments`, { method: 'POST', headers: { ...hr, 'Content-Type': 'application/json' }, body: '{}' })).status, 404, '本系統不提供寫入額度的端點');
   } finally { server.closeAllConnections(); server.close(); }
 }
 test('完整 app 掛載需求類型清單、自動生成與假別時數端點', mountedEndpoints);

@@ -133,6 +133,27 @@ export function describeCalendar(calendar) {
 }
 
 /**
+ * 把工作日曆整理成前端日期時間選擇器使用的形狀（「自動生成」回應的 type.calendars）：只含畫面需要的上班時段、工作日、假日與開放年度，
+ * 讓選擇器只列上班時段的時間、淡化並停用非工作日與未開放年度；計算與驗證仍由後端依完整日曆執行，前端的限制只是輔助。
+ * @param {object} calendar normalizeCalendar 的結果。
+ * @returns {{timezone_offset: string, work_windows: Array<[string, string]>, workdays: number[], holidays: string[], open_years: number[]}}
+ *   時區、上班時段（HH:mm）、工作日（0 為週日，遞增）、假日（YYYY-MM-DD，遞增）與開放年度（遞增）。
+ */
+export function pickerCalendar(calendar) {
+  /** 分鐘轉 HH:mm。@param {number} minutes 當天分鐘數。@returns {string} 時間文字。 */
+  const clock = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  /** 數字遞增排序。@param {number} a 前者。@param {number} b 後者。@returns {number} 差值。 */
+  const ascending = (a, b) => a - b;
+  return {
+    timezone_offset: calendar.timezoneOffset,
+    work_windows: calendar.windows.map(/** 時段轉文字。@param {[number, number]} window 時段。@returns {[string, string]} 起訖時間。 */ ([start, end]) => [clock(start), clock(end)]),
+    workdays: [...calendar.workdays].sort(ascending),
+    holidays: [...calendar.holidays.values()].flatMap(/** 展開年度的假日。@param {Set<string>} dates 假日。@returns {string[]} 日期。 */ (dates) => [...dates]).sort(),
+    open_years: [...calendar.holidays.keys()].sort(ascending),
+  };
+}
+
+/**
  * 計算能力（computations[].capability）：validate 在載入時檢查參數並準備計算資料，run 依欄位值計算。
  * work_minutes：args { start, end（datetime 欄位 key）, calendar（定義中工作日曆物件的鍵）}，結果為分鐘數（整數）。
  */
@@ -175,7 +196,7 @@ export const COMPUTATION_CAPABILITIES = Object.freeze({
 
 /**
  * 檢查能力（checks[].capability），都需要定義的 ledger：
- * - ledger_balance：本次數量不可超過該類別該期間的剩餘額度（approve 時這張單已列在待簽核內，剩餘不可小於 0）；
+ * - ledger_balance：本次數量不可超過該類別該期間的剩餘額度（剩餘＝年度額度，不扣待簽核或已核准的單；送出與核准時同樣比較）；
  * - ledger_overlap：同一申請人在期間內不可已有待簽核或已核准的同類申請，args { start, end } 為 date／datetime 欄位 key。
  */
 export const CHECK_CAPABILITIES = Object.freeze({
@@ -196,16 +217,15 @@ export const TOOL_CAPABILITIES = Object.freeze({
 });
 
 /**
- * 計算某類別某期間的額度結果，並依階段判斷是否足夠。
+ * 計算某類別某期間的額度結果並判斷是否足夠：剩餘只由年度額度決定（見 computeLedgerBalances），
+ * 送出前的草稿、送出與核准都以「剩餘減去本次數量不小於 0」判斷；after 只是人資扣除本次後的預估，系統不會自動扣除。
  * @param {Array<{category: string, remaining: number}>} balances 該期間全部類別的額度。
  * @param {string} category 類別。
  * @param {number} amount 本次數量。
- * @param {string} phase draft、submit 或 approve。
- * @returns {{before: number, after: number, enough: boolean}} before 為本次之前的剩餘、after 為扣除後的剩餘；approve 時這張單已在待簽核內，before 為剩餘加回本次。
+ * @returns {{before: number, after: number, enough: boolean}} before 為目前剩餘、after 為扣除本次後的預估剩餘。
  */
-export function balanceOutcome(balances, category, amount, phase) {
+export function balanceOutcome(balances, category, amount) {
   const remaining = balances.find(/** 找類別。@param {{category: string}} entry 額度。@returns {boolean} 相符時 true。 */ (entry) => entry.category === category)?.remaining ?? 0;
-  if (phase === 'approve') return { before: remaining + amount, after: remaining, enough: remaining >= 0 };
   return { before: remaining, after: remaining - amount, enough: remaining - amount >= 0 };
 }
 

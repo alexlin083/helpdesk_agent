@@ -110,6 +110,10 @@ function realDefinitions() {
   assert.deepEqual(types.forClient(types.find('equipment')).workflow, { transfer: true, not_requester: true });
   assert.deepEqual(types.draftView(leave).department, { id: 'dept-hr-1', name: '人力資源部' });
   assert.equal(types.draftView(types.find('general')).department, null);
+  assert.deepEqual(types.draftView(types.find('vpn')).fields.slice(1, 3).map(/** 取規則。@param {object} field 欄位。@returns {object} 規則。 */ (field) => field.rules),
+    [{ not_before_today: true }, { after: 'start_date' }], '日期類欄位的規則只出現在自動生成回應');
+  assert.deepEqual(types.draftView(types.find('vpn')).calendars, [], '沒有工作日曆計算時為空陣列');
+  assert.equal(types.forClient(types.find('vpn')).fields[2].rules, undefined, 'GET /api/forms 不含規則');
   assert.deepEqual(types.forClient(leave).fields[4], { key: 'agent', label: '代理人', type: 'account', required: true });
   assert.deepEqual(types.forClient(types.find('equipment')).fields[2], { key: 'quantity', label: '數量', type: 'number', required: true, min: 1, max: 50, integer: true });
   assert.deepEqual(types.forClient(types.find('equipment')).department, { id: 'dept-ga-1', name: '總務與硬體組' });
@@ -583,3 +587,16 @@ async function noHandlerOnRealTypes() {
   assert.throws(() => submissionHandler({ type: equipment, handlerId: 'ga.one', department, user, accounts }), { status: 400, message: '「設備申請」不提供指定處理人' });
 }
 test('實際需求類型送出時不接受指定處理人', noHandlerOnRealTypes);
+
+/**
+ * 驗證額度檢查：剩餘只由額度與人資調整決定，送出與核准都以「剩餘減去本次不小於 0」判斷，剛好用完仍可通過。
+ * @returns {Promise<void>}
+ */
+async function balanceRule() {
+  const { balanceOutcome } = await import('../src/services/requestTypes/capabilities.js');
+  const balances = [{ category: '特休', remaining: 420 }];
+  assert.deepEqual(balanceOutcome(balances, '特休', 420), { before: 420, after: 0, enough: true });
+  assert.deepEqual(balanceOutcome(balances, '特休', 480), { before: 420, after: -60, enough: false });
+  assert.equal(balanceOutcome(balances, '事假', 1).enough, false, '沒有額度的類別視為 0');
+}
+test('額度檢查不扣待簽核，送出與核准使用同一個規則', balanceRule);

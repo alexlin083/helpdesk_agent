@@ -4,7 +4,8 @@ import { buildTicketCard } from './ticketCard.js';
 import { TICKETS_TEXT } from './ticketText.js';
 
 /**
- * 建立已完成面板，集中管理關鍵字／結果／日期條件、快速日期、查詢鎖定與結果摘要。
+ * 建立「已完成表單」面板，集中管理關鍵字／結果／日期條件、快速日期、查詢鎖定與結果摘要；只查詢送達本人所屬部門且已結案的單（scope=department），
+ * 本人提出的單在「申請表單」的已完成區塊查看。
  * 頁面提供登入者、共享結果狀態與資料服務；面板不自行取得身分或處理跨分頁載入。
  * 每次查詢取得遞增序號，只有最後一次查詢的結果或錯誤會繪製，避免快速切換條件、清除條件、分頁切換或重新整理時較舊的回應覆蓋較新的結果。
  * @param {Document} doc 頁面文件。
@@ -32,13 +33,13 @@ export function createCompletedTicketsPanel(doc, { user, state, loadTickets, set
     listCompleted: doc.querySelector('#list-completed'),
     empty: doc.querySelector('#empty-completed'),
   };
-  doc.querySelector('#completed-title').textContent = `你提出且已結案的需求單，以及「${user.department.name}」的簽核紀錄（已簽核、已退回、已取消），預設顯示最新 ${COMPLETED_DEFAULT_LIMIT} 筆`;
+  doc.querySelector('#completed-title').textContent = `送達「${user.department.name}」且已結案的需求單（已簽核、已退回、已取消），預設顯示最新 ${COMPLETED_DEFAULT_LIMIT} 筆`;
   /**
-   * 讀取篩選表單目前的條件。
-   * @returns {{status: string, q: string, from: string, to: string}} 條件。
+   * 讀取篩選表單目前的條件，範圍固定為本部門（scope=department）。
+   * @returns {{status: string, q: string, from: string, to: string, scope: 'department'}} 條件。
    */
   function currentFilters() {
-    return { status: nodes.filterStatus.value || '', q: nodes.filterKeyword.value || '', from: nodes.filterFrom.value || '', to: nodes.filterTo.value || '' };
+    return { status: nodes.filterStatus.value || '', q: nodes.filterKeyword.value || '', from: nodes.filterFrom.value || '', to: nodes.filterTo.value || '', scope: 'department' };
   }
 
   /**
@@ -49,7 +50,9 @@ export function createCompletedTicketsPanel(doc, { user, state, loadTickets, set
     const result = state.completed;
     const tickets = result?.tickets ?? [];
     const cards = [];
-    for (const ticket of tickets) cards.push(buildTicketCard(ticket, { showRequester: true, tag: ticket.requester.username === user.username ? TICKETS_TEXT.tagMine : '', formTypes: state.formTypes ?? null }));
+    for (const ticket of tickets) {
+      cards.push(buildTicketCard(ticket, { showRequester: true, tag: ticket.requester.username === user.username ? TICKETS_TEXT.tagMine : '', formTypes: state.formTypes ?? null }));
+    }
     nodes.listCompleted.replaceChildren(...cards);
     nodes.empty.hidden = !result || tickets.length > 0;
     nodes.summary.textContent = result ? describeSummary(result.total, tickets.length, result.limit) : '';

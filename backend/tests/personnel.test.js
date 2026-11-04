@@ -57,7 +57,7 @@ function storeAt(name, options = {}) {
 function adminAt(name) {
   const db = openTicketDatabase(join(scratch, name));
   connections.push(db);
-  return createPersonnelAdmin(db, { departments: departmentService, ledgerSpec: LEAVE_SPEC, clock: /** 固定時間來源。@returns {number} epoch 毫秒。 */ () => Date.UTC(2026, 10, 1) });
+  return createPersonnelAdmin(db, { departments: departmentService, clock: /** 固定時間來源。@returns {number} epoch 毫秒。 */ () => Date.UTC(2026, 10, 1) });
 }
 
 /**
@@ -110,7 +110,7 @@ async function freshDatabaseSeed() {
   const prepared = await store.prepare({ legacyFile: join(scratch, 'none.json') });
   assert.deepEqual(prepared.seeded, { accounts: 17, employees: 16, entitlements: 96 });
   assert.equal((await store.stats()).schemaVersion, SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 4);
+  assert.equal(SCHEMA_VERSION, 8);
   const accounts = store.listAccounts();
   assert.deepEqual(accounts.map(/** 取帳號。@param {object} row 帳號列。@returns {string} 帳號。 */ (row) => row.username), DEMO_ACCOUNTS.map(/** 取帳號。@param {object} row 名冊帳號。@returns {string} 帳號。 */ (row) => row.username));
   assert.deepEqual(store.findAccount('alex.admin'), { username: 'alex.admin', department_id: 'dept-it-1', role: 'ADMIN', active: 1 });
@@ -124,10 +124,21 @@ async function freshDatabaseSeed() {
   admin.setActive('racky.huang', false);
   admin.setDepartment('cindy.wang', 'dept-hr-1');
   store.close();
+  const raw = new Database(join(scratch, 'fresh.db'));
+  /** 讀出帳號的部門名稱。@param {string} username 帳號。@returns {string} 部門名稱。 */
+  const nameOf = (username) => raw.prepare('SELECT department_name FROM accounts WHERE username = ?').get(username).department_name;
+  assert.deepEqual([nameOf('racky.huang'), nameOf('alex.admin'), nameOf('emily.wu')], ['資訊管理一部', '資訊管理一部', '人力資源部'], '開啟資料庫時填入部門的中文名稱，管理員也有');
+  assert.equal(nameOf('cindy.wang'), '人力資源部', '調整部門時同步更新名稱');
+  raw.prepare("UPDATE accounts SET department_name = '舊名稱' WHERE username = 'racky.huang'").run();
+  raw.close();
   const reopened = storeAt('fresh.db');
   assert.deepEqual((await reopened.prepare({ legacyFile: join(scratch, 'none.json') })).seeded, { accounts: 0, employees: 0, entitlements: 0 }, '帳號表不是空的時不再寫入');
   assert.equal(reopened.findAccount('racky.huang').active, 0, '停用狀態不被名冊覆寫');
   assert.equal(reopened.findAccount('cindy.wang').department_id, 'dept-hr-1', '部門調整不被名冊覆寫');
+  const check = new Database(join(scratch, 'fresh.db'), { readonly: true });
+  assert.equal(check.prepare("SELECT department_name FROM accounts WHERE username = 'racky.huang'").get().department_name, '資訊管理一部', '重新開啟時依部門設定檔修正名稱');
+  check.close();
+  assert.deepEqual(Object.keys(reopened.findAccount('racky.huang')), ['username', 'department_id', 'role', 'active'], '程式讀取帳號時不使用部門名稱欄位');
   // 在全新資料庫先以維運腳本新增帳號：之後服務開啟時不寫入示範名冊。
   const own = adminAt('own.db');
   own.add({ username: 'only.person', department: 'dept-it-1', name: '測試員工', employeeNo: 'T-9100', hireDate: '2024-02-29' });
@@ -158,16 +169,19 @@ async function version2Upgrade() {
   store.close();
   const check = new Database(file, { readonly: true });
   connections.push(check);
-  assert.deepEqual(check.pragma('table_info(employees)').map(/** 取欄位名稱。@param {object} column 欄位。@returns {string} 名稱。 */ (column) => column.name), ['username', 'display_name', 'employee_no', 'hire_date']);
-  assert.deepEqual(check.pragma('foreign_key_list(employees)').map(/** 取參照資料表。@param {object} key 外鍵。@returns {string} 資料表。 */ (key) => key.table), ['accounts']);
-  assert.deepEqual(check.pragma('foreign_key_list(leave_entitlements)').map(/** 取參照資料表。@param {object} key 外鍵。@returns {string} 資料表。 */ (key) => key.table), ['employees']);
+  assert.deepEqual(check.pragma('table_info(employees)').map(/** 取欄位名稱。@param {object} column 欄位。@returns {string} 名稱。 */ (column) => column.name), ['employee_no', 'display_name', 'hire_date']);
+  assert.deepEqual(check.pragma('foreign_key_list(accounts)').map(/** 取參照資料表。@param {object} key 外鍵。@returns {string} 資料表。 */ (key) => key.table), ['employees'], '帳號以員工編號參照員工資料');
+  assert.deepEqual(check.pragma('foreign_key_list(leave_entitlements)').map(/** 取參照資料表。@param {object} key 外鍵。@returns {string} 資料表。 */ (key) => `${key.table}.${key.to}`), ['employees.employee_no']);
+  assert.deepEqual(check.prepare('SELECT username, employee_no FROM accounts ORDER BY rowid').all(),
+    [{ username: 'racky.huang', employee_no: 'T-0001' }, { username: 'kevin.ho', employee_no: 'T-0011' }, { username: 'alex.admin', employee_no: null }]);
   check.close();
   const writable = openTicketDatabase(file);
   connections.push(writable);
   assert.throws(/** 嘗試刪除帳號。@returns {void} */ () => writable.prepare("DELETE FROM accounts WHERE username = 'kevin.ho'").run(), /不可刪除/);
-  assert.throws(/** 嘗試替管理員建立員工資料。@returns {void} */ () => writable.prepare("INSERT INTO employees VALUES ('alex.admin', 'x', 'T-X', '2020-01-01')").run(), /管理員/);
-  assert.throws(/** 嘗試建立沒有帳號的員工資料。@returns {void} */ () => writable.prepare("INSERT INTO employees VALUES ('no.account', 'x', 'T-Y', '2020-01-01')").run(), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
-  assert.throws(/** 嘗試寫入格式不符的帳號。@returns {void} */ () => writable.prepare("INSERT INTO accounts VALUES ('Bad.Name', 'dept-it-1', 'USER', 1, 'x', 'x')").run(), { code: 'SQLITE_CONSTRAINT_CHECK' });
+  assert.throws(/** 嘗試讓管理員帶員工編號。@returns {void} */ () => writable.prepare("UPDATE accounts SET employee_no = 'T-0001' WHERE username = 'alex.admin'").run(), { code: 'SQLITE_CONSTRAINT_CHECK' }, '管理員沒有員工資料');
+  assert.throws(/** 嘗試讓帳號參照不存在的員工編號。@returns {void} */ () => writable.prepare("UPDATE accounts SET employee_no = 'T-NONE' WHERE username = 'racky.huang'").run(), { code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
+  assert.throws(/** 嘗試讓兩個帳號共用員工編號。@returns {void} */ () => writable.prepare("UPDATE accounts SET employee_no = 'T-0001' WHERE username = 'kevin.ho'").run(), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+  assert.throws(/** 嘗試寫入格式不符的帳號。@returns {void} */ () => writable.prepare("INSERT INTO accounts (username, department_id, role, active, created_at, updated_at) VALUES ('Bad.Name', 'dept-it-1', 'USER', 1, 'x', 'x')").run(), { code: 'SQLITE_CONSTRAINT_CHECK' });
   writable.close();
 
   const unmapped = createVersion2('v2-unmapped.db', [{ username: 'racky.huang', employeeNo: 'T-0001' }, { username: 'stranger.person', employeeNo: 'T-0999' }]);
@@ -235,14 +249,11 @@ async function personnelOperations() {
 
   assert.deepEqual(admin.grant('racky.huang', '特休', 2026, 100).changes, { entitlement: { leave_type: '特休', year: 2026, from: 6720, to: 100 } });
   assert.equal((await store.ledgerBalances(LEAVE_SPEC, 'racky.huang', 2026)).balances[2].granted, 100);
-  const [granted] = await store.ledgerLog(LEAVE_SPEC, { username: 'racky.huang', period: 2026 });
-  assert.deepEqual([granted.event, granted.category, granted.amount, granted.remaining_before, granted.remaining_after, granted.by_username, granted.comment],
-    ['GRANTED', '特休', -6620, 6720, 100, 'scripts/personnel.js', '年度額度 6720 → 100 分鐘'], '改年度額度記一列 GRANTED，前後剩餘差額等於額度的增減');
   await store.insert({ ticket_id: 'TK-grant-check', status: 'PENDING', created_at: '2026-11-01T00:00:00.000Z', requester: { username: 'racky.huang' },
-    form: { id: 'leave', ledger: { category: '特休', amount: 60, period: 2026, start: null, end: null } }, history: [] }, { ledgerSpecOf: /** 請假規格。@returns {object} 規格。 */ () => LEAVE_SPEC });
+    form: { id: 'leave', ledger: { category: '特休', amount: 60, period: 2026, start: null, end: null } }, history: [] });
   admin.grant('racky.huang', '特休', 2026, 200);
-  const regrant = (await store.ledgerLog(LEAVE_SPEC, { username: 'racky.huang', period: 2026 })).at(-1);
-  assert.deepEqual([regrant.event, regrant.amount, regrant.remaining_before, regrant.remaining_after], ['GRANTED', 100, 40, 140], 'GRANTED 的前後剩餘即時計算，包含待簽核的請假單');
+  const [, , special] = (await store.ledgerBalances(LEAVE_SPEC, 'racky.huang', 2026)).balances;
+  assert.deepEqual([special.granted, special.pending, special.remaining], [200, 60, 200], '剩餘只由額度與人資調整決定，待簽核的請假單只列為參考');
   const added = admin.add({ username: 'new.person', department: 'dept-hr-1', name: '測試員工', employeeNo: 'T-9200', hireDate: '2025-01-01' });
   assert.deepEqual(added.changes.employee_profile, { from: false, to: true });
   assert.deepEqual(handlers('dept-hr-1'), ['emily.wu', 'frank.liu', 'new.person']);

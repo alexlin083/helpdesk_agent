@@ -173,18 +173,20 @@ test('轉單：權限、目標驗證、處理人歸屬與轉單後的可見範�
  * @returns {void}
  */
 function completedQuery() {
-  assert.deepEqual(parseCompletedQuery({}), { status: '', keyword: '', from: '', to: '', limit: 100 });
-  assert.deepEqual(parseCompletedQuery({ status: 'REJECTED', q: ' vpn ', from: '2026-10-01', to: '2026-10-31', limit: '20' }), { status: 'REJECTED', keyword: 'vpn', from: '2026-10-01', to: '2026-10-31', limit: 20 });
+  assert.deepEqual(parseCompletedQuery({}), { status: '', keyword: '', from: '', to: '', limit: 100, scope: '' });
+  assert.deepEqual(parseCompletedQuery({ status: 'REJECTED', q: ' vpn ', from: '2026-10-01', to: '2026-10-31', limit: '20' }), { status: 'REJECTED', keyword: 'vpn', from: '2026-10-01', to: '2026-10-31', limit: 20, scope: '' });
+  assert.equal(parseCompletedQuery({ scope: 'department' }).scope, 'department');
   for (const [query, pattern] of [[{ status: 'PENDING' }, /status/], [{ q: 'a'.repeat(101) }, /q 最多/], [{ from: '2026/10/01' }, /from/], [{ to: '2026-13-40' }, /to/],
     [{ from: '2026-10-02', to: '2026-10-01' }, /from 不可晚於 to/], [{ limit: '0' }, /limit/], [{ limit: '501' }, /limit/], [{ limit: 'x' }, /limit/],
     [{ status: ['APPROVED', 'REJECTED'] }, /status 只能提供一次/], [{ q: ['vpn', 'erp'] }, /q 只能提供一次/], [{ from: ['2026-10-01'] }, /from 只能提供一次/],
     [{ to: { day: '2026-10-01' } }, /to 只能提供一次/], [{ limit: ['20', '30'] }, /limit 只能提供一次/], [{ from: '2024-02-31' }, /from/], [{ to: '2026-02-29' }, /to/],
-    [{ from: '2026-04-31' }, /from/], [{ limit: '0x10' }, /limit/], [{ limit: '1e2' }, /limit/], [{ limit: '+5' }, /limit/], [{ limit: ' 5' }, /limit/], [{ limit: '5.0' }, /limit/]]) {
+    [{ from: '2026-04-31' }, /from/], [{ limit: '0x10' }, /limit/], [{ limit: '1e2' }, /limit/], [{ limit: '+5' }, /limit/], [{ limit: ' 5' }, /limit/], [{ limit: '5.0' }, /limit/],
+    [{ scope: 'all' }, /scope 必須是 mine 或 department/], [{ scope: ['mine', 'department'] }, /scope 只能提供一次/]]) {
     /** 嘗試無效條件。@returns {object} 條件。@throws {HttpError} 400。 */
     function parse() { return parseCompletedQuery(query); }
     assert.throws(parse, pattern);
   }
-  assert.deepEqual(parseCompletedQuery({ from: '2024-02-29', to: '2024-03-01', limit: '500' }), { status: '', keyword: '', from: '2024-02-29', to: '2024-03-01', limit: 500 }, '閏日有效');
+  assert.deepEqual(parseCompletedQuery({ from: '2024-02-29', to: '2024-03-01', limit: '500' }), { status: '', keyword: '', from: '2024-02-29', to: '2024-03-01', limit: 500, scope: '' }, '閏日有效');
   assert.equal(parseCompletedQuery({ limit: '007' }).limit, 7, '十進位前導零仍是整數');
   const base = { status: 'APPROVED', ticket_id: 'TK-1', subject: 'VPN 申請', content: '新人', updated_at: '2026-10-22T16:30:00.000Z',
     requester: { username: 'erp.user' }, decision: { at: '2026-10-22T16:30:00.000Z', by_username: 'one.it', comment: '已安排' }, handler: { name: 'one.it' } };
@@ -242,6 +244,8 @@ async function completedList() {
     assert.equal((await call(`${base}/tickets/completed?to=2000-01-01`, one)).body.total, 0);
     assert.deepEqual((await call(`${base}/tickets/completed`, erp)).body.tickets, [], '其他部門、非提單人看不到');
     assert.equal((await call(`${base}/tickets/completed`, hr)).body.total, 4, '提單人看得到自己已結案的單');
+    assert.equal((await call(`${base}/tickets/completed?scope=mine`, hr)).body.total, 4, 'scope=mine 只看本人提出的');
+    assert.equal((await call(`${base}/tickets/completed?scope=department`, hr)).body.total, 0, 'scope=department 只看送達本人部門的，不含自己送到其他部門的單');
     assert.equal((await call(`${base}/tickets/completed?status=REJECTED`, hr)).body.total, 2);
     assert.equal((await call(`${base}/tickets/completed?status=PENDING`, one)).status, 400);
     assert.equal((await call(`${base}/tickets/completed?limit=999`, one)).status, 400);

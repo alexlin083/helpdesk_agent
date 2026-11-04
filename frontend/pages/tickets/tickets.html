@@ -40,33 +40,43 @@
       <div class="tickets-head">
         <div>
           <h1 id="page-title">狀態追蹤</h1>
-          <p class="intro">追蹤還在進行中的需求單：等待簽核的、等你簽核的、被退回的；結案的單在「已完成」查詢</p>
+          <p class="intro">「申請表單」是你自己提出的單；「待辦表單」是送到你部門、等待處理的單；「已完成表單」查詢你部門已結案的單</p>
         </div>
         <button id="refresh-button" class="secondary-button" type="button">重新整理</button>
       </div>
 
       <div class="tabs" role="tablist" aria-label="需求單清單">
-        <button id="tab-tracking" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-tracking">表單追蹤 <span id="count-tracking" class="tab-count"></span></button>
-        <button id="tab-completed" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-completed">已完成</button>
+        <button id="tab-mine" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-mine">申請表單 <span id="count-mine" class="tab-count"></span></button>
+        <button id="tab-todo" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-todo">待辦表單 <span id="count-todo" class="tab-count"></span></button>
+        <button id="tab-done" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-done">已完成表單</button>
       </div>
 
-      <section id="panel-tracking" class="tab-panel" role="tabpanel" aria-labelledby="tab-tracking">
-        <p id="notice-tracking" class="notice" role="status" hidden></p>
-        <section class="tracking-section" aria-labelledby="pending-title">
-          <h2 id="pending-title" class="section-title">待簽核 <span id="count-pending" class="tab-count"></span></h2>
-          <p id="pending-hint" class="department-title"></p>
-          <p id="empty-pending" class="empty" hidden>目前沒有等待簽核的需求單，<a href="../propose/propose.html">前往提出需求單</a></p>
-          <div id="list-pending" class="ticket-list" aria-live="polite"></div>
+      <section id="panel-mine" class="tab-panel" role="tabpanel" aria-labelledby="tab-mine">
+        <p id="notice-mine" class="notice" role="status" hidden></p>
+        <div class="view-switch" role="group" aria-label="申請表單的狀態">
+          <button id="mine-view-pending" class="view-button" type="button" aria-pressed="true" aria-controls="section-mine-pending">待簽核 <span id="count-mine-pending" class="tab-count"></span></button>
+          <button id="mine-view-done" class="view-button" type="button" aria-pressed="false" aria-controls="section-mine-done">已完成 <span id="count-mine-done" class="tab-count"></span></button>
+        </div>
+        <section id="section-mine-pending" class="tracking-section" aria-label="待簽核">
+          <p class="department-title">你提出、還在等待簽核的單；被退回的單也列在這裡，看過原因後可帶入原本內容重新提出</p>
+          <p id="empty-mine-pending" class="empty" hidden>沒有等待簽核的申請，<a href="../propose/propose.html">前往提出需求單</a></p>
+          <div id="list-mine-pending" class="ticket-list" aria-live="polite"></div>
         </section>
-        <section class="tracking-section" aria-labelledby="rejected-title">
-          <h2 id="rejected-title" class="section-title">已退回 <span id="count-rejected" class="tab-count"></span></h2>
-          <p class="department-title">你提出但被退回的需求單；看過退回原因後，可帶入原本內容重新提出</p>
-          <p id="empty-rejected" class="empty" hidden>沒有被退回的需求單</p>
-          <div id="list-rejected" class="ticket-list" aria-live="polite"></div>
+        <section id="section-mine-done" class="tracking-section" aria-label="已完成" hidden>
+          <p class="department-title">你提出、已簽核或已取消的單</p>
+          <p id="empty-mine-done" class="empty" hidden>沒有已完成的申請</p>
+          <div id="list-mine-done" class="ticket-list" aria-live="polite"></div>
         </section>
       </section>
 
-      <section id="panel-completed" class="tab-panel" role="tabpanel" aria-labelledby="tab-completed" hidden>
+      <section id="panel-todo" class="tab-panel" role="tabpanel" aria-labelledby="tab-todo" hidden>
+        <p id="notice-todo" class="notice" role="status" hidden></p>
+        <p id="todo-hint" class="department-title"></p>
+        <p id="empty-todo" class="empty" hidden>目前沒有等待你部門處理的單</p>
+        <div id="list-todo" class="ticket-list" aria-live="polite"></div>
+      </section>
+
+      <section id="panel-done" class="tab-panel" role="tabpanel" aria-labelledby="tab-done" hidden>
         <p id="completed-title" class="department-title"></p>
         <form id="filter-form" class="filter-form" novalidate>
           <div class="filter-field filter-keyword">

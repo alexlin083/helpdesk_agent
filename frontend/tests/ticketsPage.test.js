@@ -68,21 +68,31 @@ function buildTicketsDom(doc) {
   for (const id of ['account-avatar', 'account-name', 'account-id', 'account-department']) nodes[id] = add(doc, body, 'span', id);
   nodes.logout = add(doc, body, 'button', 'logout-button');
   nodes.refresh = add(doc, body, 'button', 'refresh-button');
-  nodes.tabTracking = add(doc, body, 'button', 'tab-tracking');
-  nodes.tabCompleted = add(doc, body, 'button', 'tab-completed');
-  nodes.countTracking = add(doc, nodes.tabTracking, 'span', 'count-tracking');
-  nodes.panelTracking = add(doc, body, 'section', 'panel-tracking');
-  nodes.noticeTracking = add(doc, nodes.panelTracking, 'p', 'notice-tracking', { hidden: true });
-  nodes.countPending = add(doc, nodes.panelTracking, 'span', 'count-pending');
-  nodes.pendingHint = add(doc, nodes.panelTracking, 'p', 'pending-hint');
-  nodes.emptyPending = add(doc, nodes.panelTracking, 'p', 'empty-pending', { hidden: true });
-  nodes.listPending = add(doc, nodes.panelTracking, 'div', 'list-pending');
-  nodes.countRejected = add(doc, nodes.panelTracking, 'span', 'count-rejected');
-  nodes.emptyRejected = add(doc, nodes.panelTracking, 'p', 'empty-rejected', { hidden: true });
-  nodes.listRejected = add(doc, nodes.panelTracking, 'div', 'list-rejected');
-  nodes.panelCompleted = add(doc, body, 'section', 'panel-completed', { hidden: true });
-  nodes.completedTitle = add(doc, nodes.panelCompleted, 'p', 'completed-title');
-  nodes.filterForm = add(doc, nodes.panelCompleted, 'form', 'filter-form');
+  nodes.tabMine = add(doc, body, 'button', 'tab-mine');
+  nodes.tabTodo = add(doc, body, 'button', 'tab-todo');
+  nodes.tabDone = add(doc, body, 'button', 'tab-done');
+  nodes.countMine = add(doc, nodes.tabMine, 'span', 'count-mine');
+  nodes.countTodo = add(doc, nodes.tabTodo, 'span', 'count-todo');
+  nodes.panelMine = add(doc, body, 'section', 'panel-mine');
+  nodes.noticeMine = add(doc, nodes.panelMine, 'p', 'notice-mine', { hidden: true });
+  nodes.mineViewPending = add(doc, nodes.panelMine, 'button', 'mine-view-pending');
+  nodes.mineViewDone = add(doc, nodes.panelMine, 'button', 'mine-view-done');
+  nodes.countMinePending = add(doc, nodes.mineViewPending, 'span', 'count-mine-pending');
+  nodes.countMineDone = add(doc, nodes.mineViewDone, 'span', 'count-mine-done');
+  nodes.sectionMinePending = add(doc, nodes.panelMine, 'section', 'section-mine-pending');
+  nodes.emptyMinePending = add(doc, nodes.sectionMinePending, 'p', 'empty-mine-pending', { hidden: true });
+  nodes.listMinePending = add(doc, nodes.sectionMinePending, 'div', 'list-mine-pending');
+  nodes.sectionMineDone = add(doc, nodes.panelMine, 'section', 'section-mine-done', { hidden: true });
+  nodes.emptyMineDone = add(doc, nodes.sectionMineDone, 'p', 'empty-mine-done', { hidden: true });
+  nodes.listMineDone = add(doc, nodes.sectionMineDone, 'div', 'list-mine-done');
+  nodes.panelTodo = add(doc, body, 'section', 'panel-todo', { hidden: true });
+  nodes.noticeTodo = add(doc, nodes.panelTodo, 'p', 'notice-todo', { hidden: true });
+  nodes.todoHint = add(doc, nodes.panelTodo, 'p', 'todo-hint');
+  nodes.emptyTodo = add(doc, nodes.panelTodo, 'p', 'empty-todo', { hidden: true });
+  nodes.listTodo = add(doc, nodes.panelTodo, 'div', 'list-todo');
+  nodes.panelDone = add(doc, body, 'section', 'panel-done', { hidden: true });
+  nodes.completedTitle = add(doc, nodes.panelDone, 'p', 'completed-title');
+  nodes.filterForm = add(doc, nodes.panelDone, 'form', 'filter-form');
   nodes.filterKeyword = add(doc, nodes.filterForm, 'input', 'filter-q');
   nodes.filterStatus = add(doc, nodes.filterForm, 'select', 'filter-status');
   nodes.filterFrom = add(doc, nodes.filterForm, 'input', 'filter-from');
@@ -95,10 +105,10 @@ function buildTicketsDom(doc) {
   }
   nodes.filterReset = add(doc, nodes.filterForm, 'button', 'filter-reset');
   nodes.filterSubmit = add(doc, nodes.filterForm, 'button', 'filter-submit');
-  nodes.summary = add(doc, nodes.panelCompleted, 'p', 'completed-summary');
-  nodes.noticeCompleted = add(doc, nodes.panelCompleted, 'p', 'notice-completed', { hidden: true });
-  nodes.emptyCompleted = add(doc, nodes.panelCompleted, 'p', 'empty-completed', { hidden: true });
-  nodes.listCompleted = add(doc, nodes.panelCompleted, 'div', 'list-completed');
+  nodes.summary = add(doc, nodes.panelDone, 'p', 'completed-summary');
+  nodes.noticeCompleted = add(doc, nodes.panelDone, 'p', 'notice-completed', { hidden: true });
+  nodes.emptyCompleted = add(doc, nodes.panelDone, 'p', 'empty-completed', { hidden: true });
+  nodes.listCompleted = add(doc, nodes.panelDone, 'div', 'list-completed');
   return nodes;
 }
 
@@ -138,9 +148,10 @@ test.afterEach(cleanup);
  */
 function pageStructure() {
   const ids = pageIds(new URL('../pages/tickets/tickets.html', import.meta.url));
-  for (const id of ['account-avatar', 'account-name', 'account-id', 'account-department', 'logout-button', 'refresh-button', 'tab-tracking', 'tab-completed', 'count-tracking',
-    'panel-tracking', 'notice-tracking', 'count-pending', 'pending-hint', 'empty-pending', 'list-pending', 'count-rejected', 'empty-rejected', 'list-rejected',
-    'panel-completed', 'completed-title', 'filter-form', 'filter-q', 'filter-status', 'filter-from', 'filter-to', 'filter-reset', 'filter-submit',
+  for (const id of ['account-avatar', 'account-name', 'account-id', 'account-department', 'logout-button', 'refresh-button', 'tab-mine', 'tab-todo', 'tab-done',
+    'count-mine', 'count-todo', 'panel-mine', 'notice-mine', 'mine-view-pending', 'mine-view-done', 'count-mine-pending', 'count-mine-done', 'section-mine-pending',
+    'empty-mine-pending', 'list-mine-pending', 'section-mine-done', 'empty-mine-done', 'list-mine-done', 'panel-todo', 'notice-todo', 'todo-hint', 'empty-todo', 'list-todo',
+    'panel-done', 'completed-title', 'filter-form', 'filter-q', 'filter-status', 'filter-from', 'filter-to', 'filter-reset', 'filter-submit',
     'completed-summary', 'notice-completed', 'empty-completed', 'list-completed']) {
     assert.ok(ids.has(id), `tickets.html 缺少 #${id}`);
   }
@@ -210,7 +221,9 @@ async function cardRendering() {
 test('需求單卡片的摘要、欄位、簽核表單、轉單選單與重新提出', cardRendering);
 
 /**
- * 驗證表單追蹤的分區：待簽核先列部門的單再列我的單（同一張只列一次並保留簽核操作），已退回只列我被退回的單；已簽核與已取消的單不出現；計數、空狀態、分頁切換與重新整理。
+ * 驗證三個分頁：申請表單只列本人的單，待簽核區含等待中與被退回的單（被退回的可重新提出），已完成區為已簽核與已取消（可切換）；
+ * 待辦表單列送達本部門的待簽核單（含本人提出、送到本部門的單，標示「我提出的」且不能簽核，取消為提單人取消）；
+ * 已完成表單在切換前不查詢；計數、空狀態、hash（#todo、#done 與舊網址 #completed）與重新整理。
  * @returns {Promise<void>}
  */
 async function trackingSections() {
@@ -239,49 +252,55 @@ async function trackingSections() {
   await page.ready;
   assert.equal(doc.body.hidden, false);
   assert.equal(doc.querySelector('#account-department').textContent, '資訊管理一部');
-  assert.ok(nodes.pendingHint.textContent.includes('資訊管理一部'));
+  assert.equal(nodes.tabMine.getAttribute('aria-selected'), 'true', '預設開啟申請表單');
+  assert.deepEqual(cardIds(nodes.listMinePending), ['TK-B', 'TK-R', 'TK-S'], '待簽核區含等待中與被退回的單');
+  assert.equal(nodes.listMinePending.children[1].querySelector('.resubmit-button') !== null, true, '被退回的單可重新提出');
+  assert.equal(nodes.listMinePending.children[0].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancel);
+  assert.equal(nodes.listMinePending.children[0].querySelector('.approve-button'), null, '申請表單沒有簽核按鈕');
+  assert.deepEqual(cardIds(nodes.listMineDone), ['TK-A', 'TK-X'], '已完成區為已簽核與已取消');
+  assert.equal(nodes.listMineDone.children[0].querySelector('.decision-form'), null);
+  assert.deepEqual([nodes.countMine.textContent, nodes.countMinePending.textContent, nodes.countMineDone.textContent], ['3', '3', '2']);
+  assert.equal(nodes.sectionMineDone.hidden, true);
+  await nodes.mineViewDone.click();
+  assert.deepEqual([nodes.sectionMinePending.hidden, nodes.sectionMineDone.hidden], [true, false]);
+  assert.equal(nodes.mineViewDone.getAttribute('aria-pressed'), 'true');
+  await nodes.mineViewPending.click();
+  assert.equal(nodes.sectionMinePending.hidden, false);
+  assert.ok(nodes.todoHint.textContent.includes('資訊管理一部'));
+  assert.deepEqual(cardIds(nodes.listTodo), ['TK-C', 'TK-S'], '待辦表單只列部門的待簽核單，含本人送到本部門的單');
+  assert.deepEqual(nodes.listTodo.children.map((card) => card.querySelector('.ticket-tag').textContent), [TICKETS_TEXT.tagDepartment, TICKETS_TEXT.tagMine]);
+  assert.equal(nodes.listTodo.children[1].querySelector('.approve-button'), null, '自己提出的單送到自己部門時不顯示簽核，需由同部門其他成員簽核');
+  assert.equal(nodes.listTodo.children[1].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancel, '自己的單送到自己部門時是提單人取消');
+  assert.equal(nodes.listTodo.children[0].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancelForRequester, '別人的單是替提單人取消');
+  assert.equal(nodes.countTodo.textContent, '2');
   assert.ok(nodes.completedTitle.textContent.includes('最新 100 筆'));
-  const pendingCards = nodes.listPending.children;
-  assert.deepEqual(pendingCards.map((card) => card.getAttribute('data-ticket-id')), ['TK-C', 'TK-S', 'TK-B'], '部門的待簽核在前，我送出的在後，重複的只列一次');
-  assert.deepEqual(pendingCards.map((card) => card.querySelector('.ticket-tag').textContent), [TICKETS_TEXT.tagDepartment, TICKETS_TEXT.tagDepartment, TICKETS_TEXT.tagMine]);
-  assert.equal(pendingCards[1].querySelector('.approve-button'), null, '自己提出的單送到自己部門時不顯示簽核，需由同部門其他成員簽核');
-  assert.equal(pendingCards[1].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancel, '自己的單送到自己部門時是提單人取消');
-  assert.equal(pendingCards[0].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancelForRequester, '別人的單是替提單人取消');
-  assert.equal(pendingCards[2].querySelector('.approve-button'), null, '我送出的單沒有簽核按鈕');
-  assert.equal(pendingCards[2].querySelector('.cancel-button').textContent, TICKETS_TEXT.cancel);
-  assert.equal(nodes.countPending.textContent, '3');
-  assert.deepEqual(nodes.listRejected.children.map((card) => card.getAttribute('data-ticket-id')), ['TK-R'], '已退回只列我被退回的單');
-  assert.ok(nodes.listRejected.children[0].querySelector('.resubmit-button'));
-  assert.equal(nodes.countRejected.textContent, '1');
-  assert.equal(nodes.countTracking.textContent, '4', '分頁計數是兩區總和');
-  assert.equal(nodes.emptyPending.hidden, true);
-  assert.equal(nodes.emptyRejected.hidden, true);
-  assert.equal(completedLoads, 0, '已完成分頁在切換前不查詢');
-  assert.equal(nodes.tabTracking.getAttribute('aria-selected'), 'true');
-  await nodes.tabCompleted.click();
+  assert.equal(completedLoads, 0, '已完成表單在切換前不查詢');
+  await nodes.tabTodo.click();
+  assert.deepEqual([nodes.panelMine.hidden, nodes.panelTodo.hidden, nodes.panelDone.hidden], [true, false, true]);
+  await nodes.tabDone.click();
   await page.state.completedRequest;
-  assert.equal(nodes.panelTracking.hidden, true);
-  assert.equal(nodes.panelCompleted.hidden, false);
+  assert.equal(nodes.panelDone.hidden, false);
   assert.equal(completedLoads, 1);
-  await nodes.tabTracking.click();
-  assert.equal(nodes.panelTracking.hidden, false);
+  await nodes.tabMine.click();
+  assert.equal(nodes.panelMine.hidden, false);
   mineList.length = 0;
   departmentTickets.tickets.length = 0;
   await nodes.refresh.click();
   assert.equal(loads, 2);
-  assert.equal(completedLoads, 2, '看過已完成後重新整理也會一起查');
-  assert.equal(nodes.listPending.children.length, 0);
-  assert.equal(nodes.emptyPending.hidden, false);
-  assert.equal(nodes.emptyRejected.hidden, false);
-  assert.equal(nodes.countTracking.textContent, '');
-  assert.equal(nodes.countPending.textContent, '');
-  const win = createFakeWindow();
-  win.location.hash = '#completed';
-  const deep = mountPage({}, win);
-  await deep.page.ready;
-  assert.equal(deep.nodes.tabCompleted.getAttribute('aria-selected'), 'true');
+  assert.equal(completedLoads, 2, '看過已完成表單後重新整理也會一起查');
+  assert.equal(nodes.listMinePending.children.length, 0);
+  assert.deepEqual([nodes.emptyMinePending.hidden, nodes.emptyMineDone.hidden, nodes.emptyTodo.hidden], [false, false, false]);
+  assert.deepEqual([nodes.countMine.textContent, nodes.countTodo.textContent], ['', '']);
+  for (const [hash, tab] of [['#todo', 'tabTodo'], ['#done', 'tabDone'], ['#completed', 'tabDone']]) {
+    cleanup();
+    const win = createFakeWindow();
+    win.location.hash = hash;
+    const deep = mountPage({}, win);
+    await deep.page.ready;
+    assert.equal(deep.nodes[tab].getAttribute('aria-selected'), 'true', `${hash} 開啟對應分頁`);
+  }
 }
-test('表單追蹤的待簽核與已退回分區、計數、分頁切換與重新整理', trackingSections);
+test('申請表單、待辦表單與已完成表單的分區、計數、切換與重新整理', trackingSections);
 
 /**
  * 驗證已完成分頁：篩選條件送出、常用區間、清除條件、摘要與空狀態、日期順序檢查，以及我提出的單帶標籤。
@@ -301,9 +320,9 @@ async function completedTab() {
     },
   });
   await page.ready;
-  await nodes.tabCompleted.click();
+  await nodes.tabDone.click();
   await page.state.completedRequest;
-  assert.deepEqual(received.at(-1), { status: '', q: '', from: '', to: '' });
+  assert.deepEqual(received.at(-1), { status: '', q: '', from: '', to: '', scope: 'department' });
   assert.equal(nodes.listCompleted.children.length, 2);
   assert.equal(nodes.summary.textContent, '符合條件 150 筆，顯示最新 2 筆（上限 100 筆）');
   assert.equal(nodes.listCompleted.children[0].querySelector('.decision-form'), null, '已完成的卡片沒有簽核表單');
@@ -312,7 +331,7 @@ async function completedTab() {
   nodes.filterKeyword.value = ' VPN ';
   nodes.filterStatus.value = 'REJECTED';
   await nodes.filterForm.dispatch('submit');
-  assert.deepEqual(received.at(-1), { status: 'REJECTED', q: ' VPN ', from: '', to: '' });
+  assert.deepEqual(received.at(-1), { status: 'REJECTED', q: ' VPN ', from: '', to: '', scope: 'department' });
   assert.equal(nodes.listCompleted.children.length, 0);
   assert.equal(nodes.emptyCompleted.hidden, false);
   assert.equal(nodes.summary.textContent, '符合條件 0 筆');
@@ -323,7 +342,7 @@ async function completedTab() {
   assert.match(last.to, /^\d{4}-\d{2}-\d{2}$/);
   assert.ok(last.from <= last.to);
   await nodes.filterReset.click();
-  assert.deepEqual(received.at(-1), { status: '', q: '', from: '', to: '' });
+  assert.deepEqual(received.at(-1), { status: '', q: '', from: '', to: '', scope: 'department' });
   assert.equal(nodes.filterKeyword.value, '');
   nodes.filterFrom.value = '2026-10-10';
   nodes.filterTo.value = '2026-10-01';
@@ -336,7 +355,7 @@ test('已完成分頁的篩選、常用區間、摘要與標籤', completedTab);
 
 /**
  * 驗證簽核、退回與轉單：呼叫服務、成功後重新載入並顯示提示；備註過長與一般服務錯誤顯示在卡片內；
- * 409 已簽核過與 403 已無權限（例如同事已把單轉走）時改在表單追蹤上方顯示提示並重新整理清單（原卡片被新卡片取代）。
+ * 409 已簽核過與 403 已無權限（例如同事已把單轉走）時改在待辦表單上方顯示提示並重新整理清單（原卡片被新卡片取代）。
  * @param {import('node:test').TestContext} context mock 管理器。
  * @returns {Promise<void>}
  */
@@ -364,7 +383,7 @@ async function decisionsAndTransfers(context) {
     },
   });
   await page.ready;
-  let card = nodes.listPending.children[0];
+  let card = nodes.listTodo.children[0];
   let comment = card.querySelector('textarea');
   comment.value = 'a'.repeat(201);
   await card.querySelector('.approve-button').click();
@@ -373,11 +392,11 @@ async function decisionsAndTransfers(context) {
   comment.value = 'boom';
   const loadsBefore = departmentLoads;
   await card.querySelector('.approve-button').click();
-  assert.equal(nodes.noticeTracking.textContent, '這張需求單已經簽核過，請重新整理清單', '409 的提示顯示在表單追蹤上方');
-  assert.equal(nodes.noticeTracking.hidden, false);
+  assert.equal(nodes.noticeTodo.textContent, '這張需求單已經簽核過，請重新整理清單', '409 的提示顯示在待辦表單上方');
+  assert.equal(nodes.noticeTodo.hidden, false);
   assert.equal(departmentLoads, loadsBefore + 1, '409 後重新整理清單');
-  assert.notEqual(nodes.listPending.children[0], card, '重新繪製取代原卡片');
-  card = nodes.listPending.children[0];
+  assert.notEqual(nodes.listTodo.children[0], card, '重新繪製取代原卡片');
+  card = nodes.listTodo.children[0];
   comment = card.querySelector('textarea');
   assert.equal(card.querySelector('.approve-button').disabled, false);
   const errors = context.mock.method(console, 'error', () => {});
@@ -395,10 +414,10 @@ async function decisionsAndTransfers(context) {
   comment.value = 'forbidden';
   const beforeForbidden = departmentLoads;
   await card.querySelector('.transfer-button').click();
-  assert.equal(nodes.noticeTracking.textContent, '只有送達部門的成員可以轉這張需求單', '403（例如同事已轉走）的提示顯示在表單追蹤上方');
+  assert.equal(nodes.noticeTodo.textContent, '只有送達部門的成員可以轉這張需求單', '403（例如同事已轉走）的提示顯示在待辦表單上方');
   assert.equal(departmentLoads, beforeForbidden + 1, '403 後重新整理清單');
-  assert.notEqual(nodes.listPending.children[0], card, '403 後以新卡片取代過期的卡片');
-  card = nodes.listPending.children[0];
+  assert.notEqual(nodes.listTodo.children[0], card, '403 後以新卡片取代過期的卡片');
+  card = nodes.listTodo.children[0];
   comment = card.querySelector('textarea');
   assert.equal(card.querySelector('.decision-error').textContent, '', '過期錯誤不留在卡片內');
   card.querySelector('.transfer-department').value = 'dept-it-2';
@@ -407,17 +426,17 @@ async function decisionsAndTransfers(context) {
   comment.value = ' AI 判斷錯誤 ';
   await card.querySelector('.transfer-button').click();
   assert.deepEqual(calls.at(-1), ['transfer', 'TK-P', 'dept-it-2', 'h-2', ' AI 判斷錯誤 ']);
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.transferred);
-  assert.equal(nodes.listPending.children.length, 0, '轉出後從待簽核消失');
-  assert.equal(nodes.emptyPending.hidden, false);
+  assert.equal(nodes.noticeTodo.textContent, TICKETS_TEXT.transferred);
+  assert.equal(nodes.listTodo.children.length, 0, '轉出後從待簽核消失');
+  assert.equal(nodes.emptyTodo.hidden, false);
   tickets.push(sampleTicket({ ticket_id: 'TK-Q' }));
   await nodes.refresh.click();
-  const next = nodes.listPending.children[0];
+  const next = nodes.listTodo.children[0];
   next.querySelector('textarea').value = ' 已安排 ';
   await next.querySelector('.approve-button').click();
   assert.deepEqual(calls.at(-1), ['decide', 'TK-Q', 'APPROVE', ' 已安排 ']);
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.decided);
-  assert.equal(nodes.listPending.children.length, 0, '簽核後不再出現在待簽核');
+  assert.equal(nodes.noticeTodo.textContent, TICKETS_TEXT.decided);
+  assert.equal(nodes.listTodo.children.length, 0, '簽核後不再出現在待簽核');
   assert.deepEqual(win.redirects, []);
   assert.deepEqual(auth.calls, []);
 }
@@ -438,15 +457,16 @@ async function loadFailures(context) {
     async loadDepartments() { throw new TicketServiceError(MESSAGES.notFound, { status: 404, code: 'NOT_FOUND' }); },
   });
   await failed.page.ready;
-  assert.equal(failed.nodes.noticeTracking.textContent, MESSAGES.listTimeout);
-  assert.equal(failed.nodes.listPending.children.length, 1, '我的需求單失敗時部門的單仍顯示');
-  assert.equal(failed.nodes.listPending.children[0].querySelector('.transfer-department').disabled, true, '名單失敗時轉單停用');
-  assert.equal(failed.nodes.listPending.children[0].querySelector('.approve-button').disabled, false, '仍可簽核');
+  assert.equal(failed.nodes.noticeMine.textContent, MESSAGES.listTimeout, '我的需求單失敗的提示在申請表單');
+  assert.equal(failed.nodes.noticeTodo.hidden, true, '部門清單成功時待辦表單不顯示錯誤');
+  assert.equal(failed.nodes.listTodo.children.length, 1, '我的需求單失敗時部門的單仍顯示');
+  assert.equal(failed.nodes.listTodo.children[0].querySelector('.transfer-department').disabled, true, '名單失敗時轉單停用');
+  assert.equal(failed.nodes.listTodo.children[0].querySelector('.approve-button').disabled, false, '仍可簽核');
   cleanup();
   const errors = context.mock.method(console, 'error', () => {});
   const crashed = mountPage({ loadMyTickets: async () => { throw new Error('bug'); } });
   await crashed.page.ready;
-  assert.equal(crashed.nodes.noticeTracking.textContent, TICKETS_TEXT.unexpected);
+  assert.equal(crashed.nodes.noticeMine.textContent, TICKETS_TEXT.unexpected);
   assert.equal(errors.mock.callCount(), 1);
   cleanup();
   const expired = mountPage({ loadDepartmentTickets: async () => { throw new TicketServiceError(MESSAGES.loginRequired, { status: 401, code: 'UNAUTHORIZED' }); } });
@@ -481,7 +501,7 @@ async function actionsRedirectOnExpiredLogin() {
     };
     const { page, nodes, win, auth } = mountPage(services);
     await page.ready;
-    const card = nodes.listPending.children[0];
+    const card = nodes.listTodo.children[0];
     if (prepare === 'transfer') {
       card.querySelector('.transfer-department').value = 'dept-it-2';
       await card.querySelector('.transfer-department').dispatch('change');
@@ -500,7 +520,7 @@ async function actionsRedirectOnExpiredLogin() {
     cancelTicket: expired,
   });
   await page.ready;
-  await nodes.listPending.children[0].querySelector('.cancel-button').click();
+  await nodes.listMinePending.children[0].querySelector('.cancel-button').click();
   assert.deepEqual(win.redirects, [PAGE_URLS.login], '取消遇到登入失效導回登入頁');
   assert.deepEqual(auth.calls, ['logout']);
   cleanup();
@@ -530,23 +550,24 @@ async function cancellations() {
     },
   });
   await page.ready;
-  assert.equal(nodes.listPending.children.length, 2);
-  let mineCard = nodes.listPending.children[1];
+  assert.deepEqual([nodes.listMinePending.children.length, nodes.listTodo.children.length], [1, 1]);
+  let mineCard = nodes.listMinePending.children[0];
   assert.equal(mineCard.querySelector('.approve-button'), null, '提單人的卡片沒有簽核按鈕');
   assert.equal(mineCard.querySelector('.transfer-department'), null, '提單人的卡片沒有轉單');
   assert.equal(mineCard.querySelector('.cancel-button').textContent, TICKETS_TEXT.cancel);
   mineCard.querySelector('textarea').value = 'boom';
   await mineCard.querySelector('.cancel-button').click();
-  assert.equal(nodes.noticeTracking.textContent, '這張需求單已經取消', '409 的提示顯示在表單追蹤上方並重新整理');
-  assert.notEqual(nodes.listPending.children[1], mineCard, '重新整理後換成新卡片');
-  mineCard = nodes.listPending.children[1];
+  assert.equal(nodes.noticeMine.textContent, '這張需求單已經取消', '409 的提示顯示在申請表單上方並重新整理');
+  assert.notEqual(nodes.listMinePending.children[0], mineCard, '重新整理後換成新卡片');
+  mineCard = nodes.listMinePending.children[0];
   const cancelButton = mineCard.querySelector('.cancel-button');
   mineCard.querySelector('textarea').value = '';
   await cancelButton.click();
   assert.deepEqual(calls.at(-1), ['TK-M', ''], '提單人取消原因可為空');
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.cancelled);
-  assert.deepEqual(nodes.listPending.children.map((card) => card.getAttribute('data-ticket-id')), ['TK-D'], '取消後離開待簽核');
-  const departmentCard = nodes.listPending.children[0];
+  assert.equal(nodes.noticeMine.textContent, TICKETS_TEXT.cancelled);
+  assert.deepEqual(cardIds(nodes.listMinePending), [], '取消後離開待簽核');
+  assert.deepEqual(cardIds(nodes.listMineDone), ['TK-M'], '取消的單移到已完成');
+  const departmentCard = nodes.listTodo.children[0];
   const forRequester = departmentCard.querySelector('.cancel-button');
   assert.equal(forRequester.textContent, TICKETS_TEXT.cancelForRequester);
   await forRequester.click();
@@ -555,8 +576,8 @@ async function cancellations() {
   departmentCard.querySelector('textarea').value = ' 使用者來電取消 ';
   await forRequester.click();
   assert.deepEqual(calls.at(-1), ['TK-D', ' 使用者來電取消 ']);
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.cancelled);
-  assert.equal(nodes.listPending.children.length, 0);
+  assert.equal(nodes.noticeTodo.textContent, TICKETS_TEXT.cancelled, '部門取消的提示在待辦表單');
+  assert.equal(nodes.listTodo.children.length, 0);
 }
 test('提單人與部門的取消流程', cancellations);
 
@@ -576,7 +597,7 @@ async function resubmit() {
     async loadMyTickets() { return [mineTicket({ ticket_id: 'TK-R', status: 'REJECTED', subject: '申請 VPN', content: '新人需要 VPN', decision: { by_username: 'cindy.wang', at: '2026-10-23T02:00:00.000Z', comment: '資料不足' } })]; },
   }, win);
   await page.ready;
-  await nodes.listRejected.children[0].querySelector('.resubmit-button').click();
+  await nodes.listMinePending.children[0].querySelector('.resubmit-button').click();
   assert.deepEqual(JSON.parse(stored.get(DRAFT_KEY)), { subject: '申請 VPN', content: '新人需要 VPN', userID: user.userID }, '草稿記錄提單人的 userID');
   assert.equal(win.location.href, PAGE_URLS.propose);
   cleanup();
@@ -587,7 +608,7 @@ async function resubmit() {
     async loadMyTickets() { return [mineTicket({ ticket_id: 'TK-R', status: 'REJECTED' })]; },
   }, broken);
   await second.page.ready;
-  await second.nodes.listRejected.children[0].querySelector('.resubmit-button').click();
+  await second.nodes.listMinePending.children[0].querySelector('.resubmit-button').click();
   assert.equal(broken.location.href, PAGE_URLS.propose, '儲存失敗仍前往提出需求單頁');
 }
 test('重新提出被退回的需求單', resubmit);
@@ -667,12 +688,12 @@ async function trackingIgnoresStaleRefresh() {
   const refreshing = nodes.refresh.click();
   await flush();
   assert.ok(held, '重新整理的請求已送出且尚未回應');
-  await nodes.listPending.children[0].querySelector('.approve-button').click();
-  assert.equal(nodes.listPending.children.length, 0, '動作後的重新載入已移除已簽核的單');
+  await nodes.listTodo.children[0].querySelector('.approve-button').click();
+  assert.equal(nodes.listTodo.children.length, 0, '動作後的重新載入已移除已簽核的單');
   held.resolve();
   await refreshing;
-  assert.equal(nodes.listPending.children.length, 0, '較舊的重新整理回應不會讓已簽核的單重新出現');
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.decided);
+  assert.equal(nodes.listTodo.children.length, 0, '較舊的重新整理回應不會讓已簽核的單重新出現');
+  assert.equal(nodes.noticeTodo.textContent, TICKETS_TEXT.decided);
 }
 test('表單追蹤忽略被取代的較舊載入結果', trackingIgnoresStaleRefresh);
 
@@ -688,9 +709,9 @@ async function completedIgnoresStaleResults() {
     async loadCompletedTickets(filters) { const gate = deferred(); loads.push({ filters, gate }); return gate.promise; },
   });
   await page.ready;
-  await nodes.tabCompleted.click();
-  await nodes.tabTracking.click();
-  await nodes.tabCompleted.click();
+  await nodes.tabDone.click();
+  await nodes.tabMine.click();
+  await nodes.tabDone.click();
   assert.equal(loads.length, 1, '第一次載入進行中時再點分頁不重複查詢');
   loads[0].gate.resolve(completedResult('TK-FIRST'));
   await page.state.completedRequest;
@@ -743,7 +764,7 @@ async function ownTicketInOwnDepartment() {
     async cancelTicket(id, comment) { calls.push([id, comment]); pending = false; return sampleTicket({ ticket_id: id, status: 'CANCELLED' }); },
   });
   await page.ready;
-  const card = nodes.listPending.children[0];
+  const card = nodes.listTodo.children[0];
   assert.equal(card.querySelector('.approve-button'), null, '提單人不能簽核自己的單');
   assert.equal(card.querySelector('.reject-button'), null, '也不能退回');
   const cancel = card.querySelector('.cancel-button');
@@ -752,8 +773,8 @@ async function ownTicketInOwnDepartment() {
   await cancel.click();
   assert.equal(card.querySelector('.decision-error').textContent, '', '不要求填寫原因');
   assert.deepEqual(calls, [['TK-OWN', '']]);
-  assert.equal(nodes.noticeTracking.textContent, TICKETS_TEXT.cancelled);
-  assert.equal(nodes.listPending.children.length, 0);
+  assert.equal(nodes.noticeTodo.textContent, TICKETS_TEXT.cancelled);
+  assert.equal(nodes.listTodo.children.length, 0);
 }
 test('本人提出且送達本部門的單以提單人身分取消', ownTicketInOwnDepartment);
 
@@ -774,7 +795,7 @@ async function actionCountdown(context) {
     async decideTicket() { calls += 1; throw failure; },
   });
   await page.ready;
-  const card = nodes.listPending.children[0];
+  const card = nodes.listTodo.children[0];
   const approve = card.querySelector('.approve-button');
   await approve.click();
   assert.equal(card.querySelector('.decision-error').textContent, '請求太頻繁，請稍後再試');
@@ -806,7 +827,7 @@ test('卡片動作遇到 429 依等待秒數倒數', actionCountdown);
 
 /**
  * 驗證動作完成後已完成分頁的同步：沒開過已完成時不查詢；開過之後成功動作與 404 TICKET_NOT_FOUND 都會重新查詢並更新結果；
- * 404 TICKET_NOT_FOUND 的提示顯示在表單追蹤上方並重新整理清單；404 NOT_FOUND（未知路由）仍只顯示在卡片內。
+ * 404 TICKET_NOT_FOUND 的提示顯示在待辦表單上方並重新整理清單；404 NOT_FOUND（未知路由）仍只顯示在卡片內。
  * @returns {Promise<void>}
  */
 async function actionsRefreshCompleted() {
@@ -841,26 +862,26 @@ async function actionsRefreshCompleted() {
   await page.ready;
   /** 按下指定單號卡片的簽核鈕。@param {string} id 單號。@returns {Promise<void>} 處理完成。 */
   async function approve(id) {
-    const card = nodes.listPending.children[cardIds(nodes.listPending).indexOf(id)];
+    const card = nodes.listTodo.children[cardIds(nodes.listTodo).indexOf(id)];
     await card.querySelector('.approve-button').click();
   }
   await approve('TK-O');
   assert.equal(completedLoads, 0, '沒開過已完成時不額外查詢');
-  await nodes.tabCompleted.click();
+  await nodes.tabDone.click();
   await page.state.completedRequest;
   assert.deepEqual(cardIds(nodes.listCompleted), ['TK-O']);
-  await nodes.tabTracking.click();
+  await nodes.tabMine.click();
   await approve('TK-P');
   assert.equal(completedLoads, 2, '簽核成功後重新查詢已完成');
   assert.deepEqual(cardIds(nodes.listCompleted), ['TK-P', 'TK-O'], '已完成分頁不再是舊結果');
   await approve('TK-Q');
-  assert.equal(nodes.noticeTracking.textContent, '查無這張需求單');
-  assert.deepEqual(cardIds(nodes.listPending), ['TK-R'], '查無需求單後重新整理清單');
+  assert.equal(nodes.noticeTodo.textContent, '查無這張需求單');
+  assert.deepEqual(cardIds(nodes.listTodo), ['TK-R'], '查無需求單後重新整理清單');
   assert.equal(completedLoads, 3, '查無需求單時一併重新查詢已完成');
   await approve('TK-R');
-  const card = nodes.listPending.children[0];
+  const card = nodes.listTodo.children[0];
   assert.equal(card.querySelector('.decision-error').textContent, MESSAGES.notFound, '未知路由的 404 留在卡片內');
-  assert.equal(nodes.noticeTracking.textContent, '查無這張需求單');
+  assert.equal(nodes.noticeTodo.textContent, '查無這張需求單');
   assert.equal(completedLoads, 3);
 }
 test('動作後同步已完成分頁並處理查無需求單', actionsRefreshCompleted);
@@ -913,12 +934,12 @@ function trackingWindow() {
  * @param {string} id 單號。
  * @returns {object|undefined} 卡片；不在畫面上時為 undefined。
  */
-function pendingCard(nodes, id) { return nodes.listPending.children[cardIds(nodes.listPending).indexOf(id)]; }
+function pendingCard(nodes, id) { return nodes.listTodo.children[cardIds(nodes.listTodo).indexOf(id)]; }
 
 /**
  * 驗證 R-F1：另一張卡片動作成功而重新繪製清單時，仍在處理中的卡片在新卡片上維持停用與「處理中…」；
  * 舊請求之後回來的錯誤（逾時）與 429 倒數顯示在新卡片上，而不是寫到已移除的舊表單，且重新整理後仍保留；
- * 清單重新載入後已不在畫面上的卡片，其動作錯誤改顯示在表單追蹤上方。
+ * 清單重新載入後已不在畫面上的卡片，其動作錯誤改顯示在待辦表單上方。
  * @param {import('node:test').TestContext} context 可控制的時間。
  * @returns {Promise<void>}
  */
@@ -954,7 +975,7 @@ async function redrawKeepsInFlightState(context) {
   await flush();
   assert.equal(oldB.querySelector('.approve-button').textContent, TICKETS_TEXT.working);
   await pendingCard(nodes, 'TK-A').querySelector('.approve-button').click();
-  assert.deepEqual(cardIds(nodes.listPending), ['TK-B', 'TK-C'], 'TK-A 成功後重新繪製');
+  assert.deepEqual(cardIds(nodes.listTodo), ['TK-B', 'TK-C'], 'TK-A 成功後重新繪製');
   const newB = pendingCard(nodes, 'TK-B');
   assert.notEqual(newB, oldB, 'TK-B 是重新建立的卡片');
   for (const selector of ['.approve-button', '.reject-button', '.cancel-button', '.transfer-button']) {
@@ -986,10 +1007,10 @@ async function redrawKeepsInFlightState(context) {
   await flush();
   pending = ['TK-C'];
   await nodes.refresh.click();
-  assert.deepEqual(cardIds(nodes.listPending), ['TK-C'], '同事已處理 TK-B，卡片從清單消失');
+  assert.deepEqual(cardIds(nodes.listTodo), ['TK-C'], '同事已處理 TK-B，卡片從清單消失');
   gates.get('TK-B').reject(new TicketServiceError(MESSAGES.decisionTimeout, { code: 'TIMEOUT' }));
   await runningAgain;
-  assert.equal(nodes.noticeTracking.textContent, MESSAGES.decisionTimeout, '卡片已不在畫面上時錯誤改顯示在表單追蹤上方');
+  assert.equal(nodes.noticeTodo.textContent, MESSAGES.decisionTimeout, '卡片已不在畫面上時錯誤改顯示在待辦表單上方');
 }
 test('清單重新繪製時沿用卡片的處理中、錯誤與倒數狀態', redrawKeepsInFlightState);
 
@@ -1009,23 +1030,23 @@ async function countdownTimerLifecycle(context) {
     async decideTicket() { throw new TicketServiceError('請求太頻繁，請稍後再試', { status: 429, code: 'RATE_LIMIT_EXCEEDED', retryAfter: 10 }); },
   }, win);
   await page.ready;
-  await nodes.listPending.children[0].querySelector('.approve-button').click();
+  await nodes.listTodo.children[0].querySelector('.approve-button').click();
   assert.equal(win.intervals, 1);
   assert.equal(page.actionStates.isTicking(), true);
   await nodes.refresh.click();
   await nodes.refresh.click();
   assert.equal(win.intervals, 1, '重新繪製卡片不會再建立計時器');
-  assert.equal(nodes.listPending.children[0].querySelector('.approve-button').textContent, '請等 10 秒');
+  assert.equal(nodes.listTodo.children[0].querySelector('.approve-button').textContent, '請等 10 秒');
   win.fire('pagehide');
   assert.equal(page.actionStates.isTicking(), false, 'pagehide 清除計時器');
   context.mock.timers.tick(4000);
   win.fire('pageshow');
   assert.equal(page.actionStates.isTicking(), true, 'pageshow 恢復計時器');
-  assert.equal(nodes.listPending.children[0].querySelector('.approve-button').textContent, '請等 6 秒', '恢復後依目前時間推算');
+  assert.equal(nodes.listTodo.children[0].querySelector('.approve-button').textContent, '請等 6 秒', '恢復後依目前時間推算');
   win.fire('pagehide');
   context.mock.timers.tick(10000);
   win.fire('pageshow');
-  const card = nodes.listPending.children[0];
+  const card = nodes.listTodo.children[0];
   assert.equal(page.actionStates.isTicking(), false, '已到期時不再啟動計時器');
   assert.equal(card.querySelector('.approve-button').textContent, TICKETS_TEXT.approve);
   assert.equal(card.querySelector('.approve-button').disabled, false);
@@ -1077,7 +1098,7 @@ async function actionsBusyGuard() {
 test('同一張卡片請求進行中時鎖定所有動作並恢復各自文字', actionsBusyGuard);
 
 /**
- * 驗證 R-F3：簽核與取消遇到 403（例如同事已把單轉到其他部門）時，把後端訊息顯示在表單追蹤上方並重新整理清單，不導回登入頁。
+ * 驗證 R-F3：簽核與取消遇到 403（例如同事已把單轉到其他部門）時，把後端訊息顯示在待辦表單上方並重新整理清單，不導回登入頁。
  * @returns {Promise<void>}
  */
 async function forbiddenActionsReload() {
@@ -1093,12 +1114,12 @@ async function forbiddenActionsReload() {
       cancelTicket: forbidden,
     });
     await page.ready;
-    const card = nodes.listPending.children[0];
+    const card = nodes.listTodo.children[0];
     card.querySelector('textarea').value = '使用者來電取消';
     await card.querySelector(kind === 'decide' ? '.approve-button' : '.cancel-button').click();
-    assert.equal(nodes.noticeTracking.textContent, message, `${kind} 的 403 提示顯示在表單追蹤上方`);
+    assert.equal(nodes.noticeTodo.textContent, message, `${kind} 的 403 提示顯示在待辦表單上方`);
     assert.equal(loads, 2, `${kind} 的 403 後重新整理清單`);
-    assert.equal(nodes.listPending.children.length, 0, '過期的卡片被移除');
+    assert.equal(nodes.listTodo.children.length, 0, '過期的卡片被移除');
     assert.deepEqual(win.redirects, [], '403 不導回登入頁');
     cleanup();
   }
@@ -1116,7 +1137,7 @@ async function ownTicketUsesUserIdOnly() {
     async loadDepartmentTickets() { return { department: user.department, tickets: [sampleTicket({ ticket_id: 'TK-U', requester: { username: user.username, department_name: user.department.name } })] }; },
   });
   await page.ready;
-  const card = nodes.listPending.children[0];
+  const card = nodes.listTodo.children[0];
   assert.equal(card.querySelector('.cancel-button').textContent, TICKETS_TEXT.cancelForRequester, '不以 username 判定為本人');
   await card.querySelector('.cancel-button').click();
   assert.equal(card.querySelector('.decision-error').textContent, TICKETS_TEXT.cancelReasonRequired);
@@ -1167,8 +1188,8 @@ async function formTypesDirectory() {
     function cellText(cell) { return cell.textContent; }
     return card.querySelector('.form-table').querySelectorAll('th').map(cellText);
   }
-  assert.deepEqual(labelsOf(nodes.listPending.children[0]), ['品項', '需要日期']);
-  page.selectTab('completed');
+  assert.deepEqual(labelsOf(nodes.listMinePending.children[0]), ['品項', '需要日期']);
+  page.selectTab('done');
   await page.state.completedRequest;
   assert.deepEqual(labelsOf(nodes.listCompleted.children[0]), ['品項', '需要日期']);
   await page.refresh();
@@ -1190,9 +1211,9 @@ async function formTypesDirectory() {
     },
   });
   await second.page.ready;
-  assert.deepEqual(labelsOf(second.nodes.listPending.children[0]), ['item', 'needed_by'], '目錄失敗時以欄位代號顯示');
-  assert.equal(second.nodes.noticeTracking.hidden, true, '目錄失敗不顯示清單錯誤');
+  assert.deepEqual(labelsOf(second.nodes.listMinePending.children[0]), ['item', 'needed_by'], '目錄失敗時以欄位代號顯示');
+  assert.equal(second.nodes.noticeMine.hidden, true, '目錄失敗不顯示清單錯誤');
   await second.page.refresh();
-  assert.deepEqual(labelsOf(second.nodes.listPending.children[0]), ['品項', '需要日期'], '重新整理時再試');
+  assert.deepEqual(labelsOf(second.nodes.listMinePending.children[0]), ['品項', '需要日期'], '重新整理時再試');
 }
 test('需求類型目錄只載入一次並用於卡片欄位名稱', formTypesDirectory);

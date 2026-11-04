@@ -19,13 +19,13 @@ backend/
 │   │   ├── requestTypeRoutes.js     # /forms：需求類型清單
 │   │   ├── ticketRoutes.js          # /tickets：送出、自動生成（/draft）、查詢、簽核、轉單、取消
 │   │   ├── meRoutes.js              # /me：本人的假別時數（/leave-balance）
-│   │   ├── leaveRoutes.js           # /leave：人資查詢與調整假別時數（/balances、/adjustments）
+│   │   ├── leaveRoutes.js           # /leave：人資查詢假別時數（/balances，唯讀）
 │   │   └── adminRoutes.js           # /admin：管理監測與重置（自行掛載限流與 JSON 解析，由 server.js 直接掛載）
 │   ├── controllers/
 │   │   ├── ticketController.js      # 需求單：送出（含 form／department_id）、我的需求單、部門待簽核、已完成查詢、簽核／退回、轉單、取消
 │   │   ├── departmentController.js  # 部門與處理人名單（GET /api/departments）
 │   │   ├── requestTypeController.js # 需求類型清單（GET /api/forms）與「自動生成」對話（驗證請求後交給通用引擎 draftEngine）
-│   │   └── leaveController.js       # 本人假別時數、人資查詢與調整（讀取使用 leave_entitlements 的需求類型與通用額度帳）
+│   │   └── leaveController.js       # 本人假別時數與人資查詢（唯讀，讀取使用 leave_entitlements 的需求類型與通用額度帳）
 │   ├── middleware/
 │   │   ├── closeOnShutdown.js       # 關機中的回應加上 Connection: close
 │   │   ├── requestLogger.js         # 請求開始／完成日誌與 requestId
@@ -40,8 +40,8 @@ backend/
 │   │   ├── departmentService.js     # 載入並驗證部門設定檔（不含處理人）
 │   │   ├── taskTracker.js           # 需求單工作追蹤器，供關機與管理重置等待
 │   │   ├── storage/                 # 儲存層：
-│   │   │   ├── dataStore.js         #   需求單儲存單例：all／find／insert（可帶交易內 guard）／update、clear、stats（監測用各狀態筆數）、通用額度帳 withLedger／ledgerBalances／addLedgerAdjustment（交易內 ledgerOverlaps／ledgerBusy）、額度異動紀錄（insert／update／addLedgerAdjustment 在同一筆交易內寫入，ledgerLog 讀取）、listAccounts／findAccount／departmentAccounts／listEmployees／findEmployee、prepare（啟動時開啟資料庫、全新資料庫寫入名冊並匯入舊檔）、close；每個操作一筆 SQLite 交易；前端不直接接觸 SQLite，所有讀寫都經後端 HTTP API 進入這個單例持有的唯一連線（啟動時於監聽前開啟）；better-sqlite3 為同步 API，每個操作在事件迴圈上以一筆完整交易執行完畢、彼此不會交錯，因此只有一個寫入者，不需要另外排隊
-│   │   │   ├── database.js          #   SQLite 連線、PRAGMA、schema 遷移（目前版本 4，含請假額度異動紀錄 leave_log 的建立與回填）、額度表允許清單 LEDGER_TABLES、舊版 JSON 匯入、匯出、備份與還原
+│   │   │   ├── dataStore.js         #   需求單儲存單例：all／find／insert（可帶交易內 guard）／update、clear、stats（監測用各狀態筆數）、通用額度帳 withLedger／ledgerBalances（唯讀；交易內 ledgerOverlaps／ledgerBusy）；需求單的送出與簽核只寫 tickets，本系統不寫入額度資料表、listAccounts／findAccount／departmentAccounts／listEmployees／findEmployee、prepare（啟動時開啟資料庫、全新資料庫寫入名冊並匯入舊檔）、close；每個操作一筆 SQLite 交易；前端不直接接觸 SQLite，所有讀寫都經後端 HTTP API 進入這個單例持有的唯一連線（啟動時於監聽前開啟）；better-sqlite3 為同步 API，每個操作在事件迴圈上以一筆完整交易執行完畢、彼此不會交錯，因此只有一個寫入者，不需要另外排隊
+│   │   │   ├── database.js          #   SQLite 連線、PRAGMA、schema 遷移（目前版本 8；版本 4 建立的請假額度異動紀錄 leave_log 在版本 5 刪除，人資調整紀錄 leave_adjustments 在版本 6 刪除，版本 7 在 accounts 加上部門的中文名稱 department_name，只供直接檢視資料庫，版本 8 改以員工編號 employee_no 關聯 accounts、employees 與 leave_entitlements）、額度表允許清單 LEDGER_TABLES、舊版 JSON 匯入、匯出、備份與還原
 │   │   │   └── limitStore.js        #   限制儲存：單程序記憶體（含管理重置）；重啟即歸零，不能當作永久費用上限；只適用單一程序與單副本，多個 instance 不會共用，不支援多副本或 PM2 cluster；管理重置只清除目前執行環境，不操作其他 instance 或 AWS 資源
 │   │   ├── personnel/               # 人員資料（只存在 SQLite）：
 │   │   │   ├── accountService.js    #   帳號查詢（SQLite accounts 資料表，每次呼叫重新查詢）；啟用中的一般帳號即可指定的處理人
@@ -58,7 +58,7 @@ backend/
 │   │   │   ├── adminService.js      #   管理重置（維護鎖內清空需求單與保護計數）
 │   │   │   └── adminMetrics.js      #   管理監測快照（唯讀）
 │   │   ├── requestTypes/            # 需求類型通用引擎（不含任何類型專屬的程式）：
-│   │   │   ├── registry.js          #   載入並驗證 _catalog.json 與各定義檔；提供 GET /api/forms 的形狀（forClient）、自動生成回應的類型（draftView）、交給 AI 的完整定義（aiView）、關鍵字備援（match）
+│   │   │   ├── registry.js          #   載入並驗證 _catalog.json 與各定義檔；提供 GET /api/forms 的形狀（forClient）、自動生成回應的類型（draftView，另帶日期類欄位的 rules 與工作日曆摘要 calendars）、交給 AI 的完整定義（aiView）、關鍵字備援（match）
 │   │   │   ├── fieldTypes.js        #   欄位型別（self、enum、text、number、date、datetime、account、department）的定義驗證、值的整理（例如 2026/12/1 9:30 → 2026-12-01T09:30）與檢查
 │   │   │   ├── capabilities.js      #   具名能力：計算 work_minutes、檢查 ledger_balance／ledger_overlap，以及工具的伺服器端執行與存取規則
 │   │   │   ├── renderer.js          #   需求內容範本 {名稱|篩選器:參數} 與篩選器 date、time、date_range、hours_minutes、default
@@ -217,7 +217,7 @@ Compose 的參數來源是專案根目錄未追蹤的 `.env`（或 `HELPDESK_ENV
 | `node scripts/personnel.js add <username> --department <id> [--role USER\|ADMIN] [--name <顯示名稱> --employee-no <編號> --hire-date YYYY-MM-DD]` | 新增帳號；USER 必須提供三個員工欄位，ADMIN 不可提供；新員工沒有額度，請再用 grant |
 | `node scripts/personnel.js set-department <username> <department_id>` | 調整所屬部門（部門必須存在），立即改變處理人名單與代理人候選 |
 | `node scripts/personnel.js deactivate <username>`／`activate <username>` | 停用（不能登入、不是處理人或代理人）／恢復 |
-| `node scripts/personnel.js grant <username> <假別> <年度> <分鐘>` | 設定（取代）某年度某假別的額度；增減請用人資調整 API；額度有變更時在 `leave_log` 記一列 `GRANTED` |
+| `node scripts/personnel.js grant <username> <假別> <年度> <分鐘>` | 設定（取代）某年度某假別的年度額度；本系統不記錄增減，額度的扣除與調整由人資在公司既有的系統處理 |
 
 每個子指令都可加 `--dry-run`：以唯讀連線開啟、不寫入任何內容，輸出 `{ action, username, changed, changes, dryRun: true }`。驗證規則與服務相同（`src/services/personnel.js`）；不提供刪除帳號。腳本與服務一樣使用 WAL 與 busy timeout 5000 ms，可在服務執行中使用；日誌只含帳號、部門 id、角色、狀態與額度數字，不含姓名或員工編號。
 
@@ -225,8 +225,8 @@ Compose 的參數來源是專案根目錄未追蹤的 `.env`（或 `HELPDESK_ENV
 
 本機在 `backend/` 目錄執行（local 模式讀取 `backend/.env`，資料庫為 `DATABASE_FILE`，未設定時是 `storage/helpdesk.db`）；Docker 部署改在 backend 容器內執行，指令前加 `sudo docker compose exec -T backend`，見[部署手冊](../docs/Docker與Lightsail部署操作手冊.md)第 5.7 節。每次調整都依這個順序：
 
-1. **先備份**：人員資料沒有其他副本，調整前以 `node scripts/db-backup.js <備份檔>` 做一次線上備份（服務執行中也可以），確認日誌 `storage.backup.completed` 的 `schemaVersion` 為 4
-2. **確認資料庫路徑與現況**：`node scripts/personnel.js list`。`list` 與 `--dry-run` 在資料庫檔不存在或尚未升級到目前版本（4）時會拒絕（`PERSONNEL_NOT_FOUND`、`PERSONNEL_SCHEMA_OLD`），可藉此確認路徑正確。正式寫入的指令不做這項檢查：`DATABASE_FILE` 打錯時會建立一個新的版本 4 資料庫並寫入該筆帳號，之後在那個檔案啟動服務也不會再寫入示範名冊，因此務必先跑 `list`。
+1. **先備份**：人員資料沒有其他副本，調整前以 `node scripts/db-backup.js <備份檔>` 做一次線上備份（服務執行中也可以），確認日誌 `storage.backup.completed` 的 `schemaVersion` 為 8
+2. **確認資料庫路徑與現況**：`node scripts/personnel.js list`。`list` 與 `--dry-run` 在資料庫檔不存在或尚未升級到目前版本（8）時會拒絕（`PERSONNEL_NOT_FOUND`、`PERSONNEL_SCHEMA_OLD`），可藉此確認路徑正確。正式寫入的指令不做這項檢查：`DATABASE_FILE` 打錯時會建立一個新的版本 4 資料庫並寫入該筆帳號，之後在那個檔案啟動服務也不會再寫入示範名冊，因此務必先跑 `list`。
 3. **預覽**：同一個指令加 `--dry-run`，看 `changes` 是否符合預期；`changed: false` 表示內容已相同、不會寫入。
 4. **執行**：拿掉 `--dry-run` 再執行一次。每個指令在一筆交易內完成，失敗時不留下部分修改。
 5. **確認**：再跑一次 `list`；執行中的服務下一個請求就使用新資料，不需要重啟。
@@ -256,7 +256,7 @@ node scripts/personnel.js grant test.user 病假 2027 14400
 
 注意事項：
 
-- 帳號與密碼的關係、調整部門與停用對既有資料的影響、`grant` 與人資調整 API `POST /api/leave/adjustments` 的差別，見 API 規格書第 3.6、3.17 節
+- 帳號與密碼的關係、調整部門與停用對既有資料的影響、`grant` 的用途與限制，見 API 規格書第 3.6、3.17 節
 - 結束碼：參數錯誤 2（stderr 另印出用法），驗證或資料庫錯誤 1（日誌 `storage.personnel.failed` 的 `reason`：`PERSONNEL_INVALID` 格式或部門不符、`PERSONNEL_NOT_FOUND` 帳號或員工資料不存在、`PERSONNEL_CONFLICT` 帳號或員工編號已存在、`PERSONNEL_SCHEMA_OLD` 資料庫尚未升級）。
 - stdout 同時有結果 JSON 與一行 info 日誌（warn／error 日誌寫入 stderr）。要把 `list` 交給 JSON 工具處理時，加上 `LOG_LEVEL=warn` 只保留結果，例如 `LOG_LEVEL=warn node scripts/personnel.js list > personnel.json`（shell 的環境參數優先於 `.env`）。`list` 的結果含顯示名稱與員工編號，輸出檔不要提交 Git 或貼到公開處。
 
@@ -269,7 +269,6 @@ node scripts/personnel.js grant test.user 病假 2027 14400
 | `node scripts/personnel.js <子指令> [--dry-run]` | 維護人員資料（帳號、部門、角色、啟用狀態、員工資料與假別額度），見上方「人員資料」；結果另以 JSON 寫到 stdout（`list` 為多行 JSON 陣列），日誌 `storage.personnel.changed`／`storage.personnel.dry_run`／`storage.personnel.listed`，失敗為 `storage.personnel.failed`（參數錯誤結束碼 2、驗證或資料庫錯誤結束碼 1） |
 | `node scripts/import-legacy-tickets.js [--dry-run] [--import-late]` | 預覽（`--dry-run`）或執行舊版 `tickets.json` 匯入；判斷規則、選項與日誌見 API 規格書第 3.4、3.13 節 |
 | `node scripts/export-tickets-json.js <out.json>` | 以唯讀連線開啟資料庫（服務執行中也可使用），依建立順序匯出成舊版 `tickets.json` 格式，供回滾到先前的 JSON 版映像（只含需求單，不含員工、額度與人資調整）；先寫入權限 600 的 `<out.json>.tmp` 再改名；輸出檔或殘留的 `<out.json>.tmp` 已存在時以 `OUTPUT_EXISTS` 拒絕、不覆寫，此時改用新的檔名；成功日誌 `storage.export.completed`（`tickets` 為匯出筆數），失敗為 `storage.export.failed` |
-| `node scripts/leave-log.js [--user <帳號>] [--year <年度>] [--leave-type <假別>] [--json]` | 唯讀列出請假額度異動紀錄 `leave_log`：每次送出、簽核、退回、取消、人資調整與年度額度變更的時數與前後剩餘，服務執行中也可使用；欄位與事件見 API 規格書第 3.4 節 |
 | `node scripts/db-backup.js <out.db>` | 線上備份；權限、完整性檢查與日誌見[部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)第 6.2 節 |
 | `node scripts/db-restore.js <backup.db>` | 停機還原；執行條件、流程與日誌見部署操作手冊第 6.3 節 |
 
@@ -289,7 +288,7 @@ node scripts/personnel.js grant test.user 病假 2027 14400
 
 排查順序：
 
-1. 啟動時先查看 `storage.ready`（`engine`、`schemaVersion`（目前為 4）、`legacyImport`、`legacyCount`、`seededAccounts`、`seededEmployees`、`seededEntitlements`；後三者是本次寫入示範名冊的帳號、員工與額度筆數，全新資料庫第一次啟動為 17、16、96，帳號表已有資料（之後的啟動，或由版本 2 升級）時皆為 0）；接著可能有 warn `storage.account_department_missing`（`username`、`departmentId`、`active`、`hint`），表示該帳號的部門已不在 `data/departments.json`，帳號不能登入，修正部門設定或以 `scripts/personnel.js set-department` 調整（每個這樣的帳號各記一筆，不讓啟動失敗）；部門設定檔或需求類型定義不符時，程序在開啟資料庫前就以錯誤結束，訊息只列出位置與原因；需求類型的錯誤記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 的格式是「檔名 鍵路徑 原因」，例如 `equipment.json fields[2].type 未知的欄位型別「slider」，只接受 self、enum、text、number、date、datetime、account、department`；依 detail 修正 `data/requestTypes/` 後重啟，常見錯誤見規範文件第 13 節步驟 8），正常時在 `storage.ready` 之前先有 `request_types.ready`（`types` 為類型 id，目前依序為 leave、attendance、vpn、repair、equipment、purchase、general；`defaultType` 為 general；另有 `catalogVersion`）；`legacyImport` 可能為 `imported`、`already-imported`、`legacy-changed`、`legacy-appeared`、`legacy-unreadable`、`no-legacy-file`；新主機第一次啟動為 `no-legacy-file`，之後的啟動為 `already-imported`；後三種需要提醒的情況（`legacy-changed`、`legacy-appeared`、`legacy-unreadable`）另記 warn `storage.legacy_warning`（`legacyImport`、只有 `legacy-unreadable` 才有的 `errorCode`、`hint`），服務照常啟動但不匯入也不合併舊檔；`legacy-appeared` 的 hint 會提示以 `--import-late` 匯入；若出現 `storage.failed`，程序不會監聽；`reason` 是固定代碼：`NODE_TOO_OLD`（Node 版本低於 22.14.0，better-sqlite3 13 需要 Node-API 10；請依 `.nvmrc` 改用 22.23.4）、`DIRECTORY_MISSING`（`DATABASE_FILE` 目錄不存在）、`FOREIGN_DATABASE`（路徑指到其他程式的 SQLite 檔）、`SCHEMA_TOO_NEW`（改用對應版本的映像）、`LEGACY_UNREADABLE`／`LEGACY_INVALID`／`LEGACY_CONFLICT`（檢查舊版 `tickets.json`）、`PERSONNEL_UNMAPPED`（版本 2 資料庫有員工不在示範名冊，無法決定部門；整步回滾，資料庫仍是版本 2）、`PERSONNEL_INVALID`（示範名冊驗證失敗）、`FOREIGN_KEY_VIOLATION`（版本 3 重建後外鍵不一致，已回滾），或 SQLite／檔案系統代碼如 `SQLITE_CANTOPEN`、`EACCES`（目錄或檔案權限、擁有者）、`SQLITE_NOTADB`（不是 SQLite 檔）；沒有代碼的錯誤為 `PREPARE_FAILED`；`detail` 為不含需求單內容的錯誤訊息（最多 200 字），`hint` 為排查提示；關閉資料庫失敗另記 `storage.close_failed`（`sqliteCode`）
+1. 啟動時先查看 `storage.ready`（`engine`、`schemaVersion`（目前為 8）、`legacyImport`、`legacyCount`、`seededAccounts`、`seededEmployees`、`seededEntitlements`；後三者是本次寫入示範名冊的帳號、員工與額度筆數，全新資料庫第一次啟動為 17、16、96，帳號表已有資料（之後的啟動，或由版本 2 升級）時皆為 0）；接著可能有 warn `storage.account_department_missing`（`username`、`departmentId`、`active`、`hint`），表示該帳號的部門已不在 `data/departments.json`，帳號不能登入，修正部門設定或以 `scripts/personnel.js set-department` 調整（每個這樣的帳號各記一筆，不讓啟動失敗）；部門設定檔或需求類型定義不符時，程序在開啟資料庫前就以錯誤結束，訊息只列出位置與原因；需求類型的錯誤記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 的格式是「檔名 鍵路徑 原因」，例如 `equipment.json fields[2].type 未知的欄位型別「slider」，只接受 self、enum、text、number、date、datetime、account、department`；依 detail 修正 `data/requestTypes/` 後重啟，常見錯誤見規範文件第 13 節步驟 8），正常時在 `storage.ready` 之前先有 `request_types.ready`（`types` 為類型 id，目前依序為 leave、attendance、vpn、repair、equipment、purchase、general；`defaultType` 為 general；另有 `catalogVersion`）；`legacyImport` 可能為 `imported`、`already-imported`、`legacy-changed`、`legacy-appeared`、`legacy-unreadable`、`no-legacy-file`；新主機第一次啟動為 `no-legacy-file`，之後的啟動為 `already-imported`；後三種需要提醒的情況（`legacy-changed`、`legacy-appeared`、`legacy-unreadable`）另記 warn `storage.legacy_warning`（`legacyImport`、只有 `legacy-unreadable` 才有的 `errorCode`、`hint`），服務照常啟動但不匯入也不合併舊檔；`legacy-appeared` 的 hint 會提示以 `--import-late` 匯入；若出現 `storage.failed`，程序不會監聽；`reason` 是固定代碼：`NODE_TOO_OLD`（Node 版本低於 22.14.0，better-sqlite3 13 需要 Node-API 10；請依 `.nvmrc` 改用 22.23.4）、`DIRECTORY_MISSING`（`DATABASE_FILE` 目錄不存在）、`FOREIGN_DATABASE`（路徑指到其他程式的 SQLite 檔）、`SCHEMA_TOO_NEW`（改用對應版本的映像）、`LEGACY_UNREADABLE`／`LEGACY_INVALID`／`LEGACY_CONFLICT`（檢查舊版 `tickets.json`）、`PERSONNEL_UNMAPPED`（版本 2 資料庫有員工不在示範名冊，無法決定部門；整步回滾，資料庫仍是版本 2）、`PERSONNEL_INVALID`（示範名冊驗證失敗）、`FOREIGN_KEY_VIOLATION`（版本 3 重建後外鍵不一致，已回滾），或 SQLite／檔案系統代碼如 `SQLITE_CANTOPEN`、`EACCES`（目錄或檔案權限、擁有者）、`SQLITE_NOTADB`（不是 SQLite 檔）；沒有代碼的錯誤為 `PREPARE_FAILED`；`detail` 為不含需求單內容的錯誤訊息（最多 200 字），`hint` 為排查提示；關閉資料庫失敗另記 `storage.close_failed`（`sqliteCode`）
 2. 資料庫準備完成後才開始監聽；接著查看 `server.started`（`port`、`nodeEnv`、`nodeVersion`、`corsOrigin`、`model`（主要供應商的模型）、`aiProvider`（主要供應商）、`aiFallbackProvider`（有金鑰的備援，沒有時為 null）、`credentialsConfigured`、`logLevel`、`localUrl`），以及 `server.limits`（含 `draftUserDailyLimit`、`draftGlobalDailyLimit`）、`server.http_limits`（含 `draft`）；未設金鑰另有 warn `server.credentials.missing`，本機未設 `AUTH_SECRET` 另有 warn `server.auth.local_secret`（改用保存在 SQLite 的本機簽章金鑰）；`server.started` 只在真正監聽成功（`listening` 事件）後記錄；監聽失敗只會記錄 `server.failed`（`reason` 為 `PORT_IN_USE` 或 `LISTEN_FAILED`）並以結束碼 1 結束，不會同時出現 `server.started`；`credentialsConfigured=true` 只代表已設定金鑰，不代表金鑰有效；改用備援供應商時記錄 warn `ai.fallback.used`（含 `reason`）
 3. 送出需求單後，找出 `http.request.started`，用相同 `requestId` 追蹤後續日誌，最後是 `http.request.completed`；被拒絕的請求另有 `http.request.rejected`（`status`、`code`、`retryAfter`；4xx 以 warn、5xx 以 error 記錄）
 4. 指定處理人會記錄 `ticket.assigned`；AI 判斷會依序記錄 `limits.reserved`、`ticket.judge.started`、`claude.generate.started`／`completed`（或 `gemini.generate.started`／`completed`）、`ticket.judge.completed`、`ticket.record.saved`；簽核或退回記錄 `ticket.decided`，轉單記錄 `ticket.transferred`，取消記錄 `ticket.cancelled`；帶需求類型表單的送出記錄 `ticket.form.saved`（`route`、`typeId`、`departmentId`、`withHandler`、`computedCount`），只帶 `department_id` 的送出記錄 `ticket.record.saved`（`source: "draft"`）；每次自動生成記錄 `ticket.draft.evaluated`（`typeId`、`departmentId`、`firstCall`、`aiAttempted`、`aiUsed`、`aiError`、`aiUpdates`、`toolsUsed`（工具 id）、`historyCount`、`lockedCount`、`missingCount`、`invalidCount`、`complete`）；有呼叫 AI 時另有 `ticket.draft.ai.started`（`purpose` 為 `ticket.draft.classify` 或 `ticket.draft.fill`）、每次 AI 呼叫（`purpose` 為 `ticket.draft.classify`、`ticket.draft.tools` 或 `ticket.draft.fill`）的 `claude.generate.started`／`completed`（Claude，含停止原因與 input／output token 數，不含內容）或 `gemini.generate.started`／`completed`（Gemini，`completed` 另記 `finishReason`（例如 `STOP`、`MAX_TOKENS`）、`inputUsage`、`outputUsage`、`thoughtUsage`（思考用量））、`ticket.draft.ai.completed`（`durationMs`、`typeId`、`departmentId`、`confidence`、`updateCount`、`toolCount`、`answered`），失敗為 `ticket.draft.ai.failed`（`purpose`、`stage` 為 client.initialize／claude.tools 或 gemini.tools／tool.execute／claude.generate 或 gemini.generate／response.validate、`reason`）；人資調整記錄 `leave.adjusted`（`actorID`、`leaveType`、`year`、`deltaMinutes`）；這些日誌都不含主題、訊息、對話、欄位值或調整原因；`ticket.draft.evaluated` 與 `ticket.draft.ai.*` 只記錄 id、筆數、代碼、工具 id 與是否完成，`leave.adjusted` 只記錄 actorID、假別、年度與分鐘數

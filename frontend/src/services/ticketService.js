@@ -497,10 +497,11 @@ export const COMPLETED_DEFAULT_LIMIT = 100;
  * @param {string} [filters.from] 簽核日期起（台北日期 YYYY-MM-DD）。
  * @param {string} [filters.to] 簽核日期迄（台北日期 YYYY-MM-DD）。
  * @param {number} [filters.limit=100] 筆數上限，1～500。
+ * @param {'mine'|'department'|''} [filters.scope=''] 範圍：mine 只看本人提出的、department 只看送達本人部門的，空字串為兩者合併；其他值不送出。
  * @returns {Promise<{department: {id: string, name: string}, total: number, limit: number, tickets: Array<object>}>} 符合條件的總數與回傳的需求單。
  * @throws {TicketServiceError} 條件無效、未登入、HTTP 錯誤、連線失敗、逾時或格式不正確。
  */
-export async function loadCompletedTickets({ status = '', q = '', from = '', to = '', limit = COMPLETED_DEFAULT_LIMIT } = {}) {
+export async function loadCompletedTickets({ status = '', q = '', from = '', to = '', limit = COMPLETED_DEFAULT_LIMIT, scope = '' } = {}) {
   const keyword = typeof q === 'string' ? q.trim() : '';
   if (countCodePoints(keyword) > 100) throw new TicketServiceError('關鍵字最多 100 字', { status: 400, code: 'INVALID_PAYLOAD' });
   if (from && to && from > to) throw new TicketServiceError('起始日期不可晚於結束日期', { status: 400, code: 'INVALID_PAYLOAD' });
@@ -510,6 +511,7 @@ export async function loadCompletedTickets({ status = '', q = '', from = '', to 
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   if (limit !== COMPLETED_DEFAULT_LIMIT) params.set('limit', String(limit));
+  if (scope === 'mine' || scope === 'department') params.set('scope', scope);
   const query = params.toString();
   const data = await fetchList(`/api/tickets/completed${query ? `?${query}` : ''}`);
   if (!data.department || !isText(data.department.id) || !isText(data.department.name) || !Number.isInteger(data.total) || data.total < 0) {

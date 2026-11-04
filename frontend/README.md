@@ -41,7 +41,7 @@ frontend/
 │   ├── pages/                 # 各頁組裝入口：login.js、propose.js、tickets.js、admin.js
 │   ├── components/            # 畫面元件；account.js、dom.js 多頁共用，其餘依頁面分資料夾：
 │   │   ├── propose/           #   提出需求單頁（「自動生成」視窗與其日期時間欄位、結果視窗與部門卡片）
-│   │   ├── tickets/           #   狀態追蹤頁（追蹤清單、卡片、操作表單、已完成面板）
+│   │   ├── tickets/           #   狀態追蹤頁（申請表單與待辦表單清單、卡片、操作表單、已完成表單面板）
 │   │   └── admin/             #   管理頁（監測、重置）
 │   ├── services/              # API 服務
 │   └── utils/                 # 純顯示工具
@@ -55,7 +55,7 @@ frontend/
 | --- | --- |
 | 登入 | `/`（`index.html`） |
 | 提出需求單 | `/pages/propose/propose.html` |
-| 狀態追蹤 | `/pages/tickets/tickets.html`（`#completed` 直接開啟「已完成」分頁） |
+| 狀態追蹤 | `/pages/tickets/tickets.html`（`#mine` 申請表單、`#todo` 待辦表單、`#done` 已完成表單；舊網址 `#completed` 開啟已完成表單） |
 | 管理 | `/pages/admin/admin.html` |
 
 頁面內的樣式、腳本與導覽連結都使用相對於各頁深度的路徑（例如 `../../styles/base.css`、`../tickets/tickets.html`）；程式導頁統一透過 `src/pageUrls.js` 由模組位置建立網址，不依目前頁面深度推測，也不硬編碼網站根路徑或 repo 名稱
@@ -70,10 +70,10 @@ frontend/
 | `pages/admin/admin.html`、`pages/admin/admin.css`、`src/pages/admin.js`、`src/services/adminService.js` | 管理頁與其獨立的 API 服務 |
 | `pages/propose/propose.html`、`pages/propose/propose.css`、`src/pages/propose.js` | 提出需求單頁 |
 | `src/components/propose/draftDialog.js` | 「自動生成」視窗 |
-| `src/components/propose/dateTimeControl.js` | 「自動生成」視窗的日期時間欄位：原生日期輸入加 24 小時制時間輸入（可打字或從每 30 分鐘一筆的建議清單挑選） |
+| `src/components/propose/dateTimeControl.js` | 「自動生成」視窗的日期時間選擇器：欄位按鈕展開月曆、時間按鈕與「其他時間」輸入；依 `rules.after` 把起訖欄位合併成期間（`layoutFields`），依 `type.calendars` 只列上班時段並停用非工作日 |
 | `src/services/draftService.js` | 「自動生成」（`POST /api/tickets/draft`）與需求類型目錄（`GET /api/forms`）的存取 |
 | `src/utils/formFormatters.js` | 需求類型表單欄位與計算結果的顯示格式 |
-| `pages/tickets/tickets.html`、`pages/tickets/tickets.css`、`src/pages/tickets.js` | 狀態追蹤頁（「表單追蹤」與「已完成」分頁） |
+| `pages/tickets/tickets.html`、`pages/tickets/tickets.css`、`src/pages/tickets.js` | 狀態追蹤頁（「申請表單」——待簽核／已完成切換、「待辦表單」與「已完成表單」三個分頁） |
 | `styles/base.css`、`styles/layout.css` | 全站基礎樣式；提單與追蹤頁共用的頂欄、導覽、帳號選單與介紹文字 |
 | `src/components/account.js` | 頂欄帳號選單與登入守門，一般頁與管理頁共用 |
 | `src/pageUrls.js` | 由模組位置建立登入頁與 `pages/` 各頁網址，統一登入／登出／跨頁跳轉，支援 `/helpdesk/` 等專案子路徑 |
@@ -81,11 +81,11 @@ frontend/
 | `src/services/authService.js` | 登入、登出與工作階段的存取 |
 | `src/services/ticketService.js` | 部門與需求單（送單、查詢、簽核、轉單、取消）的存取，以及錯誤提示對應 |
 | `src/components/admin/adminReset.js` | 管理重置表單 |
-| `src/components/tickets/ticketTracking.js` | 待簽核／已退回追蹤清單 |
+| `src/components/tickets/ticketTracking.js` | 「申請表單」（`renderMyTickets`：待簽核含被退回、已完成）與「待辦表單」（`renderTodoTickets`）的清單 |
 | `src/components/tickets/ticketCard.js` | 可展開的需求單卡片（展開後左欄申請內容、右欄處理資訊與歷程） |
 | `src/components/tickets/ticketActions.js` | 簽核／退回／轉單／取消表單 |
 | `src/components/tickets/ticketActionState.js` | 待簽核卡片的處理中動作、錯誤與倒數狀態保存 |
-| `src/components/tickets/completedTickets.js` | 「已完成」面板 |
+| `src/components/tickets/completedTickets.js` | 「已完成表單」面板（本部門已結案的單，`scope=department`） |
 | `src/components/tickets/ticketText.js`、`src/utils/ticketFormatters.js` | 共用文案及純顯示函式 |
 | `src/components/admin/adminMonitoring.js`、`src/components/admin/adminMetrics.js` | 管理監測的輪詢與畫面繪製 |
 | `src/components/propose/dialogs.js` | 結果視窗與部門卡片的繪製 |

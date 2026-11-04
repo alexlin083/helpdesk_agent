@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { departmentService } from '../departmentService.js';
 import { LEDGER_TABLES } from '../storage/database.js';
-import { CHECK_CAPABILITIES, CHECK_PHASES, COMPUTATION_CAPABILITIES, TOOL_CAPABILITIES, ACCESS_RULES, describeCalendar } from './capabilities.js';
+import { CHECK_CAPABILITIES, CHECK_PHASES, COMPUTATION_CAPABILITIES, TOOL_CAPABILITIES, ACCESS_RULES, describeCalendar, pickerCalendar } from './capabilities.js';
 import { clientField, definitionError, FIELD_KEY_PATTERN, isPlainObject, nonempty, normalizeFieldDefinition, RESERVED_KEYS } from './fieldTypes.js';
 import { compileTemplate, FILTERS } from './renderer.js';
 
@@ -293,6 +293,26 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
 }
 
 /**
+ * 「自動生成」回應的欄位形狀：與 GET /api/forms 相同，date／datetime 欄位有規則時另帶 rules（after：必須晚於的欄位 key；
+ * not_before_today：不可早於今天），讓前端把起訖欄位合併成一個期間選擇器並停用不可選的日期；實際驗證仍由後端執行。
+ * @param {object} field 欄位定義。
+ * @returns {object} 欄位。
+ */
+function draftField(field) {
+  return { ...clientField(field), ...(field.rules && Object.keys(field.rules).length ? { rules: { ...field.rules } } : {}) };
+}
+
+/**
+ * 列出類型中使用工作日曆的計算（work_minutes）所對應的起訖欄位與日曆摘要，供前端的日期時間選擇器使用；沒有時為空陣列。
+ * @param {object} type 類型。
+ * @returns {Array<object>} 每筆為 { start, end（欄位 key）, timezone_offset, work_windows, workdays, holidays, open_years }。
+ */
+function calendarsOf(type) {
+  return type.computations.filter(/** 有日曆的計算。@param {object} item 計算。@returns {boolean} 有日曆時 true。 */ (item) => item.resolved.calendar)
+    .map(/** 轉成選擇器日曆。@param {object} item 計算。@returns {object} 日曆。 */ (item) => ({ start: item.args.start, end: item.args.end, ...pickerCalendar(item.resolved.calendar) }));
+}
+
+/**
  * 以已驗證的目錄與定義建立查詢服務；所有輸出都是新物件，呼叫端不可修改回傳的類型定義。
  * @param {object} catalog normalizeCatalog 的結果。
  * @param {Map<string, object>} types 依目錄順序的需求類型。
@@ -346,11 +366,14 @@ function createRegistry(catalog, types, departments) {
         workflow: { transfer: type.workflow.transfer, not_requester: type.workflow.approver.notRequester } };
     },
     /**
-     * 自動生成回應的 type 形狀：id、version、name、fields，另帶 department（類型固定的送達部門 { id, name }；由對話決定時為 null），讓前端把部門顯示為唯讀。
+     * 自動生成回應的 type 形狀：id、version、name、fields，另帶 department（類型固定的送達部門 { id, name }；由對話決定時為 null），讓前端把部門顯示為唯讀；
+     * fields 的 date／datetime 欄位另帶 rules（見 draftField），calendars 為起訖欄位對應的工作日曆摘要（見 calendarsOf），兩者只供日期時間選擇器使用。
      * @param {object} type 類型。
-     * @returns {object} id、version、name、department、fields。
+     * @returns {object} id、version、name、department、fields、calendars。
      */
-    draftView(type) { return { id: type.id, version: type.version, name: type.name, department: departmentRef(type.departmentId), fields: type.fields.map(clientField) }; },
+    draftView(type) {
+      return { id: type.id, version: type.version, name: type.name, department: departmentRef(type.departmentId), fields: type.fields.map(draftField), calendars: calendarsOf(type) };
+    },
     /**
      * 交給 AI 閱讀的完整定義：說明、範例、詢問順序、欄位（不含申請人）與規則、計算名稱、送達部門與計算用的規則摘要；不含渲染與流程設定。
      * @param {object} type 類型。

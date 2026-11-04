@@ -9,26 +9,22 @@ const require = createRequire(import.meta.url);
 
 // 'HDK1'：寫入資料庫標頭，還原時用來辨識是否為本服務的資料庫檔。
 export const APPLICATION_ID = 0x48444b31;
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 8;
 export const MINIMUM_NODE = '22.14.0';
 // 資料表 CHECK 限制允許的假別；使用 leave_entitlements 的需求類型定義（類別欄位的選項）與員工假別額度都必須只使用這三種（registry 依 LEDGER_TABLES 檢查）。
 export const LEAVE_TYPES = Object.freeze(['事假', '病假', '特休']);
 
 // 需求類型定義的 ledger.entitlement_table 只能使用這裡列出的資料表（允許清單）；欄位名稱固定寫在程式內，
 // 不由設定檔決定，因此可以安全地組成 SQL。categories 為資料表 CHECK 限制允許的類別，定義的類別欄位選項必須是它的子集。
-// adjustments 為人資調整紀錄表（加總進額度），reason、actor、at 為寫入調整時的其他欄位。
-// log 為額度異動紀錄表（結構版本 4）：每次送出、簽核、退回、取消、人資調整與年度額度變更各記一列，含異動前後的剩餘；
-// 員工、類別、期間欄位與額度表同名，其餘欄位固定（見 VERSION_4_SQL），amount、before、after 為數量與異動前後剩餘的欄位名稱
+// 剩餘只由額度表的年度額度決定；需求單的送出、簽核、退回與取消都不寫入額度資料表，額度的扣除與調整由人資在公司既有的系統處理
+// （結構版本 5 移除額度異動紀錄 leave_log，版本 6 移除人資調整紀錄 leave_adjustments）。
 export const LEDGER_TABLES = Object.freeze({
   leave_entitlements: Object.freeze({
-    owner: 'username', category: 'leave_type', period: 'year', amount: 'granted_minutes', categories: LEAVE_TYPES,
-    adjustments: Object.freeze({ table: 'leave_adjustments', owner: 'username', category: 'leave_type', period: 'year', amount: 'delta_minutes', reason: 'reason', actor: 'by_user_id', at: 'at' }),
-    log: Object.freeze({ table: 'leave_log', amount: 'minutes', before: 'remaining_before_minutes', after: 'remaining_after_minutes' }),
+    owner: 'employee_no', category: 'leave_type', period: 'year', amount: 'granted_minutes', categories: LEAVE_TYPES,
+    // 呼叫端以帳號查詢額度；額度表以員工編號關聯（結構版本 8），由這段固定的子查詢把帳號換成員工編號（參數為帳號）
+    ownerByUsername: '(SELECT employee_no FROM accounts WHERE username = ?)',
   }),
 });
-
-// 額度異動紀錄的事件：需求單的狀態變化（送出、簽核、退回、取消）、人資調整（ADJUSTED）與維運腳本改年度額度（GRANTED）
-export const LEDGER_LOG_EVENTS = Object.freeze(['SUBMITTED', 'APPROVED', 'REJECTED', 'CANCELLED', 'ADJUSTED', 'GRANTED']);
 
 // 依序套用的資料庫結構；索引 i 會把 user_version 從 i 升到 i+1，已發布的項目不可修改，只能往後新增。
 const MIGRATIONS = Object.freeze([
@@ -69,10 +65,19 @@ const MIGRATIONS = Object.freeze([
   migrateToVersion3,
   // 4：請假額度異動紀錄 leave_log，並以既有需求單與人資調整回填（見 migrateToVersion4）
   migrateToVersion4,
+  // 5：移除 leave_log；需求單的送出與簽核不再寫入任何額度相關資料表
+  'DROP TABLE leave_log;',
+  // 6：移除人資調整紀錄 leave_adjustments（連同索引）；額度的扣除與調整由人資在公司既有的系統處理，本系統只保留年度額度 leave_entitlements
+  'DROP TABLE leave_adjustments;',
+  // 7：accounts 加上所屬部門的中文名稱 department_name（接在最後一欄），方便直接檢視資料庫；只供顯示，程式判斷部門一律用 department_id，
+  // 名稱由開啟資料庫時與人員維運操作依部門設定檔同步（見 personnel.js 的 syncAccountDepartmentNames）
+  "ALTER TABLE accounts ADD COLUMN department_name TEXT NOT NULL DEFAULT '';",
+  // 8：人員資料改以員工編號 employee_no 關聯（見 migrateToVersion8）
+  migrateToVersion8,
 ]);
 
 // 需要在交易外暫時關閉 foreign_keys 的遷移（重建被其他資料表參照的資料表；SQLite 不允許在交易內切換 foreign_keys）。
-const REBUILD_STEPS = new Set([migrateToVersion3]);
+const REBUILD_STEPS = new Set([migrateToVersion3, migrateToVersion8]);
 
 // username 的 CHECK 等同 /^[a-z]+(?:\.[a-z]+)+$/：只含 a-z 與點、以字母開頭與結尾、至少一個點且沒有連續的點。
 const VERSION_3_SQL = `CREATE TABLE accounts (
@@ -100,6 +105,62 @@ const VERSION_3_EMPLOYEES_SQL = `CREATE TABLE employees_v3 (
    CREATE TRIGGER employees_not_admin BEFORE INSERT ON employees
    WHEN (SELECT role FROM accounts WHERE username = NEW.username) = 'ADMIN'
    BEGIN SELECT RAISE(ABORT, '管理員帳號沒有員工資料'); END;`;
+
+// 版本 8：人員資料改以員工編號關聯。employees 以 employee_no 為主鍵；accounts 以 employee_no 參照員工資料（管理員沒有員工資料，必須為 NULL），
+// department_name 移到 department_id 旁邊；leave_entitlements 以 (employee_no, leave_type, year) 為主鍵並參照 employees。
+// 依 SQLite 建議的步驟建立新表、複製資料（維持原本的寫入順序）、刪除舊表再改名，最後重建索引與禁止刪除帳號的觸發器。
+const VERSION_8_SQL = `CREATE TABLE employees_v8 (
+     employee_no TEXT PRIMARY KEY CHECK (employee_no <> ''),
+     display_name TEXT NOT NULL,
+     hire_date TEXT NOT NULL
+   ) STRICT;
+   INSERT INTO employees_v8 (employee_no, display_name, hire_date) SELECT employee_no, display_name, hire_date FROM employees ORDER BY rowid;
+   CREATE TABLE accounts_v8 (
+     username TEXT PRIMARY KEY CHECK (username NOT GLOB '*[^a-z.]*' AND username GLOB '[a-z]*.*[a-z]' AND username NOT GLOB '*..*'),
+     employee_no TEXT UNIQUE REFERENCES employees (employee_no),
+     department_id TEXT NOT NULL CHECK (department_id <> ''),
+     department_name TEXT NOT NULL DEFAULT '',
+     role TEXT NOT NULL DEFAULT 'USER' CHECK (role IN ('USER', 'ADMIN')),
+     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL,
+     CHECK (role = 'USER' OR employee_no IS NULL)
+   ) STRICT;
+   INSERT INTO accounts_v8 (username, employee_no, department_id, department_name, role, active, created_at, updated_at)
+     SELECT a.username, e.employee_no, a.department_id, a.department_name, a.role, a.active, a.created_at, a.updated_at
+     FROM accounts a LEFT JOIN employees e ON e.username = a.username ORDER BY a.rowid;
+   CREATE TABLE leave_entitlements_v8 (
+     employee_no TEXT NOT NULL REFERENCES employees (employee_no),
+     leave_type TEXT NOT NULL CHECK (leave_type IN ('事假', '病假', '特休')),
+     year INTEGER NOT NULL,
+     granted_minutes INTEGER NOT NULL CHECK (granted_minutes >= 0),
+     PRIMARY KEY (employee_no, leave_type, year)
+   ) STRICT;
+   INSERT INTO leave_entitlements_v8 (employee_no, leave_type, year, granted_minutes)
+     SELECT e.employee_no, l.leave_type, l.year, l.granted_minutes FROM leave_entitlements l JOIN employees e ON e.username = l.username ORDER BY l.rowid;
+   DROP TABLE leave_entitlements;
+   DROP TABLE employees;
+   DROP TABLE accounts;
+   ALTER TABLE employees_v8 RENAME TO employees;
+   ALTER TABLE accounts_v8 RENAME TO accounts;
+   ALTER TABLE leave_entitlements_v8 RENAME TO leave_entitlements;
+   CREATE INDEX accounts_department ON accounts (department_id, role, active);
+   CREATE TRIGGER accounts_no_delete BEFORE DELETE ON accounts
+   BEGIN SELECT RAISE(ABORT, 'accounts 不可刪除，請改為停用（active = 0）'); END;`;
+
+/**
+ * 結構版本 8：人員資料改以員工編號 employee_no 關聯（帳號 username 只是登入名稱，可能因同名或改名而變動，員工編號才是人資的穩定識別碼）：
+ * employees 以 employee_no 為主鍵（不再存 username）；accounts 加上 employee_no（唯一，參照 employees；管理員必須為 NULL）並把 department_name
+ * 移到 department_id 旁邊；leave_entitlements 改以 (employee_no, leave_type, year) 為主鍵並參照 employees。
+ * 在 migrate 開啟的 IMMEDIATE 交易內、foreign_keys 已於交易外暫時關閉時執行；帳號、員工與額度的資料與順序都不變，
+ * 已送出的需求單仍以帳號記錄提單人，不改寫。migrate 會在提交前執行 foreign_key_check，有任何違反就回滾。
+ * @param {import('better-sqlite3').Database} db 可寫入的連線，必須已在交易內、foreign_keys 為 OFF。
+ * @returns {void}
+ * @throws {Error} SQLite 錯誤（例如 CHECK 限制不符）；交易回滾，資料庫維持版本 7。
+ */
+function migrateToVersion8(db) {
+  db.exec(VERSION_8_SQL);
+}
 
 /**
  * 結構版本 3：帳號、所屬部門、角色與啟用狀態改存 accounts 資料表，人員資料不再保留 JSON 檔。

@@ -76,11 +76,70 @@ select.draft-control { padding-right: 40px; }
 .draft-status.is-invalid { color: var(--danger); font-weight: 600; }
 .draft-field-note { font-size: 13px; color: var(--muted); }
 select[aria-invalid="true"] { border-bottom-color: var(--danger); }
-/* 日期＋時間：左邊原生日期（月曆），右邊 24 小時制時間（可打字或從 30 分鐘一筆的建議挑選） */
-.datetime-control { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 8px; }
-.datetime-control .draft-control { min-width: 0; }
-.datetime-time { font-variant-numeric: tabular-nums; }
-.datetime-control[aria-invalid="true"] .draft-control { border-bottom-color: var(--danger); }
+.draft-field-wide { grid-column: 1 / -1; }
+/* 期間欄位：起訖的名稱、來源與狀態並排在選擇器下方 */
+.draft-period-status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; }
+.draft-period-part { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.draft-period-name { font-size: 13px; color: var(--ink-soft); }
+.draft-period-part .draft-status { flex-basis: 100%; }
+
+/* 日期時間選擇器（dateTimeControl.js）：欄位本身是一或兩個按鈕，點選後在下方展開月曆與時間按鈕；版面依選擇器本身的寬度調整 */
+.picker { container-type: inline-size; display: grid; gap: 8px; }
+.picker-trigger {
+  display: flex; align-items: stretch; gap: 0; background: var(--field); border-bottom: 2px solid var(--line-strong); border-radius: 6px 6px 0 0;
+}
+.picker.is-open .picker-trigger { border-bottom-color: var(--focus); }
+.picker-part {
+  flex: 1 1 0; min-width: 0; display: grid; gap: 0; text-align: left; background: none; border: 0; border-radius: 6px 6px 0 0;
+  padding: 8px 12px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.picker-part:hover { background: rgba(43, 42, 39, 0.04); }
+.picker-part[aria-invalid="true"] { box-shadow: inset 0 -2px 0 var(--danger); }
+.picker-part-caption { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.picker-part-value { font-size: 15px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-part.is-empty .picker-part-value { color: #9a948b; }
+.picker-arrow { align-self: center; color: var(--muted); padding: 0 4px; }
+.picker-panel { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 14px 16px; display: grid; gap: 12px; }
+.picker-body { display: grid; gap: 16px; }
+@container (min-width: 600px) {
+  .picker-body.has-time { grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); gap: 24px; }
+}
+.picker-month { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.picker-month-title { font-weight: 700; font-size: 15px; }
+.picker-nav { background: none; border: 1px solid var(--line); border-radius: 8px; width: 32px; height: 32px; font-size: 18px; line-height: 1; color: var(--ink-soft); }
+.picker-nav:hover { background: var(--cream); }
+.picker-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; text-align: center; }
+.picker-weekday { font-size: 12px; color: var(--muted); padding: 4px 0; }
+.picker-day {
+  background: none; border: 0; border-radius: 8px; padding: 6px 0; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.picker-day:hover:not(:disabled) { background: var(--cream); }
+.picker-day:disabled { opacity: 1; color: #c3bdb3; }
+.picker-day.is-today { box-shadow: inset 0 0 0 1px var(--line-strong); }
+.picker-day.is-inside { background: var(--cream); border-radius: 0; }
+.picker-day.is-edge { background: var(--dark); color: #fff; }
+.picker-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.picker-time-column { display: grid; gap: 12px; align-content: start; }
+.picker-times { display: grid; gap: 6px; }
+.picker-section { font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+/* 時間按鈕：組名固定在左欄，按鈕換行時仍對齊在組名右側 */
+.picker-chips { display: flex; align-items: flex-start; gap: 6px; }
+.picker-chip-list { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.picker-group { flex: none; width: 36px; font-size: 12px; color: var(--muted); padding-top: 4px; }
+.picker-chip {
+  background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 13px; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.picker-chip:hover:not(:disabled) { border-color: var(--line-strong); }
+.picker-chip:disabled { opacity: 1; color: #c3bdb3; border-color: var(--field); }
+.picker-chip.is-on { background: var(--dark); border-color: var(--dark); color: #fff; }
+.picker-presets .picker-group { width: auto; margin-right: 4px; }
+.picker-custom { display: grid; gap: 6px; }
+.picker-custom-row { display: flex; gap: 8px; }
+input.picker-input { width: 7.5em; padding: 6px 10px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.picker-footer { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.picker-message { flex: 1 1 auto; font-size: 13px; color: var(--brown-deep); min-height: 1.3em; }
+.picker-footer .secondary-button, .picker-footer .primary-button { min-height: 0; padding: 6px 16px; font-size: 14px; }
 .draft-computed { background: var(--cream); border-radius: 10px; padding: 12px 16px; display: grid; gap: 4px; font-size: 15px; }
 .draft-summaries { display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
 .draft-prompt { white-space: pre-line; font-size: 14px; color: var(--ink-soft); border-left: 3px solid var(--notice-line); padding-left: 12px; }
@@ -143,4 +202,7 @@ select[aria-invalid="true"] { border-bottom-color: var(--danger); }
   .draft-bubble { max-width: 100%; }
   .draft-chat-row { flex-direction: column; align-items: stretch; }
   .draft-panel { padding: 14px; }
+  .draft-period-status { grid-template-columns: 1fr; }
+  .picker-trigger { flex-direction: column; }
+  .picker-arrow { display: none; }
 }

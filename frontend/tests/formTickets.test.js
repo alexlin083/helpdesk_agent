@@ -4,7 +4,7 @@ import { createFakeDocument } from './helpers/fakeDom.js';
 import { submitTicket, normalizeTicketResponse, normalizeStoredTicket, describeHttpError, FORM_ERROR_MESSAGES, MESSAGES } from '../src/services/ticketService.js';
 import { summarizeTicketResult, RESULT_TEXT } from '../src/components/propose/dialogs.js';
 import { buildTicketCard, describeRoute } from '../src/components/tickets/ticketCard.js';
-import { renderTicketTracking } from '../src/components/tickets/ticketTracking.js';
+import { renderTodoTickets, renderMyTickets } from '../src/components/tickets/ticketTracking.js';
 import { FILLED_LEAVE_VALUES, LEAVE_TYPE, EQUIPMENT_TYPE } from './helpers/draftFixtures.js';
 
 // 模擬 GET /api/forms 整理後的目錄：請假為目前的 version 2（舊單是 version 1），設備申請允許轉單。
@@ -192,8 +192,8 @@ function equipmentCard() {
 test('設備申請卡片依目錄顯示並允許轉單', equipmentCard);
 
 /**
- * 驗證追蹤面板：送達本部門、但由目前登入者本人提出的請假單不顯示簽核與退回（後端會以 403 拒絕自己簽核），仍可取消；
- * 同部門其他人提出的請假單照常顯示簽核。
+ * 驗證待辦表單：送達本部門、但由目前登入者本人提出的請假單不顯示簽核與退回（後端會以 403 拒絕自己簽核），仍可取消並標示「我提出的」；
+ * 同部門其他人提出的請假單照常顯示簽核；同一張單也列在申請表單的待簽核區，只能取消。
  * @returns {void}
  */
 function ownLeaveNotDecidable() {
@@ -201,13 +201,18 @@ function ownLeaveNotDecidable() {
   globalThis.document = doc;
   /** 建立節點替身。@returns {object} 元素。 */
   function node() { return doc.createElement('div'); }
-  const nodes = { listPending: node(), listRejected: node(), empties: { pending: node(), rejected: node() }, counts: { pending: node(), rejected: node(), tracking: node() } };
+  const nodes = { listTodo: node(), listMinePending: node(), listMineDone: node(), empties: { todo: node(), minePending: node(), mineDone: node() },
+    counts: { todo: node(), mine: node(), minePending: node(), mineDone: node() } };
   const own = leaveTicket({ ticket_id: 'TK-OWN', requester: { user_id: 'user-hana.test', username: 'hana.test', department_name: '測試人資部' } });
   const other = leaveTicket({ ticket_id: 'TK-OTHER' });
   const state = { mine: [own], department: { tickets: [own, other] }, departments: [] };
-  renderTicketTracking(state, nodes, { onDecide: noop, onTransfer: noop, onCancel: noop, onResubmit: noop }, { userID: 'user-hana.test' });
-  const [ownCard, otherCard] = nodes.listPending.children;
-  assert.equal(nodes.listPending.children.length, 2, '本人的單只列一次');
+  renderTodoTickets(state, nodes, { onDecide: noop, onTransfer: noop, onCancel: noop }, { userID: 'user-hana.test' });
+  renderMyTickets(state, nodes, { onCancel: noop, onResubmit: noop });
+  const [ownCard, otherCard] = nodes.listTodo.children;
+  assert.equal(nodes.listTodo.children.length, 2);
+  assert.equal(ownCard.querySelector('.ticket-tag').textContent, '我提出的');
+  assert.equal(nodes.listMinePending.children.length, 1, '本人的單也列在申請表單');
+  assert.equal(nodes.listMinePending.children[0].querySelector('.approve-button'), null);
   assert.equal(ownCard.querySelector('.approve-button'), null, '自己的請假單不顯示簽核');
   assert.equal(ownCard.querySelector('.reject-button'), null, '自己的請假單不顯示退回');
   assert.ok(ownCard.querySelector('.cancel-button'), '仍可取消自己的請假單');

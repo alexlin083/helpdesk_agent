@@ -1,5 +1,4 @@
-import { LEAVE_TYPES, LEDGER_TABLES } from '../storage/database.js';
-import { computeLedgerBalances } from '../storage/ledger.js';
+import { LEAVE_TYPES } from '../storage/database.js';
 import { isCalendarDate } from '../../utils/dates.js';
 
 // 人員資料（帳號、所屬部門、角色、啟用狀態、員工基本資料與假別額度）只存在 SQLite；這個模組集中驗證規則與寫入操作，
@@ -161,7 +160,8 @@ export function normalizePersonnelSeed(raw, { departments } = {}) {
 }
 
 /**
- * 在呼叫端已開啟的交易內寫入一份已驗證的名冊：先寫帳號（啟用），再寫員工與各年度額度。使用一般 INSERT，重複時失敗而不是略過。
+ * 在呼叫端已開啟的交易內寫入一份已驗證的名冊：先寫員工資料，再寫帳號（啟用，一般帳號帶自己的員工編號）與各年度額度（以員工編號關聯）。
+ * 使用一般 INSERT，重複時失敗而不是略過。
  * @param {import('better-sqlite3').Database} db 可寫入的連線，必須已在交易內。
  * @param {{accounts: Array<object>, employees: Array<object>}} seed normalizePersonnelSeed 的結果。
  * @param {string} at 寫入時間（ISO 8601），作為 created_at 與 updated_at。
@@ -169,14 +169,18 @@ export function normalizePersonnelSeed(raw, { departments } = {}) {
  * @throws {Error} SQLite 錯誤（例如 CHECK、UNIQUE 或外鍵限制不符）；交易由呼叫端回滾。
  */
 function insertPersonnel(db, seed, at) {
-  const insertAccount = db.prepare('INSERT INTO accounts (username, department_id, role, active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)');
-  const insertEmployee = db.prepare('INSERT INTO employees (username, display_name, employee_no, hire_date) VALUES (?, ?, ?, ?)');
-  const insertEntitlement = db.prepare('INSERT INTO leave_entitlements (username, leave_type, year, granted_minutes) VALUES (?, ?, ?, ?)');
+  const insertAccount = db.prepare('INSERT INTO accounts (username, employee_no, department_id, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)');
+  const insertEmployee = db.prepare('INSERT INTO employees (employee_no, display_name, hire_date) VALUES (?, ?, ?)');
+  const insertEntitlement = db.prepare('INSERT INTO leave_entitlements (employee_no, leave_type, year, granted_minutes) VALUES (?, ?, ?, ?)');
   const added = { accounts: 0, employees: 0, entitlements: 0 };
-  for (const account of seed.accounts) added.accounts += insertAccount.run(account.username, account.departmentId, account.role, at, at).changes;
+  const numbers = new Map();
   for (const employee of seed.employees) {
-    added.employees += insertEmployee.run(employee.username, employee.displayName, employee.employeeNo, employee.hireDate).changes;
-    for (const entitlement of employee.entitlements) added.entitlements += insertEntitlement.run(employee.username, entitlement.leaveType, entitlement.year, entitlement.minutes).changes;
+    added.employees += insertEmployee.run(employee.employeeNo, employee.displayName, employee.hireDate).changes;
+    numbers.set(employee.username, employee.employeeNo);
+  }
+  for (const account of seed.accounts) added.accounts += insertAccount.run(account.username, numbers.get(account.username) ?? null, account.departmentId, account.role, at, at).changes;
+  for (const employee of seed.employees) {
+    for (const entitlement of employee.entitlements) added.entitlements += insertEntitlement.run(employee.employeeNo, entitlement.leaveType, entitlement.year, entitlement.minutes).changes;
   }
   return added;
 }
@@ -198,6 +202,26 @@ export function seedPersonnelIfEmpty(db, seed, at = new Date().toISOString()) {
     return insertPersonnel(db, seed, at);
   }
   return db.transaction(run).immediate();
+}
+
+/**
+ * 依帳號的部門（accounts.department_id）與部門設定檔，同步 accounts.department_name（部門的中文名稱，結構版本 7 起）：
+ * 名稱不同時才更新（不改 updated_at，因為帳號本身沒有變動），部門已不在設定檔時寫入空字串。
+ * 這個欄位只是方便直接檢視資料庫，程式判斷部門一律用 department_id。必須在呼叫端已開啟的寫入交易內同步呼叫。
+ * @param {import('better-sqlite3').Database} db 可寫入、結構版本 7 以上的連線。
+ * @param {{findDepartment: Function}} departments 部門查詢服務。
+ * @returns {number} 更新的帳號筆數。
+ * @throws {Error} SQLite 錯誤；交易由呼叫端回滾。
+ */
+export function syncAccountDepartmentNames(db, departments) {
+  const rows = db.prepare('SELECT username, department_id, department_name FROM accounts').all();
+  const update = db.prepare('UPDATE accounts SET department_name = ? WHERE username = ?');
+  let changed = 0;
+  for (const row of rows) {
+    const name = departments.findDepartment(row.department_id)?.name ?? '';
+    if (name !== row.department_name) changed += update.run(name, row.username).changes;
+  }
+  return changed;
 }
 
 /**
@@ -230,35 +254,19 @@ function parseCount(text, name) {
  * dryRun 時只在讀取交易內計算「會改變什麼」，不寫入任何內容（可用唯讀連線）。驗證規則與服務相同（normalizeAccounts、normalizeEmployees、
  * normalizeEntitlements、部門設定檔），不提供刪除帳號：帳號只能停用，需求單保留歷史。
  * 執行中的服務每次請求都重新查詢資料庫，因此這裡提交後不需要重啟服務。
- * @param {import('better-sqlite3').Database} db 目前結構版本（4）的連線；只做預覽或列表時可為唯讀。
+ * @param {import('better-sqlite3').Database} db 目前結構版本（5）的連線；只做預覽或列表時可為唯讀。
  * @param {object} options 依賴。
  * @param {object} options.departments 部門查詢服務（需有 findDepartment）。
  * @param {Function} [options.clock=Date.now] epoch 毫秒時間來源，用於 updated_at。
- * @param {object|null} [options.ledgerSpec=null] 使用 leave_entitlements 的需求類型 ledger 規格；提供時 grant 在 leave_log 記一列 GRANTED，
- *   前後剩餘在同一筆交易內以 computeLedgerBalances 即時計算（額度＋調整－已核准－待簽核）；null 時不記錄
  * @returns {object} list、add、setDepartment、setActive、grant 操作。
  */
-export function createPersonnelAdmin(db, { departments, clock = Date.now, ledgerSpec = null }) {
+export function createPersonnelAdmin(db, { departments, clock = Date.now }) {
   const sql = {
     account: db.prepare('SELECT username, department_id, role, active FROM accounts WHERE username = ?'),
-    employee: db.prepare('SELECT username FROM employees WHERE username = ?'),
-    employeeNo: db.prepare('SELECT username FROM employees WHERE employee_no = ?'),
-    entitlement: db.prepare('SELECT granted_minutes FROM leave_entitlements WHERE username = ? AND leave_type = ? AND year = ?'),
-    logGrant: db.prepare(`INSERT INTO leave_log (at, event, username, leave_type, year, minutes, remaining_before_minutes, remaining_after_minutes, by_username, comment, source)
-      VALUES (?, 'GRANTED', ?, ?, ?, ?, ?, ?, 'scripts/personnel.js', ?, 'live')`),
+    employee: db.prepare('SELECT e.employee_no FROM accounts a JOIN employees e ON e.employee_no = a.employee_no WHERE a.username = ?'),
+    employeeNo: db.prepare('SELECT employee_no FROM employees WHERE employee_no = ?'),
+    entitlement: db.prepare('SELECT granted_minutes FROM leave_entitlements WHERE employee_no = ? AND leave_type = ? AND year = ?'),
   };
-
-  /**
-   * 即時計算員工某假別某年度的剩餘分鐘數（額度＋調整－已核准－待簽核）；只在 ledgerSpec 存在、交易內同步呼叫
-   * @param {string} username 帳號
-   * @param {string} leaveType 假別
-   * @param {number} year 年度
-   * @returns {number} 剩餘分鐘數；假別不在規格內時為 0
-   */
-  function remainingNow(username, leaveType, year) {
-    const balances = computeLedgerBalances(/** 編譯語句。@param {string} text SQL。@returns {object} 語句。 */ (text) => db.prepare(text), LEDGER_TABLES, ledgerSpec, username, year);
-    return balances.find(/** 找出同假別。@param {{category: string}} item 額度。@returns {boolean} 相符時 true。 */ (item) => item.category === leaveType)?.remaining ?? 0;
-  }
 
   /**
    * 執行一個操作：預覽時用讀取交易，正式執行時用 IMMEDIATE 交易（讀取、驗證與寫入在同一個寫入鎖內）。
@@ -309,8 +317,9 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
       /** 讀取帳號、員工與額度。@returns {{rows: Array<object>}} 列表。 */
       function read() {
         const accounts = db.prepare(`SELECT a.username, a.department_id, a.role, a.active, e.display_name, e.employee_no, e.hire_date
-          FROM accounts a LEFT JOIN employees e ON e.username = a.username ORDER BY a.rowid`).all();
-        const grants = db.prepare('SELECT username, leave_type, year, granted_minutes FROM leave_entitlements ORDER BY username, year, leave_type').all();
+          FROM accounts a LEFT JOIN employees e ON e.employee_no = a.employee_no ORDER BY a.rowid`).all();
+        const grants = db.prepare(`SELECT a.username, l.leave_type, l.year, l.granted_minutes FROM leave_entitlements l JOIN accounts a ON a.employee_no = l.employee_no
+          ORDER BY a.username, l.year, l.leave_type`).all();
         return { rows: accounts.filter(/** 依部門篩選。@param {object} row 帳號列。@returns {boolean} 相符時 true。 */ (row) => department === undefined || row.department_id === department)
           .map(/** 組出列表列。@param {object} row 帳號列。@returns {object} 列表列。 */ (row) => {
             const entitlements = {};
@@ -326,6 +335,7 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
     },
     /**
      * 新增帳號。一般帳號（USER）必須同時提供員工資料（姓名、員工編號、到職日），管理員（ADMIN）不可提供；新員工沒有任何額度，請再以 grant 設定。
+ * 寫入帳號時一併以 syncAccountDepartmentNames 填入部門的中文名稱。
      * @param {object} input 新帳號。
      * @param {string} input.username 帳號（全小寫「名.姓」）。
      * @param {string} input.department 部門 id。
@@ -353,8 +363,10 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
         if (employee && sql.employeeNo.get(employee.employeeNo)) throw personnelError('PERSONNEL_CONFLICT', '員工編號已被其他員工使用');
         if (write) {
           const at = new Date(clock()).toISOString();
-          db.prepare('INSERT INTO accounts (username, department_id, role, active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)').run(account.username, account.departmentId, account.role, at, at);
-          if (employee) db.prepare('INSERT INTO employees (username, display_name, employee_no, hire_date) VALUES (?, ?, ?, ?)').run(employee.username, employee.displayName, employee.employeeNo, employee.hireDate);
+          if (employee) db.prepare('INSERT INTO employees (employee_no, display_name, hire_date) VALUES (?, ?, ?)').run(employee.employeeNo, employee.displayName, employee.hireDate);
+          db.prepare('INSERT INTO accounts (username, employee_no, department_id, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)')
+            .run(account.username, employee?.employeeNo ?? null, account.departmentId, account.role, at, at);
+          syncAccountDepartmentNames(db, departments);
         }
         return { action: 'add', username: account.username, changed: true,
           changes: { department_id: { from: null, to: account.departmentId }, role: { from: null, to: account.role }, active: { from: null, to: true }, employee_profile: { from: false, to: Boolean(employee) } } };
@@ -362,7 +374,7 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
       return execute(task, dryRun);
     },
     /**
-     * 調整帳號的所屬部門；新部門必須存在於部門設定檔。部門相同時不寫入（changed 為 false）。
+     * 調整帳號的所屬部門；新部門必須存在於部門設定檔。部門相同時不寫入（changed 為 false），有變更時在同一筆交易內同步 accounts.department_name。
      * 執行中的服務下一個請求就會以新部門判斷處理人名單、代理人候選與簽核權限。
      * @param {string} username 帳號。
      * @param {string} departmentId 新部門 id。
@@ -377,7 +389,10 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
       function task(write) {
         const row = existingAccount(username);
         const changed = row.department_id !== target;
-        if (write && changed) db.prepare('UPDATE accounts SET department_id = ?, updated_at = ? WHERE username = ?').run(target, new Date(clock()).toISOString(), username);
+        if (write && changed) {
+          db.prepare('UPDATE accounts SET department_id = ?, updated_at = ? WHERE username = ?').run(target, new Date(clock()).toISOString(), username);
+          syncAccountDepartmentNames(db, departments);
+        }
         return { action: 'set-department', username, changed, changes: changed ? { department_id: { from: row.department_id, to: target } } : {} };
       }
       return execute(task, dryRun);
@@ -403,9 +418,7 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
       return execute(task, dryRun);
     },
     /**
-     * 設定員工某年度某假別的額度（取代原值，不是增減；人資的增減請用 POST /api/leave/adjustments）。只適用有員工資料的一般帳號。
-     * 額度有變更且提供 ledgerSpec 時，同一筆交易內在 leave_log 寫一列 GRANTED：minutes 為增減的分鐘數（原本沒有額度時以 0 計），
-     * 異動前後的剩餘在寫入額度前後各即時計算一次（不依賴先前的紀錄，管理重置刪除需求單後也正確）
+     * 設定員工某年度某假別的額度（取代原值，不是增減；本系統不記錄額度的增減，人資在公司既有的系統處理）。只適用有員工資料的一般帳號。
      * @param {string} username 帳號。
      * @param {string} leaveType 假別（事假、病假、特休）。
      * @param {string|number} year 四位數年度。
@@ -421,17 +434,13 @@ export function createPersonnelAdmin(db, { departments, clock = Date.now, ledger
       /** 讀取原額度並寫入新額度。@param {boolean} write 是否寫入。@returns {object} 結果摘要。 */
       function task(write) {
         existingAccount(username);
-        if (!sql.employee.get(username)) throw personnelError('PERSONNEL_NOT_FOUND', `帳號 ${username} 沒有員工資料（管理員或尚未建立），無法設定額度`);
-        const before = sql.entitlement.get(username, entry.leaveType, entry.year)?.granted_minutes ?? null;
+        const employeeNo = sql.employee.get(username)?.employee_no;
+        if (!employeeNo) throw personnelError('PERSONNEL_NOT_FOUND', `帳號 ${username} 沒有員工資料（管理員或尚未建立），無法設定額度`);
+        const before = sql.entitlement.get(employeeNo, entry.leaveType, entry.year)?.granted_minutes ?? null;
         const changed = before !== entry.minutes;
         if (write && changed) {
-          const remainingBefore = ledgerSpec ? remainingNow(username, entry.leaveType, entry.year) : null;
-          db.prepare(`INSERT INTO leave_entitlements (username, leave_type, year, granted_minutes) VALUES (?, ?, ?, ?)
-            ON CONFLICT (username, leave_type, year) DO UPDATE SET granted_minutes = excluded.granted_minutes`).run(username, entry.leaveType, entry.year, entry.minutes);
-          if (ledgerSpec) {
-            sql.logGrant.run(new Date(clock()).toISOString(), username, entry.leaveType, entry.year, entry.minutes - (before ?? 0), remainingBefore, remainingNow(username, entry.leaveType, entry.year),
-              `年度額度 ${before ?? 0} → ${entry.minutes} 分鐘`);
-          }
+          db.prepare(`INSERT INTO leave_entitlements (employee_no, leave_type, year, granted_minutes) VALUES (?, ?, ?, ?)
+            ON CONFLICT (employee_no, leave_type, year) DO UPDATE SET granted_minutes = excluded.granted_minutes`).run(employeeNo, entry.leaveType, entry.year, entry.minutes);
         }
         return { action: 'grant', username, changed, changes: changed ? { entitlement: { leave_type: entry.leaveType, year: entry.year, from: before, to: entry.minutes } } : {} };
       }

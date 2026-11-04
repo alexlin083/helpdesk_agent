@@ -4,7 +4,7 @@ import { createFakeDocument, createFakeWindow, buildDraftDialogDom } from './hel
 import { createDraftDialog, DRAFT_TEXT, describeOverLimit, describeAiUnavailable, normalizeControlValue } from '../src/components/propose/draftDialog.js';
 import { normalizeDraftResponse } from '../src/services/draftService.js';
 import { TicketServiceError } from '../src/services/ticketService.js';
-import { leaveResponse, completeLeaveResponse, generalResponse, equipmentResponse, deferred, tick, GREETING, PROMPT, RENDERED, HR, IT, GA, FILLED_LEAVE_VALUES, LEAVE_SUMMARY } from './helpers/draftFixtures.js';
+import { leaveResponse, completeLeaveResponse, generalResponse, equipmentResponse, deferred, tick, GREETING, PROMPT, RENDERED, HR, IT, GA, FILLED_LEAVE_VALUES, LEAVE_SUMMARY, LEAVE_TYPE } from './helpers/draftFixtures.js';
 
 /**
  * 建立「自動生成」視窗與草稿服務替身。responder 依請求回傳後端 JSON（或 Promise），替身會經過真實的 normalizeDraftResponse 整理。
@@ -12,9 +12,10 @@ import { leaveResponse, completeLeaveResponse, generalResponse, equipmentRespons
  * @param {Function} [options.responder] (input, callIndex) => 回應 JSON、Promise 或拋出錯誤。
  * @param {string} [options.subject='我要請假'] 頁面主題。
  * @param {string} [options.content=''] 頁面需求內容。
+ * @param {() => number} [options.now=Date.now] 日期時間選擇器使用的目前時間。
  * @returns {object} doc、win、nodes、page（主題、內容、套用紀錄）、calls（請求紀錄）與 dialog 控制器。
  */
-function mount({ responder = defaultResponder, subject = '我要請假', content = '' } = {}) {
+function mount({ responder = defaultResponder, subject = '我要請假', content = '', now = Date.now } = {}) {
   const doc = createFakeDocument();
   globalThis.document = doc;
   const win = createFakeWindow();
@@ -40,7 +41,7 @@ function mount({ responder = defaultResponder, subject = '我要請假', content
   function onApply(applied) { page.applied.push(applied); page.content = applied.content; }
   /** 記錄需要重新登入。@returns {void} */
   function onLoginRequired() { page.logins += 1; }
-  const dialog = createDraftDialog({ ...nodes, trigger }, { user: { username: 'tina.test' }, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs: 0 });
+  const dialog = createDraftDialog({ ...nodes, trigger }, { user: { username: 'tina.test' }, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs: 0, now });
   return { doc, win, nodes, trigger, page, calls, dialog };
 }
 
@@ -82,30 +83,59 @@ function bubbles(nodes) {
 }
 
 /**
- * 取得欄位的控制項與狀態節點。
+ * 列出節點底下的所有子孫元素。
+ * @param {object} node 元素。
+ * @returns {object[]} 子孫元素。
+ */
+function descendants(node) { return node.children.flatMap(/** 子節點與其子孫。@param {object} child 子節點。@returns {object[]} 元素。 */ (child) => [child, ...descendants(child)]); }
+
+/**
+ * 取得欄位的控制項與狀態節點：欄位外框的 data-key 可能含兩個代號（合併的期間欄位），控制項為以 aria-describedby 指向該欄位狀態的元素，
+ * 來源標籤取狀態所在區塊中的標籤（一般欄位為名稱列、期間欄位為各自的狀態區）。
  * @param {object} nodes 對話框節點。
  * @param {string} key 欄位代號。
  * @returns {{control: object, status: object, source: object, wrapper: object}} 節點。
  */
 function field(nodes, key) {
-  const wrapper = nodes.fieldList.children[nodes.fieldList.children.map(dataKeyOf).indexOf(key)];
-  return { wrapper, control: wrapper.querySelector(`#draft-field-${key}`), status: wrapper.querySelector('.draft-status'), source: wrapper.querySelector('.draft-source') };
+  const wrapper = nodes.fieldList.children.find(/** data-key 是否含這個代號。@param {object} child 欄位外框。@returns {boolean} 含時 true。 */ (child) => dataKeyOf(child).split(' ').includes(key));
+  const status = wrapper.querySelector(`#draft-status-${key}`);
+  const control = descendants(wrapper).find(/** 是否指向這個欄位的狀態。@param {object} node 元素。@returns {boolean} 是時 true。 */ (node) => node.getAttribute('aria-describedby') === `draft-status-${key}`);
+  return { wrapper, control, status, source: status.parent.querySelector('.draft-source') };
 }
 
 /**
- * 修改欄位控制項並觸發 change 事件。
+ * 取得選擇器按鈕對應的面板。
+ * @param {object} part 選擇器的部分按鈕。
+ * @returns {object} 面板。
+ */
+function panelOf(part) { return globalThis.document.querySelector(`#${part.getAttribute('aria-controls')}`); }
+
+/**
+ * 在選擇器面板中依文字找出按鈕。
+ * @param {object} panel 面板。
+ * @param {string} className 按鈕樣式。
+ * @param {string} text 按鈕文字。
+ * @returns {object} 按鈕。
+ */
+function buttonIn(panel, className, text) { return panel.querySelectorAll(`.${className}`).find(/** 文字是否相符。@param {object} node 按鈕。@returns {boolean} 相符時 true。 */ (node) => node.textContent === text); }
+
+/**
+ * 修改欄位控制項並觸發 change 事件。日期時間選擇器沒有可直接輸入的欄位，改為模擬使用者操作：先以程式寫入值（選擇器切到該日期），
+ * 開啟面板後點選同一天（或清空時按「清除」），再按「完成」。
  * @param {object} nodes 對話框節點。
  * @param {string} key 欄位代號。
  * @param {string} value 新值。
  * @returns {Promise<void>}
  */
 async function edit(nodes, key, value) {
-  const { wrapper, control } = field(nodes, key);
-  const group = wrapper.querySelector('.datetime-control');
-  if (group) {
-    // 日期＋時間欄位：寫入外層群組的組合值，再觸發日期輸入的 change（與使用者選日期相同）
-    group.value = value;
-    await control.dispatch('change');
+  const { control } = field(nodes, key);
+  if (control.classList.contains('picker-part')) {
+    control.value = value;
+    await control.click();
+    const panel = panelOf(control);
+    if (value) await buttonIn(panel, 'picker-day', String(Number(value.slice(8, 10)))).click();
+    else await panel.querySelector('.picker-clear').click();
+    await panel.querySelector('.picker-done').click();
     return;
   }
   control.value = value;
@@ -203,11 +233,15 @@ async function openGreets() {
   assert.equal(applicant.control.value, 'tina.test');
   assert.equal(applicant.source.textContent, '系統');
   const startAt = field(nodes, 'start_at');
-  assert.equal(startAt.control.type, 'date', '日期時間欄位的 label 指向原生日期輸入');
-  const startTime = startAt.wrapper.querySelector('.datetime-time');
-  assert.equal(startTime.type, 'text', '時間改為 24 小時制文字輸入，不使用原生上午／下午選擇器');
-  assert.equal(startTime.getAttribute('list'), 'draft-field-start_at-times');
-  assert.equal(startAt.wrapper.querySelector('datalist').children.length, 48, '每 30 分鐘一筆建議');
+  assert.ok(startAt.control.classList.contains('picker-part'), '日期時間欄位使用選擇器按鈕，label 指向它');
+  assert.equal(startAt.control.getAttribute('id'), 'draft-field-start_at');
+  assert.equal(startAt.control.getAttribute('aria-expanded'), 'false');
+  assert.equal(startAt.wrapper.className.includes('draft-field-wide'), true, '日期時間欄位佔滿整列');
+  await startAt.control.click();
+  assert.equal(panelOf(startAt.control).hidden, false);
+  assert.equal(panelOf(startAt.control).querySelectorAll('.picker-chip').length, 48, '沒有工作日曆時列出全天每 30 分鐘的時間按鈕');
+  await panelOf(startAt.control).querySelector('.picker-done').click();
+  assert.equal(panelOf(startAt.control).hidden, true);
   assert.deepEqual(field(nodes, 'leave_type').control.children.map(textOf), ['請選擇', '事假', '病假', '特休']);
   const agentOptions = field(nodes, 'agent').control.children;
   assert.deepEqual(agentOptions.map(textOf), ['請選擇', 'kevin.test', 'lisa.test（此期間也有請假）']);
@@ -670,7 +704,8 @@ async function equipmentType() {
   assert.equal(quantity.type, 'number');
   assert.deepEqual([quantity.getAttribute('min'), quantity.getAttribute('max'), quantity.getAttribute('step')], ['1', '50', '1']);
   assert.equal(field(nodes, 'purpose').control.tagName, 'TEXTAREA');
-  assert.equal(field(nodes, 'needed_by').control.type, 'date');
+  assert.ok(field(nodes, 'needed_by').control.classList.contains('picker-part'), '日期欄位使用選擇器');
+  assert.equal(field(nodes, 'needed_by').wrapper.className.includes('draft-field-wide'), false, '只有日期的欄位維持半欄');
   for (const [key, value] of Object.entries(filled)) if (key !== 'applicant') await edit(nodes, key, key === 'quantity' ? ' 99 ' : key === 'needed_by' ? `${value}T00:00` : value);
   await flush(dialog);
   assert.equal(calls.at(-1).state.type_id, 'equipment');
@@ -860,3 +895,83 @@ async function aiBusyCountdown() {
   dialog.reset();
 }
 test('AI 忙碌時送出鈕倒數', aiBusyCountdown);
+
+// 模擬後端「自動生成」回應中帶規則與工作日曆的請假定義（rules.after 讓起訖合併成期間選擇器）；值都是測試用的假資料。
+const PERIOD_FIELDS = LEAVE_TYPE.fields.map(/** 截止欄位加上規則。@param {object} item 欄位。@returns {object} 欄位。 */ (item) => (item.key === 'end_at' ? { ...item, rules: { after: 'start_at' } } : item));
+const PERIOD_CALENDAR = { start: 'start_at', end: 'end_at', timezone_offset: '+08:00', work_windows: [['09:00', '12:00'], ['13:00', '18:00']], workdays: [1, 2, 3, 4, 5], holidays: ['2026-11-11'], open_years: [2026] };
+// 台北時間 2026-11-04（週三）10:00
+const PERIOD_NOW = Date.UTC(2026, 10, 4, 2);
+
+/**
+ * 驗證起訖欄位合併成一個期間選擇器：名稱取共同開頭加「期間」、起訖分別顯示狀態；月曆停用週末與假日；時間只列上班時段；
+ * 點選開始日後按「整天」快捷同時填好起訖並鎖定兩個欄位送出驗證；再點結束日改成跨日；後端的格式錯誤標在對應的部分；Esc 只關閉面板。
+ * @returns {Promise<void>}
+ */
+async function periodPicker() {
+  /**
+   * 第一次回問候；驗證時沿用送出的值，結束時間不在上班時段時回報格式錯誤（模擬後端規則）。
+   * @param {object} input 請求。
+   * @returns {object} 後端 JSON。
+   */
+  function responder(input) {
+    const type = { ...LEAVE_TYPE, fields: PERIOD_FIELDS, calendars: [PERIOD_CALENDAR] };
+    if (!input.state) return leaveResponse({ type });
+    const invalid = input.state.fields.end_at.endsWith('T12:30') ? [{ key: 'end_at', message: '請假截止時間不在上班時段（測試）' }] : [];
+    return leaveResponse({ type, values: { applicant: 'tina.test', ...input.state.fields }, invalid, missing: ['leave_type', 'agent'], reply: '' });
+  }
+  const { nodes, calls, dialog } = mount({ responder, now: /** 固定的目前時間。@returns {number} 毫秒。 */ () => PERIOD_NOW });
+  await dialog.open();
+  await flush(dialog);
+  assert.deepEqual(nodes.fieldList.children.map(dataKeyOf), ['applicant', 'leave_type', 'start_at end_at', 'agent', 'note']);
+  const period = field(nodes, 'start_at').wrapper;
+  assert.equal(period.querySelector('label').textContent, '請假期間必填');
+  assert.equal(period.querySelector('label').getAttribute('for'), 'draft-field-start_at');
+  const start = field(nodes, 'start_at');
+  const end = field(nodes, 'end_at');
+  assert.equal(end.control.getAttribute('id'), 'draft-field-start_at-end');
+  assert.deepEqual([start.status.textContent, end.status.textContent], [DRAFT_TEXT.status.missing, DRAFT_TEXT.status.missing]);
+  await start.control.click();
+  const panel = panelOf(start.control);
+  assert.equal(panel.querySelector('.picker-month-title').textContent, '2026 年 11 月');
+  assert.equal(buttonIn(panel, 'picker-day', '7').disabled, true, '週六停用');
+  assert.equal(buttonIn(panel, 'picker-day', '11').disabled, true, '假日停用');
+  assert.equal(buttonIn(panel, 'picker-day', '2').disabled, false, '工作日即使在今天以前仍可選');
+  assert.ok(buttonIn(panel, 'picker-day', '4').className.includes('is-today'));
+  const chips = panel.querySelectorAll('.picker-chip').map(textOf);
+  assert.deepEqual(chips.slice(0, 3), ['整天 09:00–18:00', '上午 09:00–12:00', '下午 13:00–18:00']);
+  assert.equal(chips.length, 3 + 16 + 16, '快捷＋開始與結束各 16 個上班時段的時間');
+  assert.equal(chips.includes('12:30'), false, '午休不列出');
+  await buttonIn(panel, 'picker-day', '5').click();
+  await buttonIn(panel, 'picker-chip', '整天 09:00–18:00').click();
+  assert.deepEqual([start.control.value, end.control.value], ['2026-11-05T09:00', '2026-11-05T18:00'], '結束日沒有另選時沿用開始日');
+  assert.equal(start.control.querySelector('.picker-part-value').textContent, '2026/11/05（四） 09:00');
+  await flush(dialog);
+  assert.deepEqual(calls.at(-1).state.fields, { leave_type: '', start_at: '2026-11-05T09:00', end_at: '2026-11-05T18:00', agent: '', note: '' });
+  assert.deepEqual(calls.at(-1).state.locked, ['start_at', 'end_at']);
+  assert.deepEqual([start.status.textContent, end.status.textContent], [DRAFT_TEXT.status.done, DRAFT_TEXT.status.done]);
+  assert.equal(start.source.textContent, '手動');
+  await buttonIn(panel, 'picker-day', '6').click();
+  assert.equal(end.control.value, '2026-11-06T18:00', '再點一天設定結束日');
+  const custom = panel.querySelector('#draft-field-start_at-custom-1');
+  custom.value = '1230';
+  await custom.dispatch('change');
+  await flush(dialog);
+  assert.equal(calls.at(-1).state.fields.end_at, '2026-11-06T12:30', '其他時間可輸入任何分鐘');
+  assert.equal(end.status.textContent, `${DRAFT_TEXT.status.invalid}：請假截止時間不在上班時段（測試）`);
+  assert.equal(end.control.getAttribute('aria-invalid'), 'true');
+  assert.equal(start.control.getAttribute('aria-invalid'), null);
+  let prevented = 0;
+  const escape = {
+    key: 'Escape',
+    /** 記錄攔下預設行為。@returns {void} */
+    preventDefault() { prevented += 1; },
+    /** 空的事件傳遞攔截。@returns {void} */
+    stopPropagation() {},
+  };
+  await panel.dispatch('keydown', escape);
+  assert.equal(panel.hidden, true, 'Esc 只關閉面板');
+  assert.equal(prevented, 1, '攔下 Esc 避免關閉整個對話框');
+  assert.equal(globalThis.document.activeElement, start.control, '焦點回到開啟面板的按鈕');
+  dialog.reset();
+}
+test('起訖欄位合併成期間選擇器', periodPicker);

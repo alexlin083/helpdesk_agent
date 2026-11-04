@@ -210,11 +210,32 @@ function generalNormalization() {
     { key: 'a', label: ' A ', type: 'enum', options: ['1', 2], required: true, max_length: -1 },
     { key: 'n', label: 'N', type: 'number', min: 1, max: '9', integer: true },
   ] }), { id: 'x', version: 2, name: '名稱', department: { id: 'd', name: 'D' }, fields: [
-    { key: 'a', label: 'A', type: 'enum', required: true, options: ['1'], max_length: null, min: null, max: null, integer: false },
-    { key: 'n', label: 'N', type: 'number', required: false, options: [], max_length: null, min: 1, max: null, integer: true },
-  ] });
+    { key: 'a', label: 'A', type: 'enum', required: true, options: ['1'], max_length: null, min: null, max: null, integer: false, rules: { after: null, not_before_today: false } },
+    { key: 'n', label: 'N', type: 'number', required: false, options: [], max_length: null, min: 1, max: null, integer: true, rules: { after: null, not_before_today: false } },
+  ], calendars: [] });
 }
 test('沒有固定部門的類型與無法辨識的回應', generalNormalization);
+
+/**
+ * 驗證日期類欄位的規則與工作日曆摘要的整理：規則只保留 after（文字）與 not_before_today（true）；日曆整理時間、星期、假日與年度，
+ * 略過格式不符的項目，缺少起訖欄位、有效時段或工作日的整筆略過，時區格式不符時改用台北。
+ * @returns {void}
+ */
+function pickerData() {
+  const type = normalizeRequestType({ id: 'x', version: 1, name: 'n', fields: [
+    { key: 'from_at', label: 'F', type: 'datetime', rules: { not_before_today: 'yes' } },
+    { key: 'to_at', label: 'T', type: 'datetime', rules: { after: 'from_at', not_before_today: true } },
+  ], calendars: [
+    { start: 'from_at', end: 'to_at', timezone_offset: '+8', work_windows: [['09:00', '12:00'], ['13:00', '12:00'], ['25:00', '26:00'], 'x'], workdays: [1, 1, 7, 5],
+      holidays: ['2026-11-11', '11/12'], open_years: [2026, '2027'] },
+    { start: 'from_at', end: 'to_at', work_windows: [], workdays: [1] },
+    { end: 'to_at', work_windows: [['09:00', '18:00']], workdays: [1] },
+  ] });
+  assert.deepEqual(type.fields.map(/** 取規則。@param {{rules: object}} field 欄位。@returns {object} 規則。 */ (field) => field.rules),
+    [{ after: null, not_before_today: false }, { after: 'from_at', not_before_today: true }]);
+  assert.deepEqual(type.calendars, [{ start: 'from_at', end: 'to_at', workWindows: [['09:00', '12:00']], workdays: [1, 5], holidays: ['2026-11-11'], openYears: [2026], timezoneOffset: '+08:00' }]);
+}
+test('日期類欄位的規則與工作日曆摘要', pickerData);
 
 /**
  * 驗證面板狀態的整理：空白 id 轉 null、只保留文字欄位值、鎖定清單去重；type_id 也接受舊名稱 form_id。

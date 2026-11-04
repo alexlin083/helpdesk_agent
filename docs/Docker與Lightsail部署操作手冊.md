@@ -634,7 +634,21 @@ sudo docker compose logs --tail=100 backend | grep -E 'request_types\.|storage\.
 2. 替目前的 backend image 加上 `pre-v4` 標籤（`sudo docker tag helpdesk-backend:latest helpdesk-backend:pre-v4`），再依第 5.2 節載入並啟動新 image
 3. 以 `sudo docker compose logs --tail=100 backend | grep 'storage\.'` 確認 `storage.ready` 的 schemaVersion 為 4，再執行 `sudo docker compose exec -T backend node scripts/leave-log.js` 列出紀錄；回填的列會標示「升級時回填」
 
+這一版的 `leave_log` 與 `scripts/leave-log.js` 已在結構版本 5 移除（見第 5.12 節）；還沒升級到版本 4 的主機可以直接依第 5.12 節升級，途中會先經過版本 4 再移除
+
 回滾到 `pre-v4`：舊 image 只支援到版本 3，遇到版本 4 會記錄 `storage.failed`（reason `SCHEMA_TOO_NEW`）；先停止 backend，以 `before-v4` 備份依第 6.3 節還原，再只把 backend 換回舊 image（`sudo docker tag helpdesk-backend:pre-v4 helpdesk-backend:latest`，其餘指令同第 5.6 節）；升級後新增的工作單、簽核、人資調整與人員調整（`scripts/personnel.js` 的新增、停用、調整部門與 `grant`）會遺失；這個升級與回滾流程尚未在 Lightsail 演練
+
+
+### 5.12 升級到「額度不在本系統異動」版（結構版本 8，2026-11-04）
+
+這一版依使用者決定，AI 與需求單流程都不寫入額度資料：剩餘時數就是年度額度（`leave_entitlements`），請假單的送出、簽核、退回與取消只改變需求單本身；額度的扣除與調整由人資在公司既有的系統處理，不在本系統。結構版本 5 刪除 `leave_log`、版本 6 刪除人資調整紀錄 `leave_adjustments`（需求單與年度額度保留）、版本 7 在 `accounts` 加上部門的中文名稱 `department_name`（只供直接檢視資料庫，每次啟動依部門設定檔同步）、版本 8 改以員工編號 `employee_no` 關聯 `accounts`、`employees` 與 `leave_entitlements`（重建三張表，資料與順序不變），並移除 `scripts/leave-log.js` 與 `POST /api/leave/adjustments`；狀態追蹤頁改為「申請表單」「待辦表單」「已完成表單」三個分頁（內容見[API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 3.4、3.8、3.17 節）
+
+1. 舊版執行時依第 6.2 節備份，檔名加上 `before-v8`；`storage.backup.completed` 的 schemaVersion 應為 4（或更舊的版本）
+2. 替目前的 backend 與 web image 加上 `pre-v8` 標籤（例如 `sudo docker tag helpdesk-backend:latest helpdesk-backend:pre-v8`），再依第 5.2 節重新建置並更新兩個 image
+3. 以 `sudo docker compose logs --tail=100 backend | grep 'storage\.'` 確認 `storage.ready` 的 schemaVersion 為 8
+4. 開啟狀態追蹤頁，確認有「申請表單」「待辦表單」「已完成表單」三個分頁；升級前登錄過的人資調整會隨 `leave_adjustments` 一併刪除，剩餘時數改為年度額度
+
+回滾到 `pre-v8`：舊 image 只支援到版本 4，遇到版本 5 以上會記錄 `storage.failed`（reason `SCHEMA_TOO_NEW`）；先停止 backend，以 `before-v8` 備份依第 6.3 節還原，再把 backend 與 web 換回舊 image；回滾後剩餘時數恢復為舊算法（扣除已核准與待簽核），人資調整紀錄也隨備份回來
 
 ## 6. 工作單清除、備份與還原
 
@@ -661,7 +675,7 @@ sudo chown "$(id -u):$(id -g)" backups/helpdesk-$TS.db
 chmod 600 backups/helpdesk-$TS.db
 ```
 
-預期日誌事件為 `storage.backup.completed`，含 tickets 筆數與 schemaVersion（目前為 4）；出現 `storage.backup.failed`（detail、sqliteCode；VACUUM INTO 失敗時會刪除預先建立的空檔）表示沒有產生可用備份，先排查；備份是整個資料庫，帳號、所屬部門、員工、假別額度與人資調整會一起保存（人員資料沒有其他副本，請定期備份，調整人員前也先備份），tickets 只代表工作單筆數；容器內的暫存備份複製後即刪除，避免工作單原文留在容器
+預期日誌事件為 `storage.backup.completed`，含 tickets 筆數與 schemaVersion（目前為 8）；出現 `storage.backup.failed`（detail、sqliteCode；VACUUM INTO 失敗時會刪除預先建立的空檔）表示沒有產生可用備份，先排查；備份是整個資料庫，帳號、所屬部門、員工、假別額度與人資調整會一起保存（人員資料沒有其他副本，請定期備份，調整人員前也先備份），tickets 只代表工作單筆數；容器內的暫存備份複製後即刪除，避免工作單原文留在容器
 
 將備份安全下載到 Mac；只放同一台 Lightsail 無法應對整台主機遺失。在 Mac 專案根目錄沿用第 4.3 節的 HELPDESK_KEY、HELPDESK_IP 執行（backups/ 已被 Git 忽略）：
 
@@ -809,9 +823,9 @@ Lightsail Ubuntu 的 ubuntu 使用者通常也是 UID 1000，第 6.2 節改回�
 
 ## 11. 自動化測試範圍
 
-這些測試在部署前於本機執行；以下項數為 2026-11-03 在 Node.js 22.23.4 實際執行的結果，之後新增測試時會變動
+這些測試在部署前於本機執行；以下項數為 2026-11-04 在 Node.js 22.23.4 實際執行的結果，之後新增測試時會變動
 
-- 執行方式：在 `backend/` 與 `frontend/` 各執行 `npm test`（`node --test`），目前後端 127 項、前端 129 項，都不呼叫 Claude 或 Gemini
+- 執行方式：在 `backend/` 與 `frontend/` 各執行 `npm test`（`node --test`），目前後端 129 項、前端 137 項，都不呼叫 Claude 或 Gemini
 - 後端 `tests/` 涵蓋 API、環境參數、日誌、保護、限流、可靠性、管理本文限制、需求單、資料庫、人員資料、需求類型定義與引擎（requestTypes）、自動生成與各類型流程（draftFlow）、分類評測的題庫與計分（classificationEval）、本機登入簽章金鑰（authSecret）；測試使用 `:memory:` 或暫存檔，不會碰到 `data/helpdesk.db`，並以替身取代 Gemini 與 Claude；claudeProvider 測試 Claude 的請求參數、工具流程與錯誤對應
 - 前端 `tests/` 含開發伺服器的路徑檢查（devServer.test.js），以 fetch 與 DOM 替身驗證請求合約、欄位驗證、錯誤提示、倒數、卡片動作狀態、頁面網址與頁面流程；瀏覽器替身為 `tests/helpers/fakeDom.js`（含自動生成視窗的節點與 DRAFT_DIALOG_IDS），注入的假服務為 `tests/helpers/draftFixtures.js`（含請假 v2、設備申請與一般需求的假定義與回應）；不驗證版面，也不呼叫付費 API 或真後端，自動生成視窗只用注入的假服務測試，實際串接要啟動後端並在頁面操作
 - 前端「自動生成」相關測試：draftService.test.js（請求與回應整理，含 30 秒逾時）、draftDialog.test.js（視窗互動，含只靠定義就能顯示的設備申請與一個虛構的未來類型）、proposeDraft.test.js（與提出需求單頁的整合）、formFormatters.test.js（表單格式）、formTickets.test.js（表單需求單卡片）、ticketsPage.test.js（需求類型目錄的載入）

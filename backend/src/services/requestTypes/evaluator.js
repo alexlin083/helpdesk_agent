@@ -178,7 +178,7 @@ export function evaluateForm({ type, input, user, department, registry, accounts
       if (!check.on.includes(phase)) continue;
       if (check.capability === 'ledger_balance' && Number.isFinite(amount) && period) {
         if (!category) continue;
-        const outcome = balanceOutcome(helpers.ledgerBalances(type.ledgerSpec, user.username, period), category, amount, phase);
+        const outcome = balanceOutcome(helpers.ledgerBalances(type.ledgerSpec, user.username, period), category, amount);
         if (check.summary) {
           const label = renderSegments(check.summary, { raw: /** 取欄位值。@param {string} name 欄位。@returns {string} 值。 */ (name) => values[name] ?? '', display: /** 取欄位值。@param {string} name 欄位。@returns {string} 值。 */ (name) => values[name] ?? '' });
           summaries.push(`${label}：${formatLedgerAmount(type, outcome.before)} → ${formatLedgerAmount(type, outcome.after)}`);
@@ -277,7 +277,7 @@ export function approvalFailure(type, ticket, helpers) {
   for (const check of type.checks) {
     if (!check.on.includes('approve')) continue;
     if (check.capability === 'ledger_balance' && snapshot.category && Number.isFinite(snapshot.amount) && snapshot.period) {
-      const outcome = balanceOutcome(helpers.ledgerBalances(type.ledgerSpec, ticket.requester.username, snapshot.period), snapshot.category, snapshot.amount, 'approve');
+      const outcome = balanceOutcome(helpers.ledgerBalances(type.ledgerSpec, ticket.requester.username, snapshot.period), snapshot.category, snapshot.amount);
       if (!outcome.enough) return check.error;
     }
     if (check.capability === 'ledger_overlap') {

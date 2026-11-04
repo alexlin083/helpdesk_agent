@@ -1,5 +1,5 @@
 import { element } from '../dom.js';
-import { createDateTimeControl } from './dateTimeControl.js';
+import { createDateTimeControl, layoutFields, periodLabel } from './dateTimeControl.js';
 import { TicketServiceError, QUOTA_CODES, countCodePoints, TICKET_LIMITS } from '../../services/ticketService.js';
 import { DRAFT_LIMITS } from '../../services/draftService.js';
 
@@ -7,6 +7,8 @@ import { DRAFT_LIMITS } from '../../services/draftService.js';
 const OPTION_FIELD_TYPES = new Set(['account', 'department']);
 // 文字欄位的 max_length 超過這個字數（或沒有上限）時改用多行輸入。
 const TEXTAREA_THRESHOLD = 100;
+// 以日期時間選擇器（dateTimeControl.js）呈現的欄位型別。
+const DATE_FIELD_TYPES = new Set(['date', 'datetime']);
 
 export const DRAFT_TEXT = {
   send: '送出',
@@ -101,7 +103,8 @@ function findOption(options, id) {
 /**
  * 建立「自動生成」對話框（ChatBox）：寬畫面左側是與服務台助理（AI）的對話、右側是需求內容面板（窄畫面改為上下排列）。
  * 面板完全依後端回應的需求類型定義（type.fields）繪製，前端不認得任何特定類型、欄位代號或領域文字：
- * self 唯讀、enum 下拉、text 單行或多行（max_length 超過 100 或沒有上限時多行）、number 數字輸入、date 日期、datetime 日期時間（以分鐘為單位）、
+ * self 唯讀、enum 下拉、text 單行或多行（max_length 超過 100 或沒有上限時多行）、number 數字輸入、date 日期與 datetime 日期時間（以分鐘為單位）
+ * 使用日期時間選擇器（rules.after 互相對應的起訖欄位合併成一個期間選擇器，見 dateTimeControl.js 的 layoutFields）、
  * account／department 下拉（候選來自後端 field_options，不可選的項目停用並附原因）；不認得的型別以單行文字輸入呈現。
  * 後端依定義檔計算的結果（computed）與檢查摘要（summaries）以通用清單顯示。
  * 處理流程：
@@ -125,9 +128,10 @@ function findOption(options, id) {
  * @param {Function} options.onLoginRequired 憑證失效時呼叫（回登入頁）。
  * @param {Window} options.win 視窗物件，提供 setTimeout、setInterval 與 confirm。
  * @param {number} [options.debounceMs=400] 手動修改後送出驗證前的等待毫秒數。
+ * @param {() => number} [options.now=Date.now] 日期時間選擇器判斷「今天」使用的目前時間（測試可替換）。
  * @returns {object} 控制器：open、close、reset、settled、state、handleChatSubmit、handleMessageKeydown。
  */
-export function createDraftDialog(nodes, { user, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs = 400 }) {
+export function createDraftDialog(nodes, { user, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs = 400, now = Date.now }) {
   const state = { seq: 0, generation: 0, inflight: new Set(), controls: new Map() };
 
   /**
@@ -450,7 +454,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
       if (status.kind === 'invalid') entry.control.setAttribute('aria-invalid', 'true'); else entry.control.removeAttribute('aria-invalid');
       const source = field.type === 'self' ? 'system' : state.sources[field.key];
       setSource(entry.source, source, Boolean(value.trim()));
-      entry.wrapper.className = `draft-field is-${status.kind}`;
+      entry.wrapper.className = `${entry.wrapperClass} is-${status.kind}`;
     }
   }
 
@@ -478,25 +482,20 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
    * 依欄位型別建立控制項（只依型別與定義的限制，不認得任何特定欄位）：
    * self 唯讀輸入框；enum 下拉（選項來自定義）；account／department 下拉（候選來自後端 field_options，沒有候選時顯示說明）；
    * text 在 max_length 超過 100 或沒有上限時為多行輸入，否則為單行輸入（兩者都套用 maxLength）；number 為數字輸入（min、max、integer 時 step 為 1）；
-   * date 為日期輸入；datetime 為「日期＋24 小時制時間」組合欄位（見 createDateTimeControl：id 放在日期輸入上，回傳的控制項是帶 value 的外層群組，
-   * 日期或時間任一邊 change 時更新）；不認得的型別為單行文字輸入。
+   * date 與 datetime 為單一欄位的日期時間選擇器（見 createDateTimeControl：控制項是帶 value 的欄位按鈕，id 放在它上面，點選後展開月曆與時間；
+   * 使用者選定時以 handleFieldEdit 更新；rules.not_before_today 時停用今天以前，有工作日曆時只列上班時段）；不認得的型別為單行文字輸入。
    * @param {object} field 欄位定義。
    * @param {string} id 控制項 id。
-   * @returns {{control: HTMLElement, note: HTMLElement|null}} 控制項與（候選型別沒有候選時的）說明。
+   * @param {object|null} [calendar=null] 對應的工作日曆（layoutFields 找出的；只用於日期類欄位）。
+   * @returns {{control: HTMLElement, note: HTMLElement|null, view: HTMLElement}} 控制項、（候選型別沒有候選時的）說明與要放進欄位的節點（選擇器為外層，其他型別即控制項）。
    */
-  function buildControl(field, id) {
-    if (field.type === 'datetime') {
-      const picker = createDateTimeControl({ id, label: field.label });
-      picker.root.setAttribute('id', `${id}-group`);
-      if (field.required) picker.root.setAttribute('aria-required', 'true');
-      /**
-       * 日期或時間改變時，以組合後的值交給 handleFieldEdit
-       * @returns {void}
-       */
-      const onPick = function onPick() { handleFieldEdit(field, picker.root); };
-      picker.date.addEventListener('change', onPick);
-      picker.time.addEventListener('change', onPick);
-      return { control: picker.root, note: null };
+  function buildControl(field, id, calendar = null) {
+    if (DATE_FIELD_TYPES.has(field.type)) {
+      const picker = createDateTimeControl({
+        id, labels: [field.label], mode: field.type, calendar, notBeforeToday: field.rules?.not_before_today === true, now,
+        onChange: /** 使用者選定日期時間時交給 handleFieldEdit。@returns {void} */ () => handleFieldEdit(field, picker.parts[0]),
+      });
+      return { control: picker.parts[0], note: null, view: picker.root };
     }
     let control;
     let note = null;
@@ -546,37 +545,101 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
       control.addEventListener('input', onEdit);
       control.addEventListener('change', onEdit);
     }
-    return { control, note };
+    return { control, note, view: control };
   }
 
   /**
-   * 依目前的欄位定義重建整個欄位清單（需求類型或其版本改變、重新開始時），每個欄位含名稱、必填標示、來源標籤、控制項與狀態文字。
+   * 建立欄位名稱列：名稱 label（指向控制項）、必填或選填標記與來源標籤節點。
+   * @param {string} text 名稱。
+   * @param {string} id label 指向的控制項 id。
+   * @param {boolean|null} required 是否必填；null 為不顯示標記（self 欄位）。
+   * @param {boolean} [withSource=true] 是否在名稱列放來源標籤。
+   * @returns {{head: HTMLElement, source: HTMLElement|null}} 名稱列與來源標籤（不放時為 null）。
+   */
+  function buildHead(text, id, required, withSource = true) {
+    const head = element('div', 'draft-field-head');
+    const label = element('label', '', text);
+    label.setAttribute('for', id);
+    if (required !== null) label.append(element('span', 'field-tag', required ? DRAFT_TEXT.required : DRAFT_TEXT.optional));
+    head.append(label);
+    if (!withSource) return { head, source: null };
+    const source = element('span', 'draft-source');
+    source.hidden = true;
+    head.append(source);
+    return { head, source };
+  }
+
+  /**
+   * 建立欄位的狀態文字節點（aria-live），並讓控制項以 aria-describedby 指向它。
+   * @param {string} key 欄位代號。
+   * @param {HTMLElement} control 控制項。
+   * @returns {HTMLElement} 狀態節點。
+   */
+  function buildStatus(key, control) {
+    const status = element('p', 'draft-status');
+    status.setAttribute('id', `draft-status-${key}`);
+    status.setAttribute('aria-live', 'polite');
+    control.setAttribute('aria-describedby', `draft-status-${key}`);
+    return status;
+  }
+
+  /**
+   * 建立期間欄位：起訖兩個日期類欄位合併成一個選擇器（名稱見 periodLabel，任一欄位必填時標示必填），下方分別列出起、訖的名稱、來源標籤與狀態；
+   * 兩個欄位各自登記在 state.controls（控制項為選擇器的開始、結束按鈕），驗證、鎖定與送出仍以各自的欄位代號處理。
+   * @param {{start: object, end: object, calendar: object|null}} item layoutFields 的期間項目。
+   * @returns {HTMLElement} 欄位節點。
+   */
+  function buildPeriod({ start, end, calendar }) {
+    const id = `draft-field-${start.key}`;
+    const wrapper = element('div', 'draft-field draft-field-wide draft-period');
+    wrapper.setAttribute('data-key', `${start.key} ${end.key}`);
+    const { head } = buildHead(periodLabel(start.label, end.label), id, start.required || end.required, false);
+    const fields = [start, end];
+    const picker = createDateTimeControl({
+      id, labels: [start.label, end.label], mode: start.type, calendar, notBeforeToday: start.rules?.not_before_today === true, now,
+      onChange: /** 使用者改變開始或結束時交給 handleFieldEdit。@param {number} index 0 為開始、1 為結束。@returns {void} */ (index) => handleFieldEdit(fields[index], picker.parts[index]),
+    });
+    const row = element('div', 'draft-period-status');
+    for (const [index, field] of fields.entries()) {
+      const control = picker.parts[index];
+      const cell = element('div', 'draft-period-part');
+      const source = element('span', 'draft-source');
+      source.hidden = true;
+      const status = buildStatus(field.key, control);
+      cell.append(element('span', 'draft-period-name', field.label), source, status);
+      row.append(cell);
+      state.controls.set(field.key, { wrapper: cell, wrapperClass: 'draft-period-part', control, status, source, note: null });
+    }
+    wrapper.append(head, picker.root, row);
+    return wrapper;
+  }
+
+  /**
+   * 依目前的欄位定義重建整個欄位清單（需求類型或其版本改變、重新開始時），每個欄位含名稱、必填標示、來源標籤、控制項與狀態文字；
+   * 欄位的排列由 layoutFields 決定（互相對應的起訖日期類欄位合併成一個期間欄位，日期時間欄位與期間佔滿整列）。
    * @returns {void}
    */
   function rebuildFields() {
     state.controls.clear();
     state.optionKeys.clear();
     const items = [];
-    for (const field of state.fields) {
+    for (const item of layoutFields(state.fields, state.type?.calendars ?? [])) {
+      if (item.kind === 'period') {
+        items.push(buildPeriod(item));
+        continue;
+      }
+      const { field, calendar } = item;
       const id = `draft-field-${field.key}`;
-      const wrapper = element('div', 'draft-field');
+      const wide = field.type === 'datetime';
+      const wrapper = element('div', wide ? 'draft-field draft-field-wide' : 'draft-field');
       wrapper.setAttribute('data-key', field.key);
-      const head = element('div', 'draft-field-head');
-      const label = element('label', '', field.label);
-      label.setAttribute('for', id);
-      if (field.type !== 'self') label.append(element('span', 'field-tag', field.required ? DRAFT_TEXT.required : DRAFT_TEXT.optional));
-      const source = element('span', 'draft-source');
-      source.hidden = true;
-      head.append(label, source);
-      const { control, note } = buildControl(field, id);
-      const status = element('p', 'draft-status');
-      status.setAttribute('id', `draft-status-${field.key}`);
-      status.setAttribute('aria-live', 'polite');
-      control.setAttribute('aria-describedby', `draft-status-${field.key}`);
-      wrapper.append(head, control);
+      const { head, source } = buildHead(field.label, id, field.type === 'self' ? null : field.required);
+      const { control, note, view } = buildControl(field, id, calendar);
+      const status = buildStatus(field.key, control);
+      wrapper.append(head, view);
       if (note) wrapper.append(note);
       wrapper.append(status);
-      state.controls.set(field.key, { wrapper, control, status, source, note });
+      state.controls.set(field.key, { wrapper, wrapperClass: wide ? 'draft-field draft-field-wide' : 'draft-field', control, status, source, note });
       items.push(wrapper);
     }
     nodes.fieldList.replaceChildren(...items);

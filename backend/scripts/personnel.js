@@ -4,7 +4,6 @@ import { env } from '../src/config/env.js';
 import { openTicketDatabase, SCHEMA_VERSION } from '../src/services/storage/database.js';
 import { createPersonnelAdmin, assertPersonnelSchema, personnelError } from '../src/services/personnel/personnel.js';
 import { departmentService } from '../src/services/departmentService.js';
-import { getRequestTypes } from '../src/services/requestTypes/registry.js';
 import { logger } from '../src/utils/logger.js';
 
 const USAGE = `用法（以後端的環境設定執行，資料庫為 DATABASE_FILE）：
@@ -74,9 +73,7 @@ function main(argv) {
   const dryRun = options['dry-run'];
   const db = openDatabase(command === 'list' || dryRun);
   try {
-    // grant 改年度額度時在 leave_log 記一列 GRANTED，需要使用 leave_entitlements 的需求類型（請假）的 ledger 規格計算前後剩餘
-    const ledgerSpec = command === 'grant' ? getRequestTypes().ledgerOwner('leave_entitlements')?.ledgerSpec ?? null : null;
-    const admin = createPersonnelAdmin(db, { departments: departmentService, ledgerSpec });
+    const admin = createPersonnelAdmin(db, { departments: departmentService });
     if (command === 'list') {
       const rows = admin.list({ department: options.department });
       process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);

@@ -1,7 +1,7 @@
 // 通用額度帳（ledger）的計算：服務的需求單儲存（dataStore.js）與人員維運（personnel.js 的 grant）共用，
 // 只依傳入的 SQL 語句函式與允許清單運作，不開連線、不依賴其他模組，避免 dataStore 與 personnel 互相匯入
 
-// 只計算這兩種狀態的需求單（待簽核先扣除，已退回與已取消不計）。
+// 列出已核准與待簽核數量時只計這兩種狀態的需求單（已退回與已取消不計）；兩者只是參考資訊，不從剩餘扣除。
 export const ACTIVE_STATUSES = "('PENDING', 'APPROVED')";
 
 /**
@@ -30,28 +30,25 @@ export function ledgerTable(ledgerTables, table) {
 }
 
 /**
- * 依 ledger 規格計算申請人某期間各類別的額度：額度表＋人資調整－已核准－待簽核的同類需求單數量。
- * 需求單的類別、數量與期間優先取自送出時保存的 form.ledger；沒有這份快照的舊版需求單改取定義指定的欄位與計算結果
- * （期間為期間欄位的年度）。已退回與已取消的需求單不計，因此取消或清空需求單後剩餘自然回到額度＋調整。
+ * 依 ledger 規格計算申請人某期間各類別的額度：剩餘＝額度表的年度額度；送出、簽核、退回或取消需求單都不會改變剩餘，
+ * 額度的扣除與調整由人資在公司既有的系統處理，不在本系統。
+ * 另以唯讀查詢列出同類需求單的已核准與待簽核數量作為參考（不從剩餘扣除）：類別、數量與期間優先取自送出時保存的 form.ledger，
+ * 沒有這份快照的舊版需求單改取定義指定的欄位與計算結果（期間為期間欄位的年度）；已退回與已取消的需求單不計。
+ * 整個計算只有 SELECT，不寫入任何資料表。
  * @param {Function} statement 依 SQL 取得快取語句的函式。
  * @param {object} ledgerTables 允許的額度資料表。
  * @param {object} spec ledger 規格（typeId、table、categoryField、amountKey、periodField、categories）。
  * @param {string} username 申請人帳號。
  * @param {number} period 期間（年度）。
- * @returns {Array<{category: string, granted: number, adjusted: number, used: number, pending: number, remaining: number}>}
- *   依 categories 順序的額度；used 為已核准、pending 為待簽核。
+ * @returns {Array<{category: string, granted: number, used: number, pending: number, remaining: number}>}
+ *   依 categories 順序的額度；remaining 為年度額度，used（已核准）與 pending（待簽核）只是參考。
  */
 export function computeLedgerBalances(statement, ledgerTables, spec, username, period) {
   const table = ledgerTable(ledgerTables, spec.table);
   const byCategory = new Map(spec.categories.map(/** 建立類別的初始額度。@param {string} category 類別。@returns {[string, object]} [類別, 額度]。 */ (category) => [category,
-    { category, granted: 0, adjusted: 0, used: 0, pending: 0, remaining: 0 }]));
-  const granted = statement(`SELECT ${table.category} AS category, ${table.amount} AS amount FROM ${spec.table} WHERE ${table.owner} = ? AND ${table.period} = ?`);
+    { category, granted: 0, used: 0, pending: 0, remaining: 0 }]));
+  const granted = statement(`SELECT ${table.category} AS category, ${table.amount} AS amount FROM ${spec.table} WHERE ${table.owner} = ${table.ownerByUsername ?? '?'} AND ${table.period} = ?`);
   for (const row of granted.all(username, period)) if (byCategory.has(row.category)) byCategory.get(row.category).granted = row.amount;
-  const adjustments = table.adjustments;
-  if (adjustments) {
-    const adjusted = statement(`SELECT ${adjustments.category} AS category, SUM(${adjustments.amount}) AS amount FROM ${adjustments.table} WHERE ${adjustments.owner} = ? AND ${adjustments.period} = ? GROUP BY 1`);
-    for (const row of adjusted.all(username, period)) if (byCategory.has(row.category)) byCategory.get(row.category).adjusted = row.amount;
-  }
   const usage = statement(`SELECT COALESCE(json_extract(document, '$.form.ledger.category'), json_extract(document, ?)) AS category,
       json_extract(document, '$.status') AS status,
       SUM(COALESCE(json_extract(document, '$.form.ledger.amount'), json_extract(document, ?))) AS amount
@@ -67,6 +64,6 @@ export function computeLedgerBalances(statement, ledgerTables, spec, username, p
     else balance.pending += row.amount;
   }
   const balances = [...byCategory.values()];
-  for (const balance of balances) balance.remaining = balance.granted + balance.adjusted - balance.used - balance.pending;
+  for (const balance of balances) balance.remaining = balance.granted;
   return balances;
 }
