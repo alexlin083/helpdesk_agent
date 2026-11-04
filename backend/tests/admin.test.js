@@ -1,31 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setupTestEnv } from './helpers/testEnv.js';
 
 const directory = await mkdtemp(join(tmpdir(), 'helpdesk-admin-'));
-process.env.NODE_ENV = 'local';
-process.env.DEMO_PASSWORD = 'test-only-user-password';
-process.env.ADMIN_PASSWORD = 'test-only-admin-password';
-process.env.GEMINI_API_KEY = '';
-process.env.ORIGIN_VERIFY_SECRET = '';
-process.env.LOG_LEVEL = 'silent';
-process.env.LIMIT_STORE = 'memory';
-process.env.TICKETS_FILE = join(directory, 'tickets.json');
-process.env.HTTP_QUERY_LIMIT = '1';
-process.env.HTTP_API_LIMIT = '30';
-const { app } = await import('../server.js');
-const { authService, accountFor } = await import('../services/authService.js');
-const { accountService } = await import('../services/accountService.js');
-const { ticketStore, createFileTicketStore } = await import('../services/ticketStore.js');
-const { usageService } = await import('../services/usageService.js');
-const { limitStore, createMemoryLimitStore } = await import('../services/limitStore.js');
-const { createChatTasks } = await import('../services/chatTasks.js');
-const { createAdminReset } = await import('../services/adminService.js');
+setupTestEnv({
+  DEMO_PASSWORD: 'test-only-user-password',
+  ADMIN_PASSWORD: 'test-only-admin-password',
+  ORIGIN_VERIFY_SECRET: '',
+  DATABASE_FILE: join(directory, 'helpdesk.db'),
+  HTTP_QUERY_LIMIT: '1',
+  HTTP_API_LIMIT: '30',
+});
+const { app } = await import('../src/server.js');
+const { authService, accountFor } = await import('../src/services/authService.js');
+const { accountService } = await import('../src/services/personnel/accountService.js');
+const { dataStore, createSqliteDataStore } = await import('../src/services/storage/dataStore.js');
+const { usageService } = await import('../src/services/usageService.js');
+const { limitStore, createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
+const { createTaskTracker } = await import('../src/services/taskTracker.js');
+const { createAdminReset } = await import('../src/services/admin/adminService.js');
+const Database = createRequire(import.meta.url)('better-sqlite3');
 
-/** 測試結束後移除全部隔離資料，不觸及專案工作單。@returns {Promise<void>} */
-async function cleanup() { await rm(directory, { recursive: true, force: true }); }
+const openedStores = [dataStore];
+/** 測試結束後先關閉資料庫連線（Windows 不能刪除仍開啟的檔案），再移除全部隔離資料，不觸及專案工作單。@returns {Promise<void>} */
+async function cleanup() {
+  for (const store of openedStores) store.close();
+  await rm(directory, { recursive: true, force: true });
+}
 test.after(cleanup);
 
 /**
@@ -63,7 +68,7 @@ async function adminIntegration() {
     const firstMetrics = await call('/admin/metrics', admin);
     assert.equal(firstMetrics.status, 200);
     assert.equal(firstMetrics.headers.get('cache-control'), 'no-store');
-    assert.equal((await firstMetrics.json()).users.length, 10);
+    assert.equal((await firstMetrics.json()).users.length, 16, '十六組一般帳號（含六組假資料代理人帳號）');
     assert.equal((await call('/admin/reset', user, { ...confirmation, role: 'ADMIN' })).status, 403);
     assert.equal((await call('/admin/reset', admin, {})).status, 400);
     assert.equal((await call('/departments', admin)).status, 403);
@@ -79,6 +84,11 @@ async function adminIntegration() {
     assert.equal((await call('/tickets/mine', user)).status, 429);
     for (let index = 0; index < 4; index += 1) assert.equal((await call('/admin/metrics', admin)).status, 200, '監測不消耗工作單查詢額度');
     const snapshot = await (await call('/admin/metrics', admin)).json();
+    assert.equal(snapshot.ticketStore.available, true);
+    assert.equal(snapshot.ticketStore.total, 1);
+    assert.equal(snapshot.ticketStore.pending, 1);
+    assert.ok(snapshot.ticketStore.fileBytes > 0, '回報實際資料庫檔大小');
+    assert.ok(!JSON.stringify(snapshot).includes('暫存測試'), '監測不含需求單內容');
     const queries = snapshot.http.find(queryScope);
     /** 找出一般查詢視窗。@param {object} entry 頻率摘要。@returns {boolean} 是否為查詢。 */
     function queryScope(entry) { return entry.scope === 'query'; }
@@ -96,14 +106,19 @@ async function adminIntegration() {
     assert.equal(reset.status, 200);
     assert.equal(reset.headers.get('cache-control'), 'no-store');
     assert.equal((await reset.json()).deletedTickets, 1);
-    assert.deepEqual(JSON.parse(await readFile(process.env.TICKETS_FILE, 'utf8')), []);
-    assert.deepEqual(await ticketStore.all(), []);
+    assert.deepEqual(await dataStore.all(), []);
+    const reopened = createSqliteDataStore({ file: process.env.DATABASE_FILE });
+    openedStores.push(reopened);
+    assert.deepEqual(await reopened.all(), [], '重置結果已寫入資料庫檔');
+    assert.equal(reopened.listAccounts().length, 17, '重置不動人員資料表（帳號）');
+    assert.equal(reopened.listEmployees().length, 16, '重置不動人員資料表（員工與額度）');
     assert.deepEqual(await limitStore.read(), {}, '配額、冷卻、租約與登入失敗狀態全部清除');
     assert.equal((await usageService.usage('user-racky.huang')).userRemaining, 30);
     assert.equal((await usageService.usage('user-racky.huang')).globalRemaining, 100);
     assert.equal((await usageService.usage('user-racky.huang')).cooldownSeconds, 0);
     assert.equal((await call('/tickets/mine', user)).status, 200);
     const afterReset = await (await call('/admin/metrics', admin)).json();
+    assert.equal(afterReset.ticketStore.total, 0, '重置後資料庫筆數歸零');
     assert.equal(afterReset.ai.used, 0);
     assert.equal(afterReset.ai.active, 0);
     // 入口 IP 額度耗盡仍不阻擋已驗證的管理路徑。
@@ -133,7 +148,7 @@ test('管理員權限、獨立密碼、全站重置與不可自洗的管理限�
  * @returns {Promise<void>} 並行驗證完成。
  */
 async function resetConcurrency() {
-  const tasks = createChatTasks();
+  const tasks = createTaskTracker();
   const limits = createMemoryLimitStore();
   let finish;
   /** 捕捉既有工作的完成控制點。@param {Function} resolve 解除阻塞。@returns {void} */
@@ -164,18 +179,20 @@ async function resetConcurrency() {
 }
 test('重置排空既有工作並在維護期間拒絕新工作', resetConcurrency);
 
-/** 驗證清檔失敗保留快取與保護計數，並解除維護鎖。@returns {Promise<void>} 驗證完成。 */
+/** 驗證清除失敗時保留工作單與保護計數，並解除維護鎖。@returns {Promise<void>} 驗證完成。 */
 async function resetFailure() {
-  const file = join(directory, 'failure.json');
-  const tickets = createFileTicketStore({ file });
+  const file = join(directory, 'failure.db');
+  const tickets = createSqliteDataStore({ file });
+  openedStores.push(tickets);
   await tickets.insert({ ticket_id: 'test-one' });
-  await rm(file);
-  await mkdir(file); // 目標變成目錄，改名必須失敗，不依賴使用者的檔案權限。
+  // 以另一條連線建立觸發器讓刪除失敗，不依賴使用者的檔案權限。
+  const saboteur = new Database(file);
+  saboteur.exec("CREATE TRIGGER block_delete BEFORE DELETE ON tickets BEGIN SELECT RAISE(ABORT, 'blocked'); END;");
   const limits = createMemoryLimitStore();
   /** 寫入不可遺失的假保護計數。@param {object} state 快照。@returns {void} */
   function seed(state) { state.total = 4; }
   await limits.transact(seed);
-  const tasks = createChatTasks();
+  const tasks = createTaskTracker();
   /** 清檔失敗時不得執行 HTTP 重置。@returns {Promise<never>} 永遠失敗。 */
   async function resetRates() { assert.fail('不應重置 HTTP 計數'); }
   const reset = createAdminReset({ tickets, limits, tasks, resetRates });
@@ -185,18 +202,19 @@ async function resetFailure() {
   /** 取回維護後可執行的結果。@returns {boolean} true。 */
   function recovered() { return true; }
   assert.equal(await tasks.run(recovered), true);
-  // 恢復成有效檔案，確認下一次清除可正常寫入 []。
-  await rm(file, { recursive: true });
-  await writeFile(file, '[]');
+  // 移除觸發器，確認下一次清除可正常刪除並寫入資料庫檔。
+  saboteur.exec('DROP TRIGGER block_delete;');
+  saboteur.close();
   assert.equal(await tickets.clear(), 1);
   assert.deepEqual(await tickets.all(), []);
-  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), []);
+  tickets.close();
+  assert.deepEqual(await tickets.all(), [], '重新開啟後仍是空的');
 }
-test('清除失敗保留快取及計數並釋放維護鎖', resetFailure);
+test('清除失敗保留工作單及計數並釋放維護鎖', resetFailure);
 
 /** 驗證 CloudFront 來源秘密的必要性、正確通過、健康檢查例外與本機停用。@returns {Promise<void>} 驗證完成。 */
 async function originProtection() {
-  const { createOriginGuard } = await import('../middleware/originGuard.js');
+  const { createOriginGuard } = await import('../src/middleware/originGuard.js');
   const secret = 'test-origin-secret-not-a-real-key-12345';
   const guard = createOriginGuard(secret);
   let passed = 0;

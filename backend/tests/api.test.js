@@ -1,16 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setupTestEnv } from './helpers/testEnv.js';
 
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.CORS_ORIGIN = 'http://localhost:5173';
-process.env.LIMIT_STORE = 'memory';
-process.env.LOG_LEVEL = 'silent';
-process.env.TICKETS_FILE = '/nonexistent/helpdesk-api-test/tickets.json';
-const { app } = await import('../server.js');
-const { ACCOUNTS } = await import('../services/authService.js');
+setupTestEnv({ CORS_ORIGIN: 'http://localhost:5173' });
+const { app } = await import('../src/server.js');
+const { ACCOUNTS } = await import('../src/services/authService.js');
 
 /**
  * 在本機臨時埠啟動測試 app，完成後關閉所有連線；不呼叫真實 Gemini。
@@ -81,3 +75,57 @@ async function publicRoutes() {
   await withServer(app, check);
 }
 test('完整 API 的登入、CORS、身分與輸入保護', publicRoutes);
+
+/**
+ * 驗證 body-parser 與 Express 路由產生的 4xx 用戶端錯誤保留原狀態碼與固定訊息，不被誤判為 500 SERVER_ERROR；不回顯請求內容。
+ * @returns {Promise<void>}
+ */
+async function clientErrors() {
+  /** 執行 HTTP 檢查。@param {string} base 本機位址。@returns {Promise<void>} */
+  async function check(base) {
+    const charset = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=latin1' }, body: '{"username":"fake.user","password":"fake-password"}' });
+    assert.equal(charset.status, 415);
+    const charsetError = (await charset.json()).error;
+    assert.equal(charsetError.code, 'UNSUPPORTED_MEDIA_TYPE');
+    assert.equal(charsetError.message, '不支援的請求內容格式或編碼，請使用 UTF-8 JSON');
+    const malformed = await fetch(`${base}/api/tickets/%E0%A4%A/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(malformed.status, 400);
+    assert.deepEqual((await malformed.json()).error, { code: 'INVALID_PAYLOAD', message: '請求內容或網址格式無效' });
+  }
+  await withServer(app, check);
+}
+test('非 HttpError 的 4xx 用戶端錯誤保留狀態碼與固定訊息', clientErrors);
+
+/**
+ * 直接呼叫 errorHandler：statusCode 413 沿用既有代碼，沒有 4xx 狀態或狀態為 5xx 的一般錯誤仍回 500 SERVER_ERROR。
+ * @returns {Promise<void>}
+ */
+async function serverErrorsStay500() {
+  const { errorHandler } = await import('../src/middleware/errorHandler.js');
+  /**
+   * 以假回應物件執行 errorHandler 並取回輸出。
+   * @param {Error} error 測試例外。
+   * @returns {{status: number, body: object}} 回應狀態與 JSON。
+   */
+  function run(error) {
+    const result = {};
+    const res = {
+      headersSent: false,
+      /** 記錄標頭（此處不檢查）。@returns {object} 回應本身。 */
+      set() { return res; },
+      /** 記錄狀態碼。@param {number} code HTTP 狀態。@returns {object} 回應本身，供串接 json。 */
+      status(code) { result.status = code; return res; },
+      /** 記錄 JSON 本文。@param {object} body 回應本文。@returns {void} */
+      json(body) { result.body = body; },
+    };
+    /** 標頭已送出時才會呼叫，此測試不應發生。@returns {void} @throws {Error} 意外呼叫。 */
+    function next() { throw new Error('next must not be called'); }
+    errorHandler(error, {}, res, next);
+    return result;
+  }
+  assert.deepEqual(run(Object.assign(new Error('raw too large'), { statusCode: 413 })), { status: 413, body: { error: { code: 'PAYLOAD_TOO_LARGE', message: '請求內容超過大小限制' } } });
+  assert.equal(run(new Error('boom')).status, 500);
+  assert.equal(run(Object.assign(new Error('upstream'), { status: 502 })).body.error.code, 'SERVER_ERROR');
+  assert.equal(run(Object.assign(new Error('weird'), { status: '404' })).status, 500, '字串狀態不視為用戶端錯誤');
+}
+test('一般例外仍回 500，數值 4xx 才保留', serverErrorsStay500);

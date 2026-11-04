@@ -1,5 +1,5 @@
 import { PAGE_URLS } from '../pageUrls.js';
-import { authService } from '../services/authService.js';
+import { authService, DRAFT_KEY } from '../services/authService.js';
 
 /**
  * 初始化頂欄的帳號選單與登入守門：未登入導回登入頁；顯示帳號、使用者代號與所屬部門；綁定登出與 pageshow 檢查。
@@ -13,11 +13,13 @@ import { authService } from '../services/authService.js';
  */
 export function initAccountMenu(doc, win, auth = authService, { role = 'USER' } = {}) {
   /**
-   * 清除本分頁登入狀態並依站點根目錄回到登入頁，避免子資料夾路徑錯誤；已輸入但未送出的內容不保留。
-   * @returns {void}
+   * 清除本分頁登入狀態與「重新提出」草稿，並依站點根目錄回到登入頁，避免子資料夾路徑錯誤；已輸入但未送出的內容不保留。
+   * 草稿另外從視窗的 sessionStorage 移除，即使注入的登入服務沒有處理草稿，下一個登入的帳號也不會帶入上一位的內容。
+   * @returns {void} 儲存體不可用時仍導回登入頁。
    */
   function leave() {
     try { auth.logout(); } catch { /* 儲存體不可用時仍導回登入頁。 */ }
+    try { win.sessionStorage?.removeItem(DRAFT_KEY); } catch { /* 儲存體不可用時沒有草稿可清。 */ }
     doc.body.hidden = true;
     win.location.replace(PAGE_URLS.login);
   }

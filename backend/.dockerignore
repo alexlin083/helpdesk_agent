@@ -10,7 +10,5 @@ tests
 **/*.p12
 **/*.pfx
 **/*.log
-data/tickets.json
-data/tickets.json.tmp
+storage
 *.md
-Procfile

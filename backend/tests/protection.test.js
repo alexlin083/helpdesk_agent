@@ -1,16 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.LIMIT_STORE = 'memory';
-process.env.GEMINI_API_KEY = '';
-process.env.LOG_LEVEL = 'silent';
-const { env } = await import('../config/env.js');
-const { createAuthService, accountFor, ACCOUNTS } = await import('../services/authService.js');
-const { createUsageService, taipeiDay } = await import('../services/usageService.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
+import { setupTestEnv } from './helpers/testEnv.js';
+setupTestEnv();
+const { env } = await import('../src/config/env.js');
+const { createAuthService, accountFor, ACCOUNTS } = await import('../src/services/authService.js');
+const { createUsageService, taipeiDay } = await import('../src/services/usageService.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
 
 /**
  * 驗證十組帳密、有效簽章、偽造 token 與過期憑證，不呼叫外部服務。

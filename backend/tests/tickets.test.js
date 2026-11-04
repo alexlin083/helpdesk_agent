@@ -1,35 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setupTestEnv } from './helpers/testEnv.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'helpdesk-tickets-'));
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.CORS_ORIGIN = 'http://localhost:5173';
-process.env.LIMIT_STORE = 'memory';
-process.env.LOG_LEVEL = 'silent';
-process.env.TICKETS_FILE = join(scratch, 'app-tickets.json');
-const { app } = await import('../server.js');
-const { env } = await import('../config/env.js');
-const { createDepartmentService, normalizeDepartments, departmentService } = await import('../services/departmentService.js');
-const { createAccountService, normalizeAccounts, accountService } = await import('../services/accountService.js');
-const { buildTicketDecision, createTicketJudge, ticketJudgeSchema } = await import('../services/ticketJudge.js');
-const { createFileTicketStore, TICKET_STATUSES } = await import('../services/ticketStore.js');
-const { createTicketHandler, createDepartmentsHandler, createMyTicketsHandler, createDepartmentTicketsHandler, createDecisionHandler } = await import('../controllers/ticketController.js');
-const { errorHandler, notFound, HttpError } = await import('../middleware/errorHandler.js');
-const { authenticate } = await import('../middleware/authenticate.js');
-const { authService, createAuthService } = await import('../services/authService.js');
-const { createUsageService } = await import('../services/usageService.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
-const { createLogger } = await import('../utils/logger.js');
+setupTestEnv({
+  AI_PROVIDER: 'gemini',
+  CORS_ORIGIN: 'http://localhost:5173',
+  DATABASE_FILE: join(scratch, 'app-tickets.db'),
+});
+const { app } = await import('../src/server.js');
+const { env } = await import('../src/config/env.js');
+const { createDepartmentService, normalizeDepartments, departmentService } = await import('../src/services/departmentService.js');
+const { createAccountService, normalizeAccounts, accountService } = await import('../src/services/personnel/accountService.js');
+const { buildTicketDecision, createTicketJudge, ticketJudgeSchema } = await import('../src/services/ai/ticketJudge.js');
+const { createSqliteDataStore, dataStore, TICKET_STATUSES } = await import('../src/services/storage/dataStore.js');
+const Database = createRequire(import.meta.url)('better-sqlite3');
+const { createDepartmentsHandler } = await import('../src/controllers/departmentController.js');
+const { createTicketHandler, createMyTicketsHandler, createDepartmentTicketsHandler, createDecisionHandler } = await import('../src/controllers/ticketController.js');
+const { errorHandler, notFound, HttpError } = await import('../src/middleware/errorHandler.js');
+const { authenticate } = await import('../src/middleware/authenticate.js');
+const { authService, createAuthService } = await import('../src/services/authService.js');
+const { createUsageService } = await import('../src/services/usageService.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
+const { createLogger } = await import('../src/utils/logger.js');
 
-/** 測試結束後清除暫存檔案。@returns {void} */
-function cleanup() { rmSync(scratch, { recursive: true, force: true }); }
+const openedStores = [dataStore];
+/** 測試結束後關閉所有資料庫連線（Windows 不能刪除仍開啟的檔案），再清除暫存檔案。@returns {void} */
+function cleanup() {
+  for (const store of openedStores) store.close();
+  rmSync(scratch, { recursive: true, force: true });
+}
 test.after(cleanup);
 
 // 測試用部門與帳號設定；姓名與內容皆為假資料，與實際環境無關。
@@ -91,13 +96,15 @@ function ticketApp(options) {
 }
 
 /**
- * 建立使用暫存檔的需求單儲存。
+ * 建立使用暫存 SQLite 檔的需求單儲存，並登記到測試結束時關閉的清單。
  * @param {string} name 檔名。
  * @returns {object} 儲存與檔案路徑。
  */
 function tempStore(name) {
   const file = join(scratch, name);
-  return { store: createFileTicketStore({ file }), file };
+  const store = createSqliteDataStore({ file });
+  openedStores.push(store);
+  return { store, file };
 }
 
 /**
@@ -131,7 +138,7 @@ function departmentConfig() {
     [[{ ...sample[0], business: [] }], /business/],
     [[{ ...sample[0], business: ['VPN', 3, 'IT資訊服務台'] }], /business\[1\]/],
     [[{ ...sample[0], type: 1 }], /type/],
-    [[{ ...sample[0], handlers: [{ id: 'x', name: 'y' }] }], /handlers 已改由帳號設定檔/],
+    [[{ ...sample[0], handlers: [{ id: 'x', name: 'y' }] }], /handlers 已改由資料庫的帳號/],
     [[sample[0], { ...sample[1], id: 'dept-it-1' }], /id 重複/],
     [[sample[1]], /預設部門/],
     [[sample[0], { ...sample[1], business: ['IT資訊服務台'] }], /預設部門/],
@@ -147,7 +154,7 @@ function departmentConfig() {
 test('部門設定檔的正規化、查詢與啟動驗證', departmentConfig);
 
 /**
- * 驗證帳號設定檔：格式、唯一性、部門必須存在，以及真實設定檔的十組帳號都對應到部門。
+ * 驗證帳號資料規則：格式、唯一性、部門必須存在，以及資料庫示範名冊的十六組一般帳號與管理員都對應到部門，且每個部門至少有兩個一般帳號（請假代理人需要同部門同事）。
  * @returns {void}
  */
 function accountConfig() {
@@ -175,12 +182,13 @@ function accountConfig() {
     assert.throws(load, pattern);
   }
   const real = accountService.list();
-  assert.equal(real.length, 11);
+  assert.equal(real.length, 17);
+  assert.equal(real.filter(/** 是否為一般帳號。@param {object} account 帳號。@returns {boolean} USER 時 true。 */ (account) => account.role === 'USER').length, 16);
   for (const account of real) assert.ok(departmentService.findDepartment(account.department.id), account.username);
   assert.equal(real[0].username, 'racky.huang');
-  for (const department of departmentService.list()) assert.ok(accountService.handlersOf(department.id).length >= 1, `${department.name} 至少要有一個帳號可指定`);
+  for (const department of departmentService.list()) assert.ok(accountService.handlersOf(department.id).length >= 2, `${department.name} 至少要有兩個一般帳號，才有同部門代理人`);
 }
-test('帳號設定檔的驗證與十組帳號的部門對應', accountConfig);
+test('帳號資料的驗證與十六組一般帳號的部門對應', accountConfig);
 
 /**
  * 驗證 75 分分流、未知或 null 部門走預設部門、basis 截斷，以及輸出格式驗證。
@@ -234,7 +242,7 @@ async function judgePipeline() {
   assert.deepEqual(Object.keys(input.departments[0]), ['id', 'name', 'duty', 'business']);
   assert.ok(!requests[0].contents.includes('one.it'));
   assert.equal(requests[0].config.responseMimeType, 'application/json');
-  assert.equal(requests[0].config.maxOutputTokens, 1024);
+  assert.equal(requests[0].config.maxOutputTokens, 2048, '思考用掉的 token 也算在上限內');
   assert.equal(requests[0].config.httpOptions.timeout, 15000);
   for (const text of ['', 'not json', '{}']) {
     const broken = createTicketJudge({ getAI: () => ({ models: { generateContent: async () => ({ text }) } }), departments });
@@ -256,19 +264,22 @@ async function judgePipeline() {
 test('判斷器只呼叫一次 Gemini、不送處理人並安全轉換上游錯誤', judgePipeline);
 
 /**
- * 驗證 JSON 檔需求單儲存：自動建檔、新增、查詢、更新、序列化寫入、損毀與寫入失敗的處理。
+ * 驗證 SQLite 需求單儲存：自動建檔、新增、查詢、更新、建立順序、交易回滾、損毀檔與寫入失敗的處理。
+ * 寫入失敗以另一條連線建立觸發器注入，不依賴作業系統的檔案權限。
  * @returns {Promise<void>}
  */
 async function ticketStoreBehaviour() {
-  const { store, file } = tempStore('store.json');
+  /** 模擬一般的退回更新。@param {object} ticket 需求單複本。@returns {object} 改為已退回的需求單。 */
+  function reject(ticket) { return { ...ticket, status: 'REJECTED' }; }
+  /** 取出單號供比對順序。@param {object} ticket 需求單。@returns {string} 單號。 */
+  function idOf(ticket) { return ticket.ticket_id; }
+  const { store, file } = tempStore('store.db');
   assert.deepEqual(await store.all(), []);
   await Promise.all([store.insert({ ticket_id: 'TK-1', status: 'PENDING' }), store.insert({ ticket_id: 'TK-2', status: 'PENDING' })]);
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).map((ticket) => ticket.ticket_id), ['TK-1', 'TK-2']);
   assert.equal((await store.find('TK-2')).status, 'PENDING');
   assert.equal(await store.find('TK-9'), null);
   const updated = await store.update('TK-1', (ticket) => ({ ...ticket, status: 'APPROVED' }));
   assert.equal(updated.status, 'APPROVED');
-  assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].status, 'APPROVED');
   const copy = await store.all();
   copy[0].status = 'tampered';
   assert.equal((await store.find('TK-1')).status, 'APPROVED');
@@ -276,21 +287,30 @@ async function ticketStoreBehaviour() {
   /** 以 HttpError 拒絕更新。@returns {never} @throws {HttpError} 409。 */
   function refuse() { throw new HttpError(409, 'TICKET_ALREADY_DECIDED', 'x'); }
   await assert.rejects(store.update('TK-1', refuse), { status: 409 });
+  assert.equal((await store.find('TK-1')).status, 'APPROVED', '修改函式拒絕時不寫入');
   await assert.rejects(store.insert({ ticket_id: 'TK-1' }), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
-  mkdirSync(`${file}.tmp`);
+  const saboteur = new Database(file);
+  saboteur.exec("CREATE TRIGGER block_insert BEFORE INSERT ON tickets BEGIN SELECT RAISE(ABORT, 'blocked'); END;");
+  saboteur.exec("CREATE TRIGGER block_update BEFORE UPDATE ON tickets BEGIN SELECT RAISE(ABORT, 'blocked'); END;");
   await assert.rejects(store.insert({ ticket_id: 'TK-4' }), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
-  rmSync(`${file}.tmp`, { recursive: true, force: true });
-  assert.equal((await store.all()).length, 2, '寫檔失敗的需求單不留在記憶體，重送不會重複');
-  const reopened = createFileTicketStore({ file });
-  assert.equal((await reopened.all()).length, 2);
-  const corrupt = join(scratch, 'corrupt.json');
-  writeFileSync(corrupt, '{"not":"array"}');
-  await assert.rejects(createFileTicketStore({ file: corrupt }).all(), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
-  const unwritable = createFileTicketStore({ file: join(scratch, 'store.json', 'child.json') });
+  await assert.rejects(store.update('TK-2', reject), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
+  saboteur.exec('DROP TRIGGER block_insert; DROP TRIGGER block_update;');
+  saboteur.close();
+  assert.equal((await store.all()).length, 2, '寫入失敗的需求單不留下，重送不會重複');
+  assert.equal((await store.find('TK-2')).status, 'PENDING', '更新失敗整筆回滾');
+  store.close();
+  const reopened = createSqliteDataStore({ file });
+  openedStores.push(reopened);
+  assert.deepEqual((await reopened.all()).map(idOf), ['TK-1', 'TK-2'], '重新開啟後保留建立順序');
+  assert.equal((await reopened.find('TK-1')).status, 'APPROVED');
+  const corrupt = join(scratch, 'corrupt.db');
+  writeFileSync(corrupt, '{"not":"a database"}');
+  await assert.rejects(createSqliteDataStore({ file: corrupt }).all(), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
+  const unwritable = createSqliteDataStore({ file: join(scratch, 'store.db', 'child.db') });
   await assert.rejects(unwritable.insert({ ticket_id: 'TK-3' }), { status: 503, code: 'TICKET_STORE_UNAVAILABLE' });
   assert.deepEqual(TICKET_STATUSES, ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']);
 }
-test('JSON 檔需求單儲存的新增、更新與失敗處理', ticketStoreBehaviour);
+test('SQLite 需求單儲存的新增、更新與失敗處理', ticketStoreBehaviour);
 
 /**
  * 驗證指定處理人路徑：直接保存為待簽核、不扣額、不呼叫 Gemini；以及欄位驗證與處理人不存在的 400。
@@ -298,7 +318,7 @@ test('JSON 檔需求單儲存的新增、更新與失敗處理', ticketStoreBeha
  */
 async function handlerPath() {
   const usage = createUsageService({ store: createMemoryLimitStore() });
-  const { store } = tempStore('handler.json');
+  const { store } = tempStore('handler.db');
   /** 不應被呼叫的判斷器。@returns {Promise<never>} @throws {Error} 意外呼叫。 */
   async function judge() { throw new Error('must not judge'); }
   /** 執行處理人路徑檢查。@param {string} base 位址。@returns {Promise<void>} */
@@ -359,7 +379,7 @@ async function judgePath() {
   /** 可控制時間。@returns {number} epoch 毫秒。 */
   function clock() { return now; }
   const usage = createUsageService({ store: createMemoryLimitStore(), clock });
-  const { store } = tempStore('judge.json');
+  const { store } = tempStore('judge.db');
   let output = { department_id: 'dept-it-2', confidence_score: 90, basis: '  需求提到 ERP  ' };
   /** 模擬 Gemini。@returns {Promise<object>} 回應。 */
   async function generateContent() { return { text: JSON.stringify(output) }; }
@@ -437,10 +457,10 @@ async function failurePaths() {
     assert.equal((await result.json()).error.code, 'RATE_LIMIT_EXCEEDED');
     assert.equal((await usage.usage('user-two.it')).userRemaining, env.userDailyLimit - 1);
   }
-  await withServer(ticketApp({ departments, judge: judgeLimited, store: tempStore('fail-judge.json').store, usage }), checkJudge);
+  await withServer(ticketApp({ departments, judge: judgeLimited, store: tempStore('fail-judge.db').store, usage }), checkJudge);
   now += 10000;
   writeFileSync(join(scratch, 'blocker'), '');
-  const failingStore = createFileTicketStore({ file: join(scratch, 'blocker', 'child.json') });
+  const failingStore = createSqliteDataStore({ file: join(scratch, 'blocker', 'child.db') });
   /** 儲存失敗的檢查。@param {string} base 位址。@returns {Promise<void>} */
   async function checkStore(base) {
     const result = await fetch(`${base}/tickets`, { method: 'POST', headers, body: payload });
@@ -463,7 +483,7 @@ test('判斷失敗與儲存失敗都扣額並釋放租約，日誌遮蔽需求�
  */
 async function trackingAndDecisions() {
   const usage = createUsageService({ store: createMemoryLimitStore() });
-  const { store } = tempStore('tracking.json');
+  const { store } = tempStore('tracking.db');
   /** 不應被呼叫的判斷器。@returns {Promise<never>} @throws {Error} 意外呼叫。 */
   async function judge() { throw new Error('must not judge'); }
   /** 執行追蹤與簽核檢查。@param {string} base 位址。@returns {Promise<void>} */
@@ -559,15 +579,21 @@ async function mountedRoutes() {
     const assigned = await fetch(`${base}/api/tickets`, { method: 'POST', headers, body: JSON.stringify({ subject: '申請 VPN 帳號', content: '新進同仁需要 VPN 連線權限', handler_id: handler.id }) });
     assert.equal(assigned.status, 200);
     const { ticket_id: ticketId } = await assigned.json();
-    assert.equal(JSON.parse(readFileSync(process.env.TICKETS_FILE, 'utf8'))[0].ticket_id, ticketId);
+    assert.equal((await dataStore.all())[0].ticket_id, ticketId, '寫入 DATABASE_FILE 指定的資料庫');
     const pending = await (await fetch(`${base}/api/tickets/department`, { headers })).json();
     assert.equal(pending.tickets[0].ticket_id, ticketId);
-    const decided = await fetch(`${base}/api/tickets/${ticketId}/decision`, { method: 'POST', headers, body: JSON.stringify({ action: 'APPROVE' }) });
-    assert.equal(decided.status, 200);
+    const self = await fetch(`${base}/api/tickets/${ticketId}/decision`, { method: 'POST', headers, body: JSON.stringify({ action: 'APPROVE' }) });
+    assert.equal(self.status, 403, '提單人不能簽核自己的單');
+    assert.equal((await self.json()).error.message, '不能簽核自己提出的需求單');
+    const colleague = realDepartments.find((department) => department.id === 'dept-ga-1').handlers.find((item) => item.id !== 'grace.tsai');
+    const colleagueLogin = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: colleague.id, password: 'test-only-password' }) });
+    const colleagueHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${(await colleagueLogin.json()).token}` };
+    const decided = await fetch(`${base}/api/tickets/${ticketId}/decision`, { method: 'POST', headers: colleagueHeaders, body: JSON.stringify({ action: 'APPROVE' }) });
+    assert.equal(decided.status, 200, '同部門其他成員可以簽核');
     assert.equal((await (await fetch(`${base}/api/tickets/mine`, { headers })).json()).tickets[0].status, 'APPROVED');
     const noKey = await fetch(`${base}/api/tickets`, { method: 'POST', headers, body: JSON.stringify({ subject: '申請 VPN 帳號', content: '新進同仁需要 VPN 連線權限' }) });
     assert.equal(noKey.status, 500);
-    assert.equal((await noKey.json()).error.message, '尚未設定 Gemini API 金鑰');
+    assert.equal((await noKey.json()).error.message, '尚未設定 Gemini API 金鑰', '預設主要供應商 Gemini 未設定金鑰，也沒有備援');
     const oversized = await fetch(`${base}/api/tickets`, { method: 'POST', headers, body: JSON.stringify({ subject: '申請 VPN 帳號', content: 'a'.repeat(20000) }) });
     assert.equal(oversized.status, 413);
     assert.equal((await fetch(`${base}/api/tickets/${ticketId}/decision`, { method: 'PUT', headers, body: '{}' })).status, 404);

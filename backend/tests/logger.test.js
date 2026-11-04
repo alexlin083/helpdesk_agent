@@ -1,18 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { setupTestEnv } from './helpers/testEnv.js';
 
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.LOG_LEVEL = 'debug';
-const { createLogger, diagnoseError, requestContext } = await import('../utils/logger.js');
-const { createTicketJudge } = await import('../services/ticketJudge.js');
-const { createDepartmentService } = await import('../services/departmentService.js');
-const { requestLogger } = await import('../middleware/requestLogger.js');
-const { loadEnv } = await import('../config/env.js');
+setupTestEnv({ LOG_LEVEL: 'debug' });
+const { createLogger, diagnoseError, requestContext } = await import('../src/utils/logger.js');
+const { createTicketJudge } = await import('../src/services/ai/ticketJudge.js');
+const { createDepartmentService } = await import('../src/services/departmentService.js');
+const { requestLogger } = await import('../src/middleware/requestLogger.js');
+const { loadEnv } = await import('../src/config/env.js');
 
 /**
  * 驗證一般模式過濾 debug，並遮蔽金鑰、本文、提示詞、回覆與 Error 原文。
@@ -179,3 +175,41 @@ function verifyLogLevelConfig() {
   assert.throws(invalidLevel, /LOG_LEVEL/);
 }
 test('LOG_LEVEL 預設值、正規化與驗證', verifyLogLevelConfig);
+
+/**
+ * 驗證診斷用的數值欄位改名後不再被遮蔽：HTTP 限流的每個限制器容量（rateCapacityPerLimiter）與 Gemini 輸出上限（outputLimit）
+ * 必須以原值輸出；舊名稱仍含 key／token，證明遮蔽規則沒有被放寬。
+ * @param {import('node:test').TestContext} context 測試的 mock 管理器。
+ * @returns {Promise<void>}
+ */
+async function verifyDiagnosticFieldNames(context) {
+  const records = [];
+  /**
+   * 收集結構化日誌供斷言檢查。
+   * @param {string} record 序列化的 JSON 日誌。
+   * @returns {void}
+   */
+  function capture(record) { records.push(JSON.parse(record)); }
+  const log = createLogger({ level: 'debug', sink: { log: capture, warn: capture, error: capture } });
+  log('info', 'server.http_limits', { rateCapacityPerLimiter: 2048, maxKeysPerLimiter: 2048, outputLimit: 1024, maxOutputTokens: 1024 });
+  assert.equal(records[0].rateCapacityPerLimiter, 2048);
+  assert.equal(records[0].outputLimit, 1024);
+  assert.equal(records[0].maxKeysPerLimiter, '[REDACTED]', '遮蔽規則維持子字串比對');
+  assert.equal(records[0].maxOutputTokens, '[REDACTED]', '遮蔽規則維持子字串比對');
+  records.length = 0;
+  context.mock.method(console, 'log', capture);
+  /** 模擬一次成功的結構化輸出（假資料）。@returns {Promise<object>} SDK 回應。 */
+  async function generateContent() { return { text: JSON.stringify({ department_id: 'd', confidence_score: 90, basis: '測試依據' }) }; }
+  /** 提供替身 client，避免呼叫真實 API。@returns {object} SDK 替身。 */
+  function getAI() { return { models: { generateContent } }; }
+  const departments = createDepartmentService({ departments: [{ id: 'd', name: '部門', duty: 'IT資訊服務台', business: ['IT資訊服務台'] }] });
+  await createTicketJudge({ getAI, departments, model: 'test-model' })({ subject: '測試主題', content: '測試內容' });
+  /** 找出 Gemini 設定的 debug 日誌。@param {object} record 日誌。@returns {boolean} 是否為設定事件。 */
+  function isConfig(record) { return record.event === 'gemini.generate.config'; }
+  assert.equal(records.find(isConfig)?.outputLimit, 2048);
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  assert.match(source, /rateCapacityPerLimiter: env\.httpRateMaxKeys/);
+  assert.ok(!source.includes('maxKeysPerLimiter'), 'server.http_limits 不可使用會被遮蔽的欄位名稱');
+}
+test('診斷用數值欄位名稱不會被機密遮蔽規則誤遮', verifyDiagnosticFieldNames);

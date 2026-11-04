@@ -2,24 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import cors from 'cors';
+import { setupTestEnv } from './helpers/testEnv.js';
 
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.TICKETS_FILE = '/nonexistent/helpdesk-tests/tickets.json';
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.LIMIT_STORE = 'memory';
-process.env.LOG_LEVEL = 'silent';
-const { env, loadEnv } = await import('../config/env.js');
-const { createRateLimiters, createBoundedRateStore } = await import('../middleware/rateLimiter.js');
-const { errorHandler } = await import('../middleware/errorHandler.js');
-const { authenticate } = await import('../middleware/authenticate.js');
-const { authService, ACCOUNTS } = await import('../services/authService.js');
-const { createTicketHandler, createDepartmentsHandler } = await import('../controllers/ticketController.js');
-const { createDepartmentService } = await import('../services/departmentService.js');
-const { createAccountService } = await import('../services/accountService.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
-const { createUsageService } = await import('../services/usageService.js');
+setupTestEnv();
+const { env, loadEnv } = await import('../src/config/env.js');
+const { createRateLimiters, createBoundedRateStore } = await import('../src/middleware/rateLimiter.js');
+const { errorHandler } = await import('../src/middleware/errorHandler.js');
+const { authenticate } = await import('../src/middleware/authenticate.js');
+const { authService, ACCOUNTS } = await import('../src/services/authService.js');
+const { createTicketHandler } = await import('../src/controllers/ticketController.js');
+const { createDepartmentsHandler } = await import('../src/controllers/departmentController.js');
+const { createDepartmentService } = await import('../src/services/departmentService.js');
+const { createAccountService } = await import('../src/services/personnel/accountService.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
+const { createUsageService } = await import('../src/services/usageService.js');
 const departments = createDepartmentService({ departments: [
   { id: 'dept-it-1', name: '資訊管理一部', duty: 'IT資訊服務台', business: ['IT資訊服務台'] },
 ] });

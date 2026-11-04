@@ -1,15 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-metrics-admin-password';
-process.env.DEMO_PASSWORD = 'test-metrics-user-password';
-process.env.GEMINI_API_KEY = '';
-process.env.LOG_LEVEL = 'silent';
-const { env } = await import('../config/env.js');
-const { createAdminMetrics } = await import('../services/adminMetrics.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
-const { createChatTasks } = await import('../services/chatTasks.js');
-const { createRateLimiters, createBoundedRateStore } = await import('../middleware/rateLimiter.js');
+import { setupTestEnv } from './helpers/testEnv.js';
+setupTestEnv({ ADMIN_PASSWORD: 'test-metrics-admin-password', DEMO_PASSWORD: 'test-metrics-user-password' });
+const { env } = await import('../src/config/env.js');
+const { createAdminMetrics } = await import('../src/services/admin/adminMetrics.js');
+const { createSqliteDataStore } = await import('../src/services/storage/dataStore.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
+const { createTaskTracker } = await import('../src/services/taskTracker.js');
+const { createRateLimiters, createBoundedRateStore } = await import('../src/middleware/rateLimiter.js');
 
 /** 驗證唯讀快照正確處理每日額度、過期視窗、跨午夜租約與私密欄位白名單。@returns {Promise<void>} 驗證完成。 */
 async function projectedMetrics() {
@@ -33,9 +31,14 @@ async function projectedMetrics() {
   };
   /** 不依賴全域 HTTP 儲存。@returns {object[]} 空視窗。 */
   function rates() { return []; }
-  const tasks = createChatTasks();
-  const get = createAdminMetrics({ store, accounts, rates, tasks, clock, config: { ...env, nodeEnv: 'production' } });
+  const tasks = createTaskTracker();
+  const tickets = createSqliteDataStore({ file: ':memory:' });
+  await tickets.insert({ ticket_id: 'TK-metrics-1', status: 'PENDING', subject: 'private-subject', content: 'private-content' });
+  await tickets.insert({ ticket_id: 'TK-metrics-2', status: 'APPROVED', subject: 'private-subject', content: 'private-content' });
+  const get = createAdminMetrics({ store, accounts, rates, tasks, tickets, clock, config: { ...env, nodeEnv: 'production' } });
   const current = await get();
+  assert.deepEqual(current.ticketStore, { engine: 'sqlite', available: true, schemaVersion: 4, total: 2, pending: 1, approved: 1, rejected: 0, cancelled: 0, fileBytes: null, walBytes: null });
+  assert.equal(current.runtime.storage, 'memory', 'runtime.storage 仍描述限流計數');
   assert.equal(current.ai.used, 3);
   assert.equal(current.ai.remaining, 97);
   assert.equal(current.ai.active, 1);
@@ -46,7 +49,7 @@ async function projectedMetrics() {
   assert.equal(current.login.ip.activeKeys, 1);
   assert.equal(current.login.ip.failures, 100);
   assert.equal(current.login.account.atLimitKeys, 1);
-  for (const value of ['private-lease-id', 'private-ip-hash', 'private-account-hash', 'never-output-this-secret']) assert.ok(!JSON.stringify(current).includes(value));
+  for (const value of ['private-lease-id', 'private-ip-hash', 'private-account-hash', 'never-output-this-secret', 'private-subject', 'private-content', 'TK-metrics']) assert.ok(!JSON.stringify(current).includes(value));
   assert.deepEqual(await store.read(), before);
   now += 2000;
   const midnight = await get();
@@ -62,8 +65,21 @@ async function projectedMetrics() {
   assert.deepEqual(await store.read(), before, '投影過期與跨日狀態不修改儲存');
   await store.reset();
   assert.equal((await get()).ai.used, 0);
+  tickets.close();
 }
 test('監測快照唯讀、跨日與過期處理及秘密遮蔽', projectedMetrics);
+
+/** 驗證需求單資料庫無法讀取時，監測仍回傳其餘資料並標示資料庫不可用。@returns {Promise<void>} 驗證完成。 */
+async function unavailableTicketStore() {
+  const broken = {
+    /** 模擬資料庫故障。@returns {Promise<never>} 永遠失敗。@throws {Error} 503。 */
+    async stats() { throw Object.assign(new Error('unavailable'), { status: 503 }); },
+  };
+  const snapshot = await createAdminMetrics({ store: createMemoryLimitStore(), tasks: createTaskTracker(), tickets: broken })();
+  assert.deepEqual(snapshot.ticketStore, { engine: 'sqlite', available: false, schemaVersion: null, total: null, pending: null, approved: null, rejected: null, cancelled: null, fileBytes: null, walBytes: null });
+  assert.ok(snapshot.ai, '其他監測資料照常回傳');
+}
+test('需求單資料庫故障時監測仍可取得', unavailableTicketStore);
 
 /** 驗證 HTTP 快照只讀有效視窗、回傳獨立複本，且對外彙整不揭露 IP。@param {object} context 模擬時間。@returns {Promise<void>} 驗證完成。 */
 async function rateSnapshots(context) {
@@ -79,7 +95,7 @@ async function rateSnapshots(context) {
   assert.deepEqual(store.snapshot(101001), []);
   const limits = createRateLimiters({ ...env, httpApiLimit: 2 });
   const rows = limits.snapshot();
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, 6, 'api、login、ticket、departments、query、draft 六組 HTTP 限制');
   assert.equal(rows[0].limit, 2);
   assert.equal(rows[0].windowSeconds, env.httpRateWindowSeconds);
   assert.ok(!JSON.stringify(rows).includes('192.0.2.20'));
@@ -90,7 +106,7 @@ test('HTTP 視窗快照、到期與彙整設定', rateSnapshots);
 
 /** 驗證監測不受維護鎖阻擋，並可正確顯示維護與關機狀態。@returns {Promise<void>} 驗證完成。 */
 async function maintenanceMetrics() {
-  const tasks = createChatTasks();
+  const tasks = createTaskTracker();
   let finish;
   /** 取得維護完成控制點。@param {Function} resolve 完成函式。@returns {void} */
   function capture(resolve) { finish = resolve; }

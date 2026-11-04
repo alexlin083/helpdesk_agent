@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateTicketInput, countCodePoints, TICKET_LIMITS } from '../src/services/ticketService.js';
-import { buildHandlerOptions } from '../src/propose.js';
+import { describeAttached, PROPOSE_TEXT } from '../src/pages/propose.js';
 
 /**
  * 驗證主題與需求內容的必填、空白與字數邊界提示，兩欄一起檢查。
@@ -37,22 +37,15 @@ function counting() {
 test('字數以 Unicode code points 計算', counting);
 
 /**
- * 驗證下拉選單依部門分組、只顯示帳號名稱，沒有處理人的部門不列出。
+ * 驗證套用「自動生成」後的提示文字：只有部門時使用 PROPOSE_TEXT.attached；對話中指定處理人時改用 PROPOSE_TEXT.attachedHandler 並列出處理人帳號；
+ * 處理人省略或為空字串時視為不指定，退回只顯示部門的版本。
  * @returns {void}
  */
-function handlerOptions() {
-  const departments = [
-    { id: 'd1', name: '資訊管理一部', type: '', duty: '', business: [], handlers: [{ id: 'h1', name: 'racky.huang' }, { id: 'h2', name: 'amy.chen' }] },
-    { id: 'd2', name: '沒有處理人', type: '', duty: '', business: ['x'], handlers: [] },
-    { id: 'd3', name: '人力資源部', type: '', duty: '', business: [], handlers: [{ id: 'h3', name: 'emily.wu' }] },
-  ];
-  assert.deepEqual(buildHandlerOptions(departments), [
-    { label: '資訊管理一部', type: '', options: [
-      { value: 'h1', label: 'racky.huang', target: 'racky.huang（資訊管理一部）' },
-      { value: 'h2', label: 'amy.chen', target: 'amy.chen（資訊管理一部）' },
-    ] },
-    { label: '人力資源部', type: '', options: [{ value: 'h3', label: 'emily.wu', target: 'emily.wu（人力資源部）' }] },
-  ]);
-  assert.deepEqual(buildHandlerOptions([]), []);
+function attachedDescription() {
+  assert.equal(describeAttached('測試人資部'), PROPOSE_TEXT.attached.replace('{department}', '測試人資部'));
+  assert.equal(describeAttached('測試人資部'), '已由自動生成確認，將送達「測試人資部」');
+  assert.equal(describeAttached('測試人資部', ''), describeAttached('測試人資部'), '空字串代表不指定處理人');
+  assert.equal(describeAttached('測試資訊部', 'ivan.test'), PROPOSE_TEXT.attachedHandler.replace('{department}', '測試資訊部').replace('{handler}', 'ivan.test'));
+  assert.equal(describeAttached('測試資訊部', 'ivan.test'), '已由自動生成確認，將送達「測試資訊部」的 ivan.test');
 }
-test('指定處理人選項依部門分組並略過沒有處理人的部門', handlerOptions);
+test('套用提示依是否指定處理人組出文字', attachedDescription);

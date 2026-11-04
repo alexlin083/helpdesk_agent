@@ -1,0 +1,39 @@
+{
+  "id": "purchase",
+  "version": 1,
+  "name": "採購申請",
+  "department_id": "dept-pur-1",
+  "ai": {
+    "description": "部門需要對外購買物品、耗材、軟體授權或服務，由採購部詢價、比價與下單：需要採購品項、數量（1～999 的整數）、預估總金額（新台幣整數）、採購用途與需要日期（不可早於今天），建議供應商可以不填。向總務申請配發辦公設備屬於設備申請，設備壞了要修屬於報修。",
+    "examples": ["想採購 10 箱影印紙", "部門要買 5 套繪圖軟體授權", "請採購部幫忙詢價 3 台投影機"],
+    "greeting": "{username} 你好，這邊已經收到你想要採購的需求，根據您的需求您的業務將會由採購部進行處理，由於採購申請需要您先提供一些基本的訊息，請告訴我你想採購的品項、數量、預估總金額、用途與需要日期，有建議的供應商也可以一併告訴我，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式等等",
+    "ask_order": ["item", "quantity", "budget", "purpose", "needed_by"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "applicant", "label": "申請人", "type": "self" },
+    { "key": "item", "label": "採購品項", "type": "text", "required": true, "max_length": 50 },
+    { "key": "quantity", "label": "數量", "type": "number", "required": true, "min": 1, "max": 999, "integer": true },
+    { "key": "budget", "label": "預估總金額", "type": "number", "required": true, "min": 1, "max": 10000000, "integer": true },
+    { "key": "purpose", "label": "採購用途", "type": "text", "required": true, "max_length": 200 },
+    { "key": "needed_by", "label": "需要日期", "type": "date", "required": true, "rules": { "not_before_today": true } },
+    { "key": "supplier", "label": "建議供應商", "type": "text", "max_length": 50 }
+  ],
+  "render": {
+    "lines": [
+      "[申請人]: {applicant}",
+      "[採購品項]: {item}",
+      "[數量]: {quantity}",
+      "[預估總金額]: 新台幣 {budget} 元",
+      "[採購用途]: {purpose}",
+      "[需要日期]: {needed_by|date}",
+      "[建議供應商]: {supplier|default:未指定}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true },
+    "transfer": false,
+    "transfer_error": { "code": "FORM_TICKET_LOCKED", "message": "採購申請由採購部處理，不能轉單" }
+  }
+}

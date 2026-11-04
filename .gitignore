@@ -10,8 +10,9 @@ node_modules/
 !.env.sample
 
 # Ticket data contains raw ticket text; never commit it
-backend/data/tickets.json
-backend/data/tickets.json.tmp
+# backend/storage 放 SQLite 資料庫（含 -wal／-shm）、舊版 tickets.json、還原保留檔、還原暫存檔與匯出的 JSON，只保留空目錄
+backend/storage/*
+!backend/storage/.gitkeep
 
 # Local system files, logs, and private credentials
 .DS_Store

@@ -1,0 +1,34 @@
+{
+  "id": "repair",
+  "version": 1,
+  "name": "報修",
+  "department_id": "dept-ga-1",
+  "ai": {
+    "description": "辦公設備或場地設施故障、損壞要維修，由總務與硬體組處理：例如螢幕、電腦主機、印表機、會議設備、冷氣、照明、門禁。需要故障設備、所在位置、故障狀況與緊急程度（一般、急件；影響多人工作或有安全疑慮時為急件）。軟體、網路、VPN、帳號密碼的問題屬於一般需求；要新增或更換設備屬於設備申請。",
+    "examples": ["會議室冷氣不冷", "3 樓走廊燈管壞了", "我的螢幕一直閃爍"],
+    "greeting": "{username} 你好，這邊已經收到你想要報修的需求，根據您的需求您的業務將會由總務與硬體組進行處理，由於報修需要您先提供一些基本的訊息，請告訴我故障的設備、所在位置、故障狀況與緊急程度，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式等等",
+    "ask_order": ["asset", "location", "symptom", "urgency"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "applicant", "label": "報修人", "type": "self" },
+    { "key": "asset", "label": "故障設備", "type": "text", "required": true, "max_length": 50 },
+    { "key": "location", "label": "所在位置", "type": "text", "required": true, "max_length": 50 },
+    { "key": "symptom", "label": "故障狀況", "type": "text", "required": true, "max_length": 300, "multiline": true },
+    { "key": "urgency", "label": "緊急程度", "type": "enum", "options": ["一般", "急件"], "required": true }
+  ],
+  "render": {
+    "lines": [
+      "[報修人]: {applicant}",
+      "[故障設備]: {asset}",
+      "[所在位置]: {location}",
+      "[故障狀況]: {symptom}",
+      "[緊急程度]: {urgency}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true },
+    "transfer": true
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "equipment",
+  "version": 1,
+  "name": "設備申請",
+  "department_id": "dept-ga-1",
+  "ai": {
+    "description": "向總務申請配發電腦、螢幕、鍵盤滑鼠、周邊或辦公設備：需要設備品項、數量（1～50 的整數）、用途說明、需要日期（不可早於今天）與送交地點，由總務與硬體組處理。設備壞了要修屬於報修，要對外購買屬於採購申請。",
+    "examples": ["想申請一台 27 吋螢幕", "新人需要兩組鍵盤滑鼠", "下週三前需要一台筆電"],
+    "greeting": "{username} 你好，這邊已經收到你想要申請設備的需求，根據您的需求您的業務將會由總務與硬體組進行處理，由於設備申請需要您先提供一些基本的訊息，請告訴我你想申請的設備品項、數量、用途、需要日期與送交地點，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式等等",
+    "ask_order": ["item", "quantity", "purpose", "needed_by", "location"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "applicant", "label": "申請人", "type": "self" },
+    { "key": "item", "label": "設備品項", "type": "text", "required": true, "max_length": 50 },
+    { "key": "quantity", "label": "數量", "type": "number", "required": true, "min": 1, "max": 50, "integer": true },
+    { "key": "purpose", "label": "用途說明", "type": "text", "required": true, "max_length": 200 },
+    { "key": "needed_by", "label": "需要日期", "type": "date", "required": true, "rules": { "not_before_today": true } },
+    { "key": "location", "label": "送交地點", "type": "text", "required": true, "max_length": 50 }
+  ],
+  "render": {
+    "lines": [
+      "[申請人]: {applicant}",
+      "[設備品項]: {item}",
+      "[數量]: {quantity}",
+      "[用途說明]: {purpose}",
+      "[需要日期]: {needed_by|date}",
+      "[送交地點]: {location}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true },
+    "transfer": true
+  }
+}

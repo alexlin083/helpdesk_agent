@@ -2,8 +2,8 @@ import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildLoginDom, buildProposeDom, fakeAuth, pageIds } from './helpers/fakeDom.js';
-import { initAdminPage } from '../src/admin.js';
-import { initLoginPage } from '../src/login.js';
+import { initAdminPage } from '../src/pages/admin.js';
+import { initLoginPage } from '../src/pages/login.js';
 import { initAccountMenu } from '../src/components/account.js';
 import { resetClassroom, AdminServiceError } from '../src/services/adminService.js';
 import { createAuthService } from '../src/services/authService.js';
@@ -26,7 +26,7 @@ function setupAdmin() {
 
 /** 驗證管理頁元素、登入後角色導頁、一般頁與管理頁互斥。@returns {Promise<void>} 完成導頁驗證。 */
 async function adminNavigation() {
-  const ids = pageIds(new URL('../admin/admin.html', import.meta.url));
+  const ids = pageIds(new URL('../pages/admin/admin.html', import.meta.url));
   for (const id of ['reset-form', 'reset-confirmation', 'reset-button', 'reset-status']) assert.ok(ids.has(id));
   const doc = createFakeDocument();
   const win = createFakeWindow();

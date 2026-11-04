@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument } from './helpers/fakeDom.js';
-import { summarizeTicketResult, renderTicketResult, renderDepartmentCards, RESULT_TEXT } from '../src/components/dialogs.js';
+import { summarizeTicketResult, renderTicketResult, renderDepartmentCards, RESULT_TEXT } from '../src/components/propose/dialogs.js';
 
 /**
  * 驗證三種 route 的送達、方式、說明與判斷依據文案。

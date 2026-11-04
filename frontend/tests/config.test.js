@@ -15,8 +15,8 @@ function apiOrigins() {
     ['http://localhost:8080/', 'http://localhost:8080/src/config.js', 'http://localhost:8080'],
     ['http://localhost:8080/helpdesk/', 'http://localhost:8080/helpdesk/src/config.js', 'http://localhost:8080/helpdesk'],
     ['http://127.0.0.1:8080/helpdesk/', 'http://127.0.0.1:8080/helpdesk/src/config.js', 'http://127.0.0.1:8080/helpdesk'],
-    ['https://example.com/helpdesk/admin/admin.html', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
-    ['https://example.com/helpdesk/tickets/tickets.html?status=PENDING', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
+    ['https://example.com/helpdesk/pages/admin/admin.html', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
+    ['https://example.com/helpdesk/pages/tickets/tickets.html?status=PENDING', 'https://example.com/helpdesk/src/config.js', 'https://example.com/helpdesk'],
     ['https://example.com/nested/project/', 'https://example.com/nested/project/src/config.js', 'https://example.com/nested/project'],
   ];
   for (const [page, moduleUrl, expected] of scenarios) {

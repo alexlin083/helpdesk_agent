@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { transferTicket, loadCompletedTickets, normalizeStoredTicket, MESSAGES } from '../src/services/ticketService.js';
+import { transferTicket, decideTicket, loadCompletedTickets, normalizeStoredTicket, MESSAGES } from '../src/services/ticketService.js';
 import { describeHistory, quickRange, taipeiDateString, describeSummary } from '../src/utils/ticketFormatters.js';
 
 const originalFetch = globalThis.fetch;
@@ -145,3 +145,22 @@ async function cancelContract() {
   await assert.rejects(cancelTicket('TK-1'), { code: 'INVALID_RESPONSE', message: MESSAGES.cancelUnreadable });
 }
 test('取消需求單的請求合約與驗證', cancelContract);
+
+/**
+ * 驗證簽核、轉單與取消逾時時使用「可能已經生效，請重新整理清單確認」的專屬提示，而不是查詢用的「請稍後再試」；查詢逾時仍用 listTimeout。
+ * @returns {Promise<void>}
+ */
+async function actionTimeouts() {
+  /** 模擬逾時。@returns {Promise<never>} @throws {DOMException} TimeoutError。 */
+  async function timeout() { throw new DOMException('Timed out', 'TimeoutError'); }
+  globalThis.fetch = timeout;
+  await assert.rejects(decideTicket('TK-1', 'APPROVE'), { code: 'TIMEOUT', message: MESSAGES.decisionTimeout });
+  await assert.rejects(transferTicket('TK-1', 'dept-it-2'), { code: 'TIMEOUT', message: MESSAGES.transferTimeout });
+  await assert.rejects(cancelTicket('TK-1'), { code: 'TIMEOUT', message: MESSAGES.cancelTimeout });
+  await assert.rejects(loadCompletedTickets(), { code: 'TIMEOUT', message: MESSAGES.listTimeout });
+  for (const key of ['decisionTimeout', 'transferTimeout', 'cancelTimeout']) {
+    assert.notEqual(MESSAGES[key], MESSAGES.listTimeout);
+    assert.match(MESSAGES[key], /可能已經生效，請重新整理清單確認/);
+  }
+}
+test('簽核、轉單與取消逾時提示可能已經生效', actionTimeouts);

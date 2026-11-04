@@ -4,24 +4,19 @@ import express from 'express';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setupTestEnv } from './helpers/testEnv.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'helpdesk-flows-'));
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.TICKETS_FILE = join(scratch, 'unused.json');
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.LIMIT_STORE = 'memory';
-process.env.LOG_LEVEL = 'silent';
-const { env } = await import('../config/env.js');
-const { createDepartmentService } = await import('../services/departmentService.js');
-const { createAccountService } = await import('../services/accountService.js');
-const { createFileTicketStore } = await import('../services/ticketStore.js');
-const { createTicketHandler, createDepartmentTicketsHandler, createMyTicketsHandler, createCompletedTicketsHandler, createDecisionHandler, createTransferHandler, parseCompletedQuery, matchesCompleted } = await import('../controllers/ticketController.js');
-const { errorHandler, notFound, HttpError } = await import('../middleware/errorHandler.js');
-const { createAuthService } = await import('../services/authService.js');
-const { createUsageService } = await import('../services/usageService.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
+setupTestEnv();
+const { env } = await import('../src/config/env.js');
+const { createDepartmentService } = await import('../src/services/departmentService.js');
+const { createAccountService } = await import('../src/services/personnel/accountService.js');
+const { createSqliteDataStore } = await import('../src/services/storage/dataStore.js');
+const { createTicketHandler, createDepartmentTicketsHandler, createMyTicketsHandler, createCompletedTicketsHandler, createDecisionHandler, createTransferHandler, parseCompletedQuery, matchesCompleted } = await import('../src/controllers/ticketController.js');
+const { errorHandler, notFound, HttpError } = await import('../src/middleware/errorHandler.js');
+const { createAuthService } = await import('../src/services/authService.js');
+const { createUsageService } = await import('../src/services/usageService.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
 
 /** 測試結束後清除暫存檔案。@returns {void} */
 function cleanup() { rmSync(scratch, { recursive: true, force: true }); }
@@ -116,7 +111,7 @@ async function call(url, headers, body) {
  * @returns {Promise<void>}
  */
 async function transfers() {
-  const store = createFileTicketStore({ file: join(scratch, 'transfer.json') });
+  const store = createSqliteDataStore({ file: ':memory:' });
   /** 執行轉單檢查。@param {string} base 位址。@returns {Promise<void>} */
   async function check(base) {
     const hr = await headersFor('hr.user');
@@ -130,6 +125,7 @@ async function transfers() {
       [{}, '轉單的目標部門不存在'], [{ department_id: 'dept-none' }, '轉單的目標部門不存在'], [{ department_id: 'dept-it-1' }, '轉單的目標部門必須不同於目前部門'],
       [{ department_id: 'dept-it-2', handler_id: 7 }, 'handler_id 必須是字串或 null'], [{ department_id: 'dept-it-2', handler_id: 'h-none' }, '指定的處理人不存在'],
       [{ department_id: 'dept-it-2', handler_id: 'one.it' }, '指定的處理人不屬於目標部門'], [{ department_id: 'dept-it-2', comment: 'a'.repeat(201) }, 'comment 最多 200 字元'],
+      [{ department_id: 'dept-it-2', comment: null }, 'comment 必須是字串'],
     ]) {
       const bad = await call(`${base}/tickets/${id}/transfer`, one, payload);
       assert.equal(bad.status, 400, message);
@@ -160,9 +156,13 @@ async function transfers() {
     assert.equal(again.status, 200);
     assert.equal(again.body.ticket.handler, null, '沒指定處理人時清空處理人');
     assert.equal(again.body.ticket.history.filter((item) => item.event === 'TRANSFERRED').length, 2);
-    const approved = await call(`${base}/tickets/${id}/decision`, hr, { action: 'APPROVE', comment: '人資處理' });
+    const self = await call(`${base}/tickets/${id}/decision`, hr, { action: 'APPROVE', comment: '人資處理' });
+    assert.equal(self.status, 403, '沒有需求類型的舊流程單同樣不能由提單人本人簽核');
+    assert.equal(self.body.error.message, '不能簽核自己提出的需求單');
+    assert.equal((await call(`${base}/tickets/${id}/transfer`, hr, { department_id: 'dept-it-1' })).status, 200, '提單人是送達部門成員時仍可轉單');
+    const approved = await call(`${base}/tickets/${id}/decision`, one, { action: 'APPROVE', comment: '資訊處理' });
     assert.equal(approved.status, 200);
-    assert.equal((await call(`${base}/tickets/${id}/transfer`, hr, { department_id: 'dept-it-1' })).status, 409, '已簽核不能轉');
+    assert.equal((await call(`${base}/tickets/${id}/transfer`, one, { department_id: 'dept-it-2' })).status, 409, '已簽核不能轉');
   }
   await withServer(flowApp(store), check);
 }
@@ -176,11 +176,16 @@ function completedQuery() {
   assert.deepEqual(parseCompletedQuery({}), { status: '', keyword: '', from: '', to: '', limit: 100 });
   assert.deepEqual(parseCompletedQuery({ status: 'REJECTED', q: ' vpn ', from: '2026-10-01', to: '2026-10-31', limit: '20' }), { status: 'REJECTED', keyword: 'vpn', from: '2026-10-01', to: '2026-10-31', limit: 20 });
   for (const [query, pattern] of [[{ status: 'PENDING' }, /status/], [{ q: 'a'.repeat(101) }, /q 最多/], [{ from: '2026/10/01' }, /from/], [{ to: '2026-13-40' }, /to/],
-    [{ from: '2026-10-02', to: '2026-10-01' }, /from 不可晚於 to/], [{ limit: '0' }, /limit/], [{ limit: '501' }, /limit/], [{ limit: 'x' }, /limit/]]) {
+    [{ from: '2026-10-02', to: '2026-10-01' }, /from 不可晚於 to/], [{ limit: '0' }, /limit/], [{ limit: '501' }, /limit/], [{ limit: 'x' }, /limit/],
+    [{ status: ['APPROVED', 'REJECTED'] }, /status 只能提供一次/], [{ q: ['vpn', 'erp'] }, /q 只能提供一次/], [{ from: ['2026-10-01'] }, /from 只能提供一次/],
+    [{ to: { day: '2026-10-01' } }, /to 只能提供一次/], [{ limit: ['20', '30'] }, /limit 只能提供一次/], [{ from: '2024-02-31' }, /from/], [{ to: '2026-02-29' }, /to/],
+    [{ from: '2026-04-31' }, /from/], [{ limit: '0x10' }, /limit/], [{ limit: '1e2' }, /limit/], [{ limit: '+5' }, /limit/], [{ limit: ' 5' }, /limit/], [{ limit: '5.0' }, /limit/]]) {
     /** 嘗試無效條件。@returns {object} 條件。@throws {HttpError} 400。 */
     function parse() { return parseCompletedQuery(query); }
     assert.throws(parse, pattern);
   }
+  assert.deepEqual(parseCompletedQuery({ from: '2024-02-29', to: '2024-03-01', limit: '500' }), { status: '', keyword: '', from: '2024-02-29', to: '2024-03-01', limit: 500 }, '閏日有效');
+  assert.equal(parseCompletedQuery({ limit: '007' }).limit, 7, '十進位前導零仍是整數');
   const base = { status: 'APPROVED', ticket_id: 'TK-1', subject: 'VPN 申請', content: '新人', updated_at: '2026-10-22T16:30:00.000Z',
     requester: { username: 'erp.user' }, decision: { at: '2026-10-22T16:30:00.000Z', by_username: 'one.it', comment: '已安排' }, handler: { name: 'one.it' } };
   const none = parseCompletedQuery({});
@@ -202,7 +207,7 @@ test('已完成查詢的條件解析與比對', completedQuery);
  * @returns {Promise<void>}
  */
 async function completedList() {
-  const store = createFileTicketStore({ file: join(scratch, 'completed.json') });
+  const store = createSqliteDataStore({ file: ':memory:' });
   /** 執行已完成清單檢查。@param {string} base 位址。@returns {Promise<void>} */
   async function check(base) {
     const hr = await headersFor('hr.user');
@@ -240,6 +245,11 @@ async function completedList() {
     assert.equal((await call(`${base}/tickets/completed?status=REJECTED`, hr)).body.total, 2);
     assert.equal((await call(`${base}/tickets/completed?status=PENDING`, one)).status, 400);
     assert.equal((await call(`${base}/tickets/completed?limit=999`, one)).status, 400);
+    const repeated = await call(`${base}/tickets/completed?status=APPROVED&status=REJECTED`, one);
+    assert.equal(repeated.status, 400, '重複的查詢鍵不可默默略過篩選');
+    assert.equal(repeated.body.error.code, 'INVALID_PAYLOAD');
+    assert.equal((await call(`${base}/tickets/completed?from=2024-02-31`, one)).status, 400, '不存在的日期');
+    assert.equal((await call(`${base}/tickets/completed?limit=0x10`, one)).status, 400, '非十進位筆數');
     assert.equal((await fetch(`${base}/tickets/completed`)).status, 401);
     const pending = (await call(`${base}/tickets/department`, one)).body.tickets;
     assert.equal(pending.filter((ticket) => ticket.status === 'PENDING').length, 1);
