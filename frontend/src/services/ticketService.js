@@ -11,9 +11,9 @@ const DECISIONS = ['APPROVE', 'REJECT'];
 export const QUOTA_CODES = ['DAILY_QUOTA_EXCEEDED', 'GLOBAL_QUOTA_EXCEEDED'];
 export const TICKET_LIMITS = { subject: 100, content: 2000, comment: 200 };
 const REQUEST_TIMEOUT_MS = 20000;
-// 「自動生成」（POST /api/tickets/draft）的單次等待上限：後端整個回合（AI 工具呼叫與結構化整理）最多 20 秒，
+// 「自動生成」（POST /api/tickets/draft）的單次等待上限：後端整個回合（AI 工具呼叫與結構化整理）無備援時最多 60 秒，
 // 再加上驗證、計算與網路往返的餘裕，避免前端比後端先放棄而看不到後端回傳的備援結果。
-export const DRAFT_REQUEST_TIMEOUT_MS = 30000;
+export const DRAFT_REQUEST_TIMEOUT_MS = 70000;
 
 export const MESSAGES = {
   network: '無法連線至後端，請確認網路、API 網址與 CORS 設定',

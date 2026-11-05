@@ -303,7 +303,7 @@ function previewAndHistory() {
 test('後端預覽與助理對話上限', previewAndHistory);
 
 /**
- * 驗證「自動生成」請求的等待上限比後端整個回合的 20 秒期限長（30 秒），一般請求（需求類型目錄）維持 20 秒，
+ * 驗證「自動生成」請求的等待上限比後端整個回合的 60 秒期限長（70 秒），一般請求（需求類型目錄）維持 20 秒，
  * 避免前端在後端回傳備援結果前先放棄。以替身記錄 AbortSignal.timeout 收到的毫秒數，不連線。
  * @returns {Promise<void>}
  */
@@ -324,7 +324,8 @@ async function draftTimeout() {
     assert.deepEqual(await loadRequestTypes(), []);
   } finally { AbortSignal.timeout = original; }
   assert.equal(waits[0], DRAFT_REQUEST_TIMEOUT_MS);
-  assert.ok(DRAFT_REQUEST_TIMEOUT_MS > 20000, '比後端的 20 秒回合期限長');
+  assert.equal(DRAFT_REQUEST_TIMEOUT_MS, 70000);
+  assert.ok(DRAFT_REQUEST_TIMEOUT_MS > 60000, '比後端的 60 秒回合期限長');
   assert.equal(waits[1], 20000);
 }
 test('自動生成請求的等待上限比後端回合期限長', draftTimeout);

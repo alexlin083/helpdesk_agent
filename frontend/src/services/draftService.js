@@ -331,7 +331,7 @@ function byteLength(body) { return new TextEncoder().encode(JSON.stringify(body)
  * - 聊天送出時帶 message、最近 6 則 history 與目前的面板 state，由 AI 更新未鎖定的欄位並回答問題；
  * - 手動修改欄位後的驗證呼叫只帶 state（不帶 message），後端只驗證、不呼叫 AI、不扣額度。
  * history 與 message 一律視為不可信的資料，由後端處理。本文超過 16 KB 時從最舊的 history 開始捨棄。
- * 單次最多等待 30 秒（DRAFT_REQUEST_TIMEOUT_MS），比後端整個回合的 20 秒期限長，讓後端的備援結果能送達。
+ * 單次最多等待 70 秒（DRAFT_REQUEST_TIMEOUT_MS），比後端無備援時整個回合的 60 秒期限長，讓後端的備援結果能送達。
  * @param {object} input 草稿內容。
  * @param {string} input.subject 需求單主題（1～100 字）。
  * @param {string} [input.message=''] 使用者在對話框輸入的訊息（最多 300 字）；空白代表不送。
