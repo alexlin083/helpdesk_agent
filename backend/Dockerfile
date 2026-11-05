@@ -4,7 +4,12 @@ FROM node:22.23.4-bookworm-slim
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force \
+# 原生 SQLite 模組安裝時會呼叫 node-gyp；在建置期間提供工具，完成後移除以縮小正式 image。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && npm ci --omit=dev && npm cache clean --force \
+    && apt-get purge -y --auto-remove python3 make g++ \
+    && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/storage && chown node:node /app/storage
 
 # 明確列出執行所需檔案，避免把本機 .env、工作單與測試放入 image。

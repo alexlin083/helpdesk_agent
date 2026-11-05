@@ -16,7 +16,7 @@ Caddy 提供 HTML／CSS／JS 與 /helpdesk/ 網站，並把 /helpdesk/api 轉送
 
 | 檔案／元件 | 用途與理由 |
 | --- | --- |
-| `backend/Dockerfile` | 以 `node:22.23.4-bookworm-slim` 建置，固定 Node.js 22.23.4（better-sqlite3 13 需 22.14 以上）；只複製 `package.json`、`package-lock.json`（以 `npm ci --omit=dev` 依 lockfile 安裝正式相依，SQLite 驅動附預編譯檔，不需編譯工具）、`src/`、`scripts/`、`data/departments.json`（部門）、整個 `data/requestTypes/` 資料夾（需求類型目錄 `_catalog.json` 與 `leave.json`、`equipment.json`、`general.json` 等定義檔）與 `docker-healthcheck.js`，並於建置時載入 better-sqlite3 確認原生模組可用；部門與需求類型的啟動驗證見[需求類型與 AI 資料來源規範](需求類型與AI資料來源規範.md)第 2 節；新增或修改需求類型只改 JSON 並重新建置 backend image（第 5.9 節）；人員資料（帳號、部門、員工與額度）不在 image 內，只存在 volume 的資料庫；以非 root 的 node 帳號用 `node src/index.js` 直接啟動（不經 npm），直接接收 SIGTERM 並交給優雅關機流程 |
+| `backend/Dockerfile` | 以 `node:22.23.4-bookworm-slim` 建置，固定 Node.js 22.23.4（better-sqlite3 13 需 22.14 以上）；只複製 `package.json`、`package-lock.json`（以 `npm ci --omit=dev` 依 lockfile 安裝正式相依，SQLite 原生驅動以 node-gyp 編譯，建置期間安裝 Python、make 與 g++，完成後移除建置工具）、`src/`、`scripts/`、`data/departments.json`（部門）、整個 `data/requestTypes/` 資料夾（需求類型目錄 `_catalog.json` 與 `leave.json`、`equipment.json`、`general.json` 等定義檔）與 `docker-healthcheck.js`，並於建置時載入 better-sqlite3 確認原生模組可用；部門與需求類型的啟動驗證見[需求類型與 AI 資料來源規範](需求類型與AI資料來源規範.md)第 2 節；新增或修改需求類型只改 JSON 並重新建置 backend image（第 5.9 節）；人員資料（帳號、部門、員工與額度）不在 image 內，只存在 volume 的資料庫；以非 root 的 node 帳號用 `node src/index.js` 直接啟動（不經 npm），直接接收 SIGTERM 並交給優雅關機流程 |
 | `backend/.dockerignore` | 排除 `.env`、測試、Markdown，以及 `data/` 內的資料庫、還原保留檔、匯出與舊版 JSON 檔 |
 | `backend/docker-healthcheck.js` | 檢查本容器 /api/health，不登入、不寫單、不呼叫 AI |
 | `deploy/web.Dockerfile` | 以 `caddy:2-alpine` 為基底，將網站資產（`frontend/index.html`、`frontend/styles/`、`frontend/pages/`、`frontend/src/`）與 Caddy 設定包成另一個 image，不含 README、測試、後端檔案或 .env，沒有前端建置工具需求 |
