@@ -12,10 +12,12 @@ services:
     build:
       context: ./backend
     env_file: ${HELPDESK_ENV_FILE:-.env}
+    # NODE_ENV 與 CORS_ORIGIN 只由 env_file（HELPDESK_ENV_FILE 指定的檔案）提供；environment 的值會蓋過 env_file，因此這裡不再設定。
     environment:
-      NODE_ENV: ${NODE_ENV:-local}
       PORT: "3000"
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      # 需求單存在 SQLite；舊版 tickets.json 只在資料庫第一次初始化（沒有匯入紀錄）時自動匯入，之後保留作為回滾來源；
+      # 初始化後才放入的檔案只記錄 legacy-appeared，需用 node scripts/import-legacy-tickets.js --import-late 手動匯入。
+      DATABASE_FILE: /app/storage/helpdesk.db
       TICKETS_FILE: /app/storage/tickets.json
       LIMIT_STORE: memory
       # 僅 Caddy 對外；Caddy 覆寫來源資訊，後端只信任這一跳。

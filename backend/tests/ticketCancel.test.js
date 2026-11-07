@@ -4,24 +4,19 @@ import express from 'express';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setupTestEnv } from './helpers/testEnv.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'helpdesk-cancel-'));
-process.env.NODE_ENV = 'local';
-process.env.ADMIN_PASSWORD = 'test-admin-only-password';
-process.env.TICKETS_FILE = join(scratch, 'unused.json');
-process.env.DEMO_PASSWORD = 'test-only-password';
-process.env.GEMINI_API_KEY = '';
-process.env.LIMIT_STORE = 'memory';
-process.env.LOG_LEVEL = 'silent';
-const { env } = await import('../config/env.js');
-const { createDepartmentService } = await import('../services/departmentService.js');
-const { createAccountService } = await import('../services/accountService.js');
-const { createFileTicketStore, TICKET_STATUSES } = await import('../services/ticketStore.js');
-const { createTicketHandler, createDepartmentTicketsHandler, createMyTicketsHandler, createCompletedTicketsHandler, createDecisionHandler, createTransferHandler, createCancelHandler } = await import('../controllers/ticketController.js');
-const { errorHandler, notFound, HttpError } = await import('../middleware/errorHandler.js');
-const { createAuthService } = await import('../services/authService.js');
-const { createUsageService } = await import('../services/usageService.js');
-const { createMemoryLimitStore } = await import('../services/limitStore.js');
+setupTestEnv();
+const { env } = await import('../src/config/env.js');
+const { createDepartmentService } = await import('../src/services/departmentService.js');
+const { createAccountService } = await import('../src/services/personnel/accountService.js');
+const { createSqliteDataStore, TICKET_STATUSES } = await import('../src/services/storage/dataStore.js');
+const { createTicketHandler, createDepartmentTicketsHandler, createMyTicketsHandler, createCompletedTicketsHandler, createDecisionHandler, createTransferHandler, createCancelHandler } = await import('../src/controllers/ticketController.js');
+const { errorHandler, notFound, HttpError } = await import('../src/middleware/errorHandler.js');
+const { createAuthService } = await import('../src/services/authService.js');
+const { createUsageService } = await import('../src/services/usageService.js');
+const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
 
 /** 測試結束後清除暫存檔案。@returns {void} */
 function cleanup() { rmSync(scratch, { recursive: true, force: true }); }
@@ -92,7 +87,7 @@ async function headersFor(username) {
  * @returns {Promise<void>}
  */
 async function cancellations() {
-  const store = createFileTicketStore({ file: join(scratch, 'cancel.json') });
+  const store = createSqliteDataStore({ file: ':memory:' });
   const usage = createUsageService({ store: createMemoryLimitStore() });
   /** 不應被呼叫的判斷器。@returns {Promise<never>} @throws {Error} 意外呼叫。 */
   async function judge() { throw new Error('must not judge'); }
@@ -120,6 +115,11 @@ async function cancellations() {
     assert.equal((await call(`${base}/tickets/${byRequester}/cancel`, bystander, {})).status, 403, '同部門但不是提單人也不是送達部門不能取消');
     assert.equal((await call(`${base}/tickets/TK-missing/cancel`, requester, {})).status, 404);
     assert.equal((await call(`${base}/tickets/${byRequester}/cancel`, requester, { comment: 5 })).status, 400);
+    for (const path of ['cancel', 'decision']) {
+      const nullComment = await call(`${base}/tickets/${byRequester}/${path}`, path === 'cancel' ? requester : department, { action: 'APPROVE', comment: null });
+      assert.equal(nullComment.status, 400, `${path} 的 comment: null 不是字串`);
+      assert.equal(nullComment.body.error.message, 'comment 必須是字串');
+    }
     const own = await call(`${base}/tickets/${byRequester}/cancel`, requester, {});
     assert.equal(own.status, 200, '提單人取消不必填原因');
     assert.equal(own.body.ticket.status, 'CANCELLED');

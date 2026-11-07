@@ -1,0 +1,94 @@
+{
+  "id": "leave",
+  "version": 2,
+  "name": "請假申請",
+  "department_id": "dept-hr-1",
+  "ai": {
+    "description": "員工請假：需要請假的起訖日期時間（台北時間、24 小時制）、假別（事假、病假、特休）與同部門的代理人；請假時數與剩餘時數一律由後端計算。",
+    "examples": ["2026/12/1 請假", "下週一請病假", "12/3 下午請特休"],
+    "greeting": "{username} 你好，這邊已經收到你想要請假的需求，根據您的需求您的業務將會由人資部進行處理，由於請假程序需要您先提供一些基本的訊息，請告訴我你想請假的日期、時間、假別、代理人，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式或者代理人可以選擇誰等等",
+    "ask_order": ["start_at", "end_at", "leave_type", "agent"],
+    "tools": ["colleagues", "my_leave_balance", "department_directory"]
+  },
+  "calendar": {
+    "timezone_offset": "+08:00",
+    "work_windows": [["09:00", "12:00"], ["13:00", "18:00"]],
+    "workdays": [1, 2, 3, 4, 5],
+    "holidays": { "2026": [], "2027": [] },
+    "unit_minutes": 1,
+    "min_minutes": 1,
+    "max_days": 14,
+    "same_year": true
+  },
+  "fields": [
+    { "key": "applicant", "label": "請假人", "type": "self" },
+    { "key": "leave_type", "label": "假別", "type": "enum", "options": ["事假", "病假", "特休"], "required": true },
+    { "key": "start_at", "label": "請假起始時間", "type": "datetime", "required": true },
+    { "key": "end_at", "label": "請假截止時間", "type": "datetime", "required": true, "rules": { "after": "start_at" } },
+    {
+      "key": "agent",
+      "label": "代理人",
+      "type": "account",
+      "required": true,
+      "options_tool": "colleagues",
+      "filters": { "same_department": true, "not_self": true, "active": true, "not_busy_between": ["start_at", "end_at"] },
+      "unavailable_message": "這位同事在此期間也有請假，不能擔任代理人",
+      "unavailable_reason": "此期間已有請假"
+    },
+    { "key": "note", "label": "備註", "type": "text", "max_length": 200 }
+  ],
+  "computations": [
+    {
+      "key": "minutes",
+      "label": "請假時數",
+      "capability": "work_minutes",
+      "args": { "start": "start_at", "end": "end_at", "calendar": "calendar" },
+      "display": "hours_minutes",
+      "messages": {
+        "cross_year": "請假期間不可跨年度，請分開申請",
+        "year_closed": "{year} 年度尚未開放請假",
+        "max_days": "請假期間最多 {max_days} 天",
+        "no_work_time": "請假期間沒有落在上班時段"
+      }
+    }
+  ],
+  "ledger": {
+    "kind": "balance",
+    "category_field": "leave_type",
+    "amount": "minutes",
+    "period_from": "start_at",
+    "entitlement_table": "leave_entitlements"
+  },
+  "checks": [
+    {
+      "capability": "ledger_balance",
+      "on": ["draft", "submit", "approve"],
+      "error": { "code": "LEAVE_BALANCE_INSUFFICIENT", "message": "假別剩餘時數不足" },
+      "summary_label": "{leave_type}剩餘時數"
+    },
+    {
+      "capability": "ledger_overlap",
+      "on": ["draft", "submit"],
+      "args": { "start": "start_at", "end": "end_at" },
+      "error": { "code": "LEAVE_OVERLAP", "message": "這段時間已有請假單" }
+    }
+  ],
+  "render": {
+    "lines": [
+      "[請假人]: {applicant}",
+      "[請假日期]: {start_at|date_range:end_at}",
+      "[請假起始時間]: {start_at|time}",
+      "[請假截止時間]: {end_at|time}",
+      "[假別]: {leave_type}",
+      "[請假時數]: {minutes|hours_minutes}",
+      "[代理人]: {agent}",
+      "[備註]: {note|default:無}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true, "message": "不能簽核自己提出的請假單" },
+    "transfer": false,
+    "transfer_error": { "code": "FORM_TICKET_LOCKED", "message": "請假單不能轉出人資部" }
+  }
+}

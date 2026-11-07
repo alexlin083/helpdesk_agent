@@ -15,8 +15,7 @@
 **/*.p12
 **/*.pfx
 **/*.log
-backend/data/tickets.json
-backend/data/tickets.json.tmp
+backend/storage
 backups
 *.tar
 *.tar.gz

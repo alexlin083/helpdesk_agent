@@ -2,7 +2,8 @@ import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildLoginDom, pageIds, fakeAuth } from './helpers/fakeDom.js';
-import { initLoginPage, LOGIN_TEXT } from '../src/login.js';
+import { initLoginPage, LOGIN_TEXT } from '../src/pages/login.js';
+import { AuthServiceError } from '../src/services/authService.js';
 
 /**
  * 驗證 index.html 具備登入腳本依賴的所有節點 id。
@@ -132,3 +133,56 @@ async function toggles() {
   assert.equal(nodes.toggle.getAttribute('aria-pressed'), 'false');
 }
 test('密碼顯示切換', toggles);
+
+/**
+ * 驗證登入遇到 429 非額度錯誤時依 retryAfter 倒數：按鈕停用並顯示剩餘秒數、倒數中不送出、離開頁面清除計時器、
+ * 恢復頁面時接續、到期後恢復；超過 300 秒、沒有秒數或其他狀態碼不倒數。
+ * @param {import('node:test').TestContext} context 可控制的時間。
+ * @returns {Promise<void>}
+ */
+async function rateLimitCountdown(context) {
+  context.mock.timers.enable({ apis: ['Date', 'setInterval'], now: 1000 });
+  const doc = createFakeDocument();
+  const win = createFakeWindow();
+  const nodes = buildLoginDom(doc);
+  const auth = fakeAuth(null);
+  let attempts = 0;
+  let failure = new AuthServiceError('登入失敗次數過多，請稍後再試', { status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: 5 });
+  /** 依測試指定的錯誤拒絕登入。@returns {Promise<never>} @throws {AuthServiceError} 指定的錯誤。 */
+  auth.login = async () => { attempts += 1; throw failure; };
+  const page = initLoginPage(doc, win, auth);
+  nodes.username.value = 'racky.huang';
+  nodes.password.value = 'wrong';
+  await nodes.form.dispatch('submit');
+  assert.equal(nodes.error.textContent, '登入失敗次數過多，請稍後再試');
+  assert.equal(nodes.button.disabled, true);
+  assert.equal(nodes.button.textContent, '請等 5 秒');
+  assert.equal(nodes.password.value, '', '失敗後仍清空密碼');
+  context.mock.timers.tick(2000);
+  assert.equal(nodes.button.textContent, '請等 3 秒');
+  nodes.password.value = 'again';
+  await nodes.form.dispatch('submit');
+  assert.equal(attempts, 1, '倒數中不送出');
+  win.events.get('pagehide')();
+  context.mock.timers.tick(1000);
+  assert.equal(nodes.button.textContent, '請等 3 秒', '離開頁面後計時器已清除');
+  win.events.get('pageshow')();
+  assert.equal(nodes.button.textContent, '請等 2 秒', '恢復頁面時依目前時間接續');
+  context.mock.timers.tick(2000);
+  assert.equal(nodes.button.disabled, false);
+  assert.equal(nodes.button.textContent, LOGIN_TEXT.submit);
+  assert.equal(page.remainingWait(), 0);
+  for (const next of [
+    new AuthServiceError('登入失敗次數過多，請稍後再試', { status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: 301 }),
+    new AuthServiceError('請求太頻繁，請稍後再試', { status: 429, code: 'RATE_LIMIT_EXCEEDED', retryAfter: 0 }),
+    new AuthServiceError('密碼錯誤', { status: 401, code: 'INVALID_CREDENTIALS', retryAfter: 5 }),
+  ]) {
+    failure = next;
+    nodes.password.value = 'wrong';
+    await nodes.form.dispatch('submit');
+    assert.equal(nodes.error.textContent, next.message);
+    assert.equal(nodes.button.disabled, false, `${next.status}/${next.retryAfter} 不倒數`);
+    assert.equal(nodes.button.textContent, LOGIN_TEXT.submit);
+  }
+}
+test('登入遇到 429 依等待秒數倒數', rateLimitCountdown);

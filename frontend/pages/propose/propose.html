@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="企業智慧服務台：填寫主題後與服務台助理對話，自動生成需求單並送到對應部門">
+    <title>提出需求單 · 企業智慧服務台</title>
+    <link rel="stylesheet" href="../../styles/base.css">
+    <link rel="stylesheet" href="../../styles/layout.css">
+    <link rel="stylesheet" href="./propose.css">
+    <script type="module" src="../../src/pages/propose.js"></script>
+  </head>
+  <body class="propose-page" hidden>
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 14.5l1.8 1.8 3.4-3.6"/></svg>
+        </span>
+        <div><p class="brand-name">企業智慧服務台</p><p class="brand-sub">需求單提案</p></div>
+      </div>
+      <nav class="top-nav" aria-label="主要頁面">
+        <a href="./propose.html" aria-current="page">提出需求單</a>
+        <a href="../tickets/tickets.html">狀態追蹤</a>
+      </nav>
+      <details id="account-menu" class="account-menu">
+        <summary class="account-summary" aria-label="帳號選單">
+          <span id="account-avatar" class="avatar" aria-hidden="true"></span>
+          <span id="account-name" class="account-name"></span>
+          <span class="chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="account-panel">
+          <p class="account-id"><span class="muted">使用者代號</span><span id="account-id"></span></p>
+          <p class="account-id"><span class="muted">所屬部門</span><span id="account-department"></span></p>
+          <button id="logout-button" class="secondary-button" type="button">登出</button>
+        </div>
+      </details>
+    </header>
+
+    <main class="propose-layout">
+      <section class="propose-main" aria-labelledby="page-title">
+        <h1 id="page-title">提出需求單</h1>
+        <p class="intro">填寫主題後按「自動生成」，由服務台助理判斷需求類型與處理部門，確認後套用並送出</p>
+        <p id="list-notice" class="notice" role="status" hidden></p>
+        <form id="ticket-form" novalidate>
+          <div class="field">
+            <div class="field-head">
+              <label for="subject">主題 <span class="field-tag">必填</span></label>
+              <span id="subject-count" class="count">0 / 100</span>
+            </div>
+            <div class="subject-row">
+              <input id="subject" name="subject" autocomplete="off" aria-describedby="subject-error draft-button-hint">
+              <button id="draft-button" class="secondary-button" type="button" aria-haspopup="dialog" aria-controls="draft-dialog" disabled>自動生成</button>
+            </div>
+            <p id="draft-button-hint" class="field-hint">填好主題後可按「自動生成」，由服務台助理判斷需求類型與處理部門並整理需求內容（有固定格式的需求會逐項確認欄位）</p>
+            <p id="subject-error" class="field-error" role="alert"></p>
+          </div>
+          <div class="field">
+            <div class="field-head">
+              <label for="content">需求內容 <span class="field-tag">必填</span></label>
+              <span id="content-count" class="count">0 / 2000</span>
+            </div>
+            <textarea id="content" name="content" rows="10" readonly aria-describedby="content-hint content-error"></textarea>
+            <p id="content-hint" class="field-hint">需求內容由「自動生成」整理：在視窗確認後按 Apply 套用才會帶入，之後可在這裡做最後編輯（請保留整理好的欄位文字，可在前後補充說明）</p>
+            <p id="content-error" class="field-error" role="alert"></p>
+            <p id="form-chip" class="form-chip" hidden><span id="form-chip-text"></span></p>
+            <p id="form-notice" class="notice form-notice" role="status" hidden></p>
+          </div>
+          <p id="submit-error" class="form-error" role="alert"></p>
+          <div class="actions">
+            <button id="reset-button" class="link-button" type="button">清除重填</button>
+            <button id="submit-button" class="primary-button" type="submit">送出需求單</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="propose-side">
+        <section class="card" aria-labelledby="method-title">
+          <h2 id="method-title">送單方式</h2>
+          <ol class="method-list">
+            <li><span class="method-index" aria-hidden="true">1</span><div><strong>填寫主題</strong><p>用一句話簡短描述需求，服務台助理會依主題判斷需求類型</p></div></li>
+            <li><span class="method-index" aria-hidden="true">2</span><div><strong>自動生成</strong><p>服務台助理判斷需求類型與處理部門，透過對話補齊欄位（有固定格式的需求會逐項確認）</p></div></li>
+            <li><span class="method-index" aria-hidden="true">3</span><div><strong>套用並送出</strong><p>按 Apply 把內容帶入需求內容，做最後編輯後送出，需求單直接送到確認的部門</p></div></li>
+          </ol>
+          <button id="departments-button" class="secondary-button block" type="button" disabled>查看各部門業務範圍</button>
+        </section>
+      </aside>
+    </main>
+
+    <dialog id="departments-dialog" class="dialog" aria-labelledby="departments-title">
+      <div class="dialog-head">
+        <h2 id="departments-title">各部門業務範圍</h2>
+        <button id="departments-close" class="icon-button" type="button" aria-label="關閉">×</button>
+      </div>
+      <div id="departments-list" class="department-list dialog-scroll"></div>
+    </dialog>
+
+    <dialog id="draft-dialog" class="dialog draft-dialog" aria-labelledby="draft-title" aria-describedby="draft-intro">
+      <div class="dialog-head">
+        <h2 id="draft-title">自動生成需求內容</h2>
+        <button id="draft-close" class="icon-button" type="button" aria-label="關閉">×</button>
+      </div>
+      <p id="draft-intro" class="draft-intro">左側與服務台助理對話，助理會判斷需求與處理部門並在右側整理需求內容；你也可以直接修改右側欄位，確認後按 Apply 套用</p>
+      <div class="draft-body">
+        <section class="draft-chat" aria-label="與服務台助理對話">
+          <div id="draft-log" class="draft-log" role="log" aria-live="polite" aria-label="對話紀錄"></div>
+          <p id="draft-typing" class="draft-typing" role="status" hidden></p>
+          <form id="draft-chat-form" class="draft-chat-form" novalidate>
+            <div class="field-head">
+              <label for="draft-message">告訴助理 <span class="field-tag">Enter 送出，Shift+Enter 換行</span></label>
+              <span id="draft-message-count" class="count">0 / 300</span>
+            </div>
+            <div class="draft-chat-row">
+              <textarea id="draft-message" rows="1" maxlength="300" placeholder="補充時間、數量或用途，或問欄位怎麼填"></textarea>
+              <button id="draft-send" class="primary-button" type="submit" disabled>送出</button>
+            </div>
+          </form>
+        </section>
+        <section id="draft-fields" class="draft-panel" aria-labelledby="draft-panel-title">
+          <h3 id="draft-panel-title">需求內容</h3>
+          <div id="draft-department-field" class="draft-field draft-meta" hidden>
+            <div class="draft-field-head">
+              <label for="draft-department">處理部門 <span class="field-tag">必填</span></label>
+              <span id="draft-department-source" class="draft-source" hidden></span>
+            </div>
+            <select id="draft-department" class="draft-control" aria-describedby="draft-department-status"></select>
+            <p id="draft-department-status" class="draft-status" aria-live="polite"></p>
+          </div>
+          <div id="draft-field-list" class="draft-field-list" hidden></div>
+          <div id="draft-computed" class="draft-computed" role="status" aria-label="系統計算結果" hidden></div>
+          <div id="draft-summaries" class="draft-summaries" role="status" aria-label="規則檢查摘要" hidden></div>
+          <p id="draft-prompt" class="draft-prompt" role="status" hidden></p>
+        </section>
+      </div>
+      <div id="draft-apply-choice" class="draft-apply-choice" role="group" aria-label="需求內容已有文字" hidden>
+        <p>需求內容已有文字，要怎麼放入整理好的內容？</p>
+        <div class="draft-apply-buttons">
+          <button id="draft-replace" class="secondary-button" type="button">取代</button>
+          <button id="draft-append" class="secondary-button" type="button">附加在後</button>
+          <button id="draft-choice-cancel" class="link-button" type="button">返回</button>
+        </div>
+      </div>
+      <p id="draft-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="draft-cancel" class="secondary-button" type="button">關閉</button>
+        <button id="draft-apply" class="primary-button" type="button" disabled>Apply 套用</button>
+      </div>
+    </dialog>
+
+    <dialog id="result-dialog" class="dialog result-dialog" aria-labelledby="result-title">
+      <div class="result-head">
+        <span class="result-check" aria-hidden="true">✓</span>
+        <h2 id="result-title">需求單已送出</h2>
+      </div>
+      <dl class="result-fields">
+        <div class="result-row"><dt>主題</dt><dd id="result-subject"></dd></div>
+        <div class="result-row"><dt>單號</dt><dd id="result-ticket" class="ticket-id"></dd></div>
+        <div class="result-row"><dt>送達</dt><dd id="result-target" class="result-target"></dd></div>
+        <div class="result-row"><dt>方式</dt><dd id="result-method"></dd></div>
+        <div id="result-basis-row" class="result-row" hidden><dt>判斷依據</dt><dd id="result-basis"></dd></div>
+      </dl>
+      <p id="result-note" class="result-note"></p>
+      <p class="result-link">可到<a href="../tickets/tickets.html">狀態追蹤</a>頁查看狀態與簽核結果</p>
+      <div class="dialog-actions">
+        <button id="result-close" class="secondary-button" type="button">關閉</button>
+        <button id="result-again" class="primary-button" type="button">再提一張</button>
+      </div>
+    </dialog>
+  </body>
+</html>

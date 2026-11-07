@@ -1,0 +1,27 @@
+{
+  "id": "general",
+  "version": 1,
+  "name": "一般需求",
+  "department_id": null,
+  "department": { "options_tool": "department_directory", "min_confidence": 75 },
+  "ai": {
+    "description": "沒有專用表單的需求：把使用者描述的狀況整理成清楚的需求說明（發生了什麼事、影響範圍、希望何時完成），並依部門職責與業務判斷處理部門。",
+    "examples": ["VPN 連不上", "ERP 報表權限申請", "Outlook 收不到信"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "description", "label": "需求說明", "type": "text", "required": true, "max_length": 1000, "multiline": true }
+  ],
+  "render": {
+    "lines": [
+      "[需求說明]: {description}",
+      "[處理部門]: {department}"
+    ]
+  },
+  "workflow": {
+    "route": "DEPARTMENT",
+    "approver": { "not_requester": true, "message": "不能簽核自己提出的需求單" },
+    "transfer": true,
+    "judgement": { "source": "draft" }
+  }
+}

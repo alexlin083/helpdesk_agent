@@ -1,0 +1,116 @@
+/* 需求單頁：分頁、清單卡片、狀態標籤與簽核表單。 */
+.tickets-layout { max-width: 1120px; margin: 0 auto; padding: 48px 40px 72px; }
+.tickets-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.tickets-head h1 { font-size: clamp(32px, 3.4vw, 44px); }
+.tickets-head .intro { margin: 10px 0 0; }
+
+.tabs { display: flex; gap: 6px; margin: 32px 0 20px; border-bottom: 1px solid var(--line); }
+.tab {
+  background: none; border: 0; border-bottom: 3px solid transparent; padding: 12px 18px; font-size: 16px; font-weight: 600; color: var(--muted);
+  margin-bottom: -1px; display: inline-flex; align-items: center; gap: 8px;
+}
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--dark); }
+.tab-count { min-width: 22px; padding: 1px 8px; border-radius: 999px; background: var(--field); color: var(--ink-soft); font-size: 13px; font-weight: 700; text-align: center; }
+.tab-count:empty { display: none; }
+.tab[aria-selected="true"] .tab-count { background: var(--dark); color: #fff; }
+
+/* 「申請表單」的待簽核／已完成切換 */
+.view-switch { display: inline-flex; gap: 4px; padding: 4px; background: var(--field); border-radius: 999px; margin-bottom: 18px; }
+.view-button { background: none; border: 0; border-radius: 999px; padding: 8px 18px; font-size: 15px; font-weight: 600; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 8px; }
+.view-button[aria-pressed="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(43, 42, 39, 0.12); }
+
+.department-title { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+.tracking-section + .tracking-section { margin-top: 40px; }
+.section-title { font-family: var(--serif); font-size: 24px; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 10px; }
+.section-title .tab-count { background: var(--dark); color: #fff; }
+.ticket-tag { background: var(--cream); border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; color: var(--brown-deep); font-weight: 700; }
+.resubmit-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: var(--cream); border-radius: 10px; padding: 14px 18px; }
+.resubmit-row .decision-help { flex: 1 1 240px; }
+.filter-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px 16px; padding: 18px 20px; background: var(--cream); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; align-items: end; }
+.filter-field { display: grid; gap: 6px; }
+.filter-field label { font-size: 13px; font-weight: 700; }
+.filter-form input, .filter-form select { padding: 10px 12px; font-size: 14px; border-radius: 6px; background-color: #fff; }
+.filter-form select { padding-right: 40px; }
+.filter-quick { grid-column: 1 / 3; display: flex; gap: 8px; flex-wrap: wrap; }
+.chip-button { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 13px; color: var(--ink-soft); }
+.chip-button:hover { border-color: var(--line-strong); color: var(--ink); }
+.filter-actions { grid-column: 3 / 5; display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
+.filter-actions .primary-button { min-height: 44px; padding: 10px 24px; }
+.completed-summary { color: var(--muted); font-size: 14px; margin: 4px 0 12px; min-height: 1.4em; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.empty a { color: var(--ink); margin-left: 6px; }
+
+.ticket-list { display: grid; gap: 14px; }
+.ticket-card { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.ticket-summary {
+  list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 18px; padding: 18px 24px; align-items: center;
+}
+.ticket-summary::-webkit-details-marker { display: none; }
+.ticket-summary:hover, .ticket-card[open] > .ticket-summary { background: var(--cream); }
+.ticket-subject { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+.ticket-meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 6px; }
+.ticket-meta .ticket-id { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.status { display: inline-flex; align-items: center; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.status-PENDING { background: var(--notice); color: #8a6414; border: 1px solid var(--notice-line); }
+.status-APPROVED { background: #e8f1ea; color: var(--success); border: 1px solid #c7dccb; }
+.status-REJECTED { background: var(--danger-soft); color: var(--danger); border: 1px solid #efcbc2; }
+.status-CANCELLED { background: var(--field); color: var(--muted); border: 1px solid var(--line); }
+
+/* 展開內容：左欄「申請內容」、右欄「處理資訊」與「歷程」，下方為簽核表單 */
+.ticket-body { border-top: 1px solid var(--line); padding: 24px; display: grid; gap: 24px; }
+.ticket-columns { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(240px, 1fr); gap: 32px; align-items: start; }
+.ticket-section-title, .form-table caption { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; }
+.ticket-section-title { margin-bottom: 10px; }
+.ticket-content { font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-line; }
+
+.form-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.form-table caption { caption-side: top; text-align: left; padding-bottom: 10px; }
+.form-table th, .form-table td { padding: 11px 0; border-top: 1px solid #ebe7e0; text-align: left; vertical-align: top; }
+.form-table tr:last-child > * { border-bottom: 1px solid #ebe7e0; }
+.form-table th { width: 8.5em; padding-right: 20px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.form-table td { overflow-wrap: anywhere; white-space: pre-line; }
+.form-table-computed td { font-weight: 700; }
+
+.ticket-side { display: grid; align-content: start; border-left: 1px solid var(--line); padding-left: 28px; }
+.ticket-fields { display: grid; gap: 14px; }
+.ticket-fields + .ticket-section-title { margin-top: 24px; }
+.ticket-row { display: grid; gap: 2px; font-size: 14px; }
+.ticket-row dt { color: var(--muted); font-size: 13px; }
+.ticket-row dd { overflow-wrap: anywhere; white-space: pre-line; }
+.ticket-history { display: grid; gap: 14px; font-size: 14px; color: var(--ink-soft); }
+.ticket-history li { position: relative; display: grid; gap: 2px; padding-left: 20px; }
+.ticket-history li::before { content: ""; position: absolute; left: 0; top: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--brown); }
+.ticket-history li:not(:last-child)::after { content: ""; position: absolute; left: 4px; top: 19px; bottom: -12px; width: 1px; background: var(--line); }
+.ticket-history time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.decision-form { display: grid; gap: 10px; background: var(--cream); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+.decision-form .decision-error:empty { display: none; }
+.decision-form label { font-weight: 700; font-size: 14px; }
+.decision-form textarea { min-height: 72px; background: #fff; }
+.transfer-row { display: grid; grid-template-columns: auto minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 10px; align-items: center; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; background: #fff; }
+.transfer-label { font-weight: 700; font-size: 14px; white-space: nowrap; }
+.transfer-row select { padding: 10px 40px 10px 12px; font-size: 14px; border-radius: 6px; background-color: var(--field); }
+.decision-actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.decision-actions .cancel-button { margin-right: auto; color: var(--muted); }
+.decision-actions .cancel-button:hover:not(:disabled) { color: var(--danger); }
+.decision-actions .reject-button { border-color: var(--danger); color: var(--danger); }
+.decision-actions .reject-button:hover:not(:disabled) { background: var(--danger-soft); }
+.decision-error { color: var(--danger); font-size: 14px; min-height: 1.4em; }
+.decision-help { color: var(--muted); font-size: 13px; }
+
+@media (max-width: 760px) {
+  .tickets-layout { padding: 28px 16px 56px; }
+  .ticket-summary { grid-template-columns: 1fr; }
+  .ticket-summary { padding: 16px; }
+  .ticket-body { padding: 16px; gap: 20px; }
+  .ticket-columns { grid-template-columns: 1fr; gap: 20px; }
+  .ticket-side { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; }
+  .ticket-summary .status { justify-self: start; }
+  .decision-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .decision-actions .cancel-button { grid-column: 1 / -1; order: 1; justify-self: start; margin-right: 0; }
+  .form-table th { width: 1%; padding-right: 16px; }
+  .transfer-row { grid-template-columns: 1fr; }
+  .filter-form { grid-template-columns: 1fr; }
+  .filter-quick, .filter-actions { grid-column: auto; }
+  .filter-actions { justify-content: space-between; }
+}

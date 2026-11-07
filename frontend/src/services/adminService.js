@@ -35,7 +35,23 @@ export async function resetClassroom(confirmation, auth = authService) {
 }
 
 /**
+ * 檢查需求單資料庫摘要：可用時各筆數與結構版本必須是非負整數，檔案大小可為非負整數或 null（記憶體資料庫）；
+ * 不可用時只要求 available=false，數值不採用。
+ * @param {unknown} store 後端 ticketStore 欄位。
+ * @param {Function} count 非負整數檢查函式。
+ * @returns {boolean} 是否符合契約。
+ */
+function isValidTicketStore(store, count) {
+  if (!store || store.engine !== 'sqlite' || typeof store.available !== 'boolean') return false;
+  if (!store.available) return true;
+  for (const key of ['schemaVersion', 'total', 'pending', 'approved', 'rejected', 'cancelled']) if (!count(store[key])) return false;
+  for (const key of ['fileBytes', 'walBytes']) if (store[key] !== null && !count(store[key])) return false;
+  return true;
+}
+
+/**
  * 檢查監測回應的必要欄位與數值，避免破損資料被誤顯示為零或仍在即時更新。
+ * runtime.storage 描述限流計數（固定 memory），需求單資料庫另由 ticketStore 檢查。
  * @param {unknown} data 後端快照。
  * @returns {boolean} 是否符合管理監測契約。
  */
@@ -49,6 +65,7 @@ export function isValidMetrics(data) {
   if (!runtime || !date(runtime.startedAt) || !count(runtime.uptimeSeconds) || !count(runtime.pending)
     || !['local', 'production'].includes(runtime.environment) || runtime.storage !== 'memory'
     || typeof runtime.maintaining !== 'boolean' || typeof runtime.stopping !== 'boolean') return false;
+  if (!isValidTicketStore(data.ticketStore, count)) return false;
   if (!ai || !date(ai.resetAt) || typeof ai.day !== 'string') return false;
   for (const key of ['used', 'remaining', 'dailyLimit', 'userDailyLimit', 'active', 'concurrencyLimit', 'userConcurrencyLimit', 'cooldownSeconds']) if (!count(ai[key])) return false;
   if (!login || !count(login.capacity) || !monitoring) return false;

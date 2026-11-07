@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 const originalFetch = globalThis.fetch;
 
-// 測試用帳號與部門；與後端 data/accounts.json 的實際內容無關。
+// 測試用帳號與部門；與後端資料庫的示範名冊無關。
 const ACCOUNTS = ['racky.huang', 'amy.chen', 'brian.lin', 'cindy.wang', 'david.lee', 'emily.wu', 'frank.liu', 'grace.tsai', 'henry.yang', 'ivy.chang'];
 const DEPARTMENT = { id: 'dept-it-1', name: '資訊管理一部' };
 
@@ -20,7 +20,7 @@ function restoreFetch() { globalThis.fetch = originalFetch; }
 test.beforeEach(setupFetch);
 test.afterEach(restoreFetch);
 
-import { createAuthService, isKnownUserID } from '../src/services/authService.js';
+import { createAuthService, isKnownUserID, AuthServiceError, DRAFT_KEY } from '../src/services/authService.js';
 
 /**
  * 建立隔離的記憶體儲存體，供登入測試使用，不需要瀏覽器或真實帳號服務。
@@ -112,3 +112,47 @@ async function invalidSessions() {
   await assert.rejects(auth.login('racky.huang', 'test-only-password'), { message: '登入服務回應格式異常，請稍後再試' });
 }
 test('拒絕損壞、不一致或缺少部門的登入資料', invalidSessions);
+
+/**
+ * 驗證登入失敗的錯誤保留狀態碼、錯誤代碼與等待秒數：優先取 error.retry_after，缺漏時改用 Retry-After 標頭；
+ * 沒有等待時間時為 0；連線失敗沒有 HTTP 狀態碼。
+ * @returns {Promise<void>}
+ */
+async function rejectionDetails() {
+  const auth = createAuthService({ storage: memoryStorage() });
+  /** 模擬登入失敗過多，本文帶 retry_after。@returns {Promise<Response>} 429。 */
+  async function limitedBody() { return Response.json({ error: { code: 'LOGIN_RATE_LIMITED', message: '登入失敗次數過多，請稍後再試', retry_after: 6.2 } }, { status: 429, headers: { 'Retry-After': '99' } }); }
+  globalThis.fetch = limitedBody;
+  await assert.rejects(auth.login('racky.huang', 'wrong'), { name: 'AuthServiceError', status: 429, code: 'LOGIN_RATE_LIMITED', retryAfter: 7, message: '登入失敗次數過多，請稍後再試' });
+  /** 模擬只有 Retry-After 標頭。@returns {Promise<Response>} 429。 */
+  async function limitedHeader() { return Response.json({ error: { code: 'RATE_LIMIT_EXCEEDED', message: '請求太頻繁，請稍後再試' } }, { status: 429, headers: { 'Retry-After': '12' } }); }
+  globalThis.fetch = limitedHeader;
+  await assert.rejects(auth.login('racky.huang', 'wrong'), { status: 429, code: 'RATE_LIMIT_EXCEEDED', retryAfter: 12 });
+  /** 模擬密碼錯誤。@returns {Promise<Response>} 401。 */
+  async function wrong() { return Response.json({ error: { code: 'INVALID_CREDENTIALS', message: '密碼錯誤' } }, { status: 401 }); }
+  globalThis.fetch = wrong;
+  await assert.rejects(auth.login('racky.huang', 'wrong'), { status: 401, code: 'INVALID_CREDENTIALS', retryAfter: 0 });
+  /** 模擬斷線。@returns {Promise<never>} @throws {TypeError} 網路錯誤。 */
+  async function offline() { throw new TypeError('Failed to fetch'); }
+  globalThis.fetch = offline;
+  await assert.rejects(auth.login('racky.huang', 'wrong'), { status: 0, code: 'NETWORK_ERROR', retryAfter: 0 });
+  assert.ok(new AuthServiceError('x') instanceof Error);
+}
+test('登入失敗的錯誤保留狀態碼、代碼與等待秒數', rejectionDetails);
+
+/**
+ * 驗證登出同時清除登入狀態與「重新提出」草稿，不影響其他儲存值。
+ * @returns {Promise<void>}
+ */
+async function logoutClearsDraft() {
+  const storage = memoryStorage();
+  const auth = createAuthService({ storage });
+  await auth.login('racky.huang', 'test-only-password');
+  storage.setItem(DRAFT_KEY, JSON.stringify({ subject: '測試主題', content: '測試內容', userID: 'user-racky.huang' }));
+  storage.setItem('other.key', 'keep');
+  auth.logout();
+  assert.equal(auth.getCurrentUser(), null);
+  assert.equal(storage.getItem(DRAFT_KEY), null, '登出清除草稿');
+  assert.equal(storage.getItem('other.key'), 'keep');
+}
+test('登出時一併清除重新提出的草稿', logoutClearsDraft);

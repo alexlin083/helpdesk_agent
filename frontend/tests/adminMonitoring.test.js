@@ -2,8 +2,8 @@ import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, fakeAuth, pageIds } from './helpers/fakeDom.js';
-import { initAdminMonitoring } from '../src/components/adminMonitoring.js';
-import { renderAdminMetrics } from '../src/components/adminMetrics.js';
+import { initAdminMonitoring } from '../src/components/admin/adminMonitoring.js';
+import { renderAdminMetrics, metricsBytes } from '../src/components/admin/adminMetrics.js';
 import { loadAdminMetrics, AdminServiceError, isValidMetrics } from '../src/services/adminService.js';
 
 /** 建立包含動態數值、來源保護摘要與帳號的假快照。@returns {object} 與 API 契約一致的測試資料。 */
@@ -11,6 +11,7 @@ function fixture() {
   return {
     observedAt: '2026-10-28T00:00:00Z', pollSeconds: 5,
     runtime: { startedAt: '2026-10-27T23:00:00Z', uptimeSeconds: 3600, environment: 'production', storage: 'memory', maintaining: false, stopping: false, pending: 1 },
+    ticketStore: { engine: 'sqlite', available: true, schemaVersion: 1, total: 12, pending: 3, approved: 6, rejected: 2, cancelled: 1, fileBytes: 49152, walBytes: 0 },
     ai: { day: '2026-10-28', resetAt: '2026-10-28T16:00:00Z', used: 4, remaining: 76, dailyLimit: 80, userDailyLimit: 20, active: 1, concurrencyLimit: 2, userConcurrencyLimit: 1, cooldownSeconds: 15 },
     users: [{ username: '<script>fake</script>', userID: 'user-test.user', department: { name: '測試部門' }, used: 4, remaining: 16, dailyLimit: 20, cooldownSeconds: 8, inProgress: true }],
     login: { capacity: 512, ip: { limit: 100, windowSeconds: 900, activeKeys: 1, atLimitKeys: 0, failures: 7 }, account: { limit: 5, windowSeconds: 300, activeKeys: 1, atLimitKeys: 1, failures: 5 } },
@@ -24,7 +25,7 @@ function setup() {
   const doc = createFakeDocument();
   const win = createFakeWindow();
   const nodes = {};
-  const ids = ['admin-monitoring', 'metrics-status', 'metrics-refresh', 'metrics-toggle', 'metrics-cards', 'metrics-updated', 'metrics-runtime', 'metrics-policy', 'metrics-monitor-policy', 'metrics-quota-progress', 'metrics-users', 'metrics-http', 'metrics-login', 'metrics-login-capacity'];
+  const ids = ['admin-monitoring', 'metrics-status', 'metrics-refresh', 'metrics-toggle', 'metrics-cards', 'metrics-updated', 'metrics-runtime', 'metrics-policy', 'metrics-monitor-policy', 'metrics-quota-progress', 'metrics-users', 'metrics-http', 'metrics-login', 'metrics-login-capacity', 'metrics-ticket-store', 'metrics-tickets'];
   for (const id of ids) {
     const node = doc.createElement(id === 'metrics-quota-progress' ? 'progress' : 'div');
     node.setAttribute('id', id);
@@ -51,7 +52,7 @@ function setup() {
 /** 驗證畫面以實際設定呈現、動態內容為純文字，且 HTML 擁有全部必要節點。@returns {void} */
 function rendering() {
   const { doc, nodes } = setup();
-  const ids = pageIds(new URL('../admin/admin.html', import.meta.url));
+  const ids = pageIds(new URL('../pages/admin/admin.html', import.meta.url));
   for (const id of Object.keys(nodes)) assert.ok(ids.has(id), id);
   renderAdminMetrics(doc, fixture());
   assert.match(nodes['metrics-cards'].textContent, /4 \/ 80/);
@@ -63,8 +64,41 @@ function rendering() {
   assert.match(nodes['metrics-users'].textContent, /<script>fake<\/script>/);
   assert.equal(doc.querySelectorAll('script').length, 0);
   assert.match(nodes['metrics-login'].textContent, /100 次／900 秒/);
+  assert.match(nodes['metrics-cards'].textContent, /待簽核需求單3 筆資料庫共 12 筆/);
+  /** 取出表格儲存格文字。@param {HTMLElement} cell 儲存格。@returns {string} 文字。 */
+  function cellText(cell) { return cell.textContent; }
+  assert.deepEqual(nodes['metrics-tickets'].children[0].children.map(cellText), ['12', '3', '6', '2', '1', '48.0 KB', '0 B']);
+  assert.match(nodes['metrics-ticket-store'].textContent, /SQLite · 結構版本 1/);
+  const down = fixture();
+  down.ticketStore = { engine: 'sqlite', available: false, schemaVersion: null, total: null, pending: null, approved: null, rejected: null, cancelled: null, fileBytes: null, walBytes: null };
+  assert.equal(isValidMetrics(down), true, '資料庫不可用時監測其餘部分仍有效');
+  renderAdminMetrics(doc, down);
+  assert.match(nodes['metrics-cards'].textContent, /無法讀取/);
+  assert.equal(nodes['metrics-tickets'].textContent, '', '不可用時不顯示 0 筆');
+  assert.match(nodes['metrics-ticket-store'].textContent, /無法讀取需求單資料庫/);
 }
 test('監測儀表板呈現實際設定與安全文字', rendering);
+
+/** 驗證檔案大小格式與需求單資料庫摘要的格式檢查。@returns {void} */
+function ticketStoreContract() {
+  assert.equal(metricsBytes(0), '0 B');
+  assert.equal(metricsBytes(1023), '1023 B');
+  assert.equal(metricsBytes(49152), '48.0 KB');
+  assert.equal(metricsBytes(5 * 1024 * 1024), '5.0 MB');
+  assert.equal(metricsBytes(null), '—');
+  for (const broken of [undefined, { engine: 'file', available: true }, { engine: 'sqlite', available: 'yes' }]) {
+    const data = fixture();
+    data.ticketStore = broken;
+    assert.equal(isValidMetrics(data), false);
+  }
+  const negative = fixture();
+  negative.ticketStore.pending = -1;
+  assert.equal(isValidMetrics(negative), false);
+  const inMemory = fixture();
+  inMemory.ticketStore.fileBytes = null;
+  assert.equal(isValidMetrics(inMemory), true, '記憶體資料庫的檔案大小為 null');
+}
+test('需求單資料庫摘要的格式與檢查', ticketStoreContract);
 
 /** 驗證自動、手動、暫停、隱藏與恢復的生命週期，沒有重疊計時器。@returns {Promise<void>} 互動完成。 */
 async function pollingLifecycle() {

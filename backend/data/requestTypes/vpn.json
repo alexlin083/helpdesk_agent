@@ -1,0 +1,36 @@
+{
+  "id": "vpn",
+  "version": 1,
+  "name": "VPN 申請",
+  "department_id": "dept-it-1",
+  "ai": {
+    "description": "新申請或延長 VPN 遠端連線權限，由資訊管理一部處理：需要使用起始日期（不可早於今天）、使用截止日期（必須晚於起始日期）、要連線的系統或主機、用途，以及使用公司配發電腦或個人電腦。VPN 連不上、斷線或出現錯誤訊息屬於一般需求。",
+    "examples": ["下週出差要申請 VPN", "VPN 權限到期想延長三個月", "在家工作需要連公司檔案伺服器"],
+    "greeting": "{username} 你好，這邊已經收到你想要申請 VPN 的需求，根據您的需求您的業務將會由資訊管理一部進行處理，由於 VPN 申請需要您先提供一些基本的訊息，請告訴我使用的起訖日期、要連線的系統或主機、用途，以及使用公司配發電腦還是個人電腦，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式等等",
+    "ask_order": ["start_date", "end_date", "target", "purpose", "device"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "applicant", "label": "申請人", "type": "self" },
+    { "key": "start_date", "label": "使用起始日期", "type": "date", "required": true, "rules": { "not_before_today": true } },
+    { "key": "end_date", "label": "使用截止日期", "type": "date", "required": true, "rules": { "after": "start_date" } },
+    { "key": "target", "label": "連線對象", "type": "text", "required": true, "max_length": 100 },
+    { "key": "purpose", "label": "用途", "type": "text", "required": true, "max_length": 200 },
+    { "key": "device", "label": "使用電腦", "type": "enum", "options": ["公司配發電腦", "個人電腦"], "required": true }
+  ],
+  "render": {
+    "lines": [
+      "[申請人]: {applicant}",
+      "[使用期間]: {start_date|date_range:end_date}",
+      "[連線對象]: {target}",
+      "[用途]: {purpose}",
+      "[使用電腦]: {device}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true },
+    "transfer": false,
+    "transfer_error": { "code": "FORM_TICKET_LOCKED", "message": "VPN 申請由資訊管理一部處理，不能轉單" }
+  }
+}

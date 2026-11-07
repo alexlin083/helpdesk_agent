@@ -2,14 +2,18 @@ import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildProposeDom, fakeAuth } from './helpers/fakeDom.js';
-import { initProposePage, PROPOSE_TEXT } from '../src/propose.js';
+import { initProposePage, PROPOSE_TEXT } from '../src/pages/propose.js';
 import { TicketServiceError, MESSAGES } from '../src/services/ticketService.js';
+import { fakeRequestDraft, fillAndApply, GENERAL_RENDERED } from './helpers/draftFixtures.js';
 
+// 套用一般需求草稿後的需求內容：保留整理好的固定格式文字，在後面補充說明（固定文字不可改動）。
+const CONTENT = `${GENERAL_RENDERED}\n補充：新進同仁需要 VPN 連線權限`;
 const departments = [{ id: 'dept-it-1', name: '資訊管理一部', type: '', duty: '', business: [], handlers: [{ id: 'h-1', name: 'racky.huang' }] }];
 
 /**
- * 建立已登入的頁面環境。
- * @param {object} [services={}] 服務替身。
+ * 建立已登入的頁面環境；部門資訊預設載入成功，「自動生成」預設使用一般需求已完成的草稿替身（不連網路、驗證不延遲），
+ * 讓各測試可以先套用草稿再送出。
+ * @param {object} [services={}] 服務替身，會覆寫預設的 loadDepartments、requestDraft 等。
  * @returns {object} doc、win、nodes、auth 與頁面控制器。
  */
 function mountPage(services = {}) {
@@ -20,7 +24,7 @@ function mountPage(services = {}) {
   globalThis.document = doc;
   /** 預設名單載入成功。@returns {Promise<object[]>} 部門。 */
   async function loadDepartments() { return departments; }
-  const page = initProposePage(doc, win, { auth, loadDepartments, ...services });
+  const page = initProposePage(doc, win, { auth, loadDepartments, requestDraft: fakeRequestDraft(), draftDebounceMs: 0, ...services });
   return { doc, win, nodes, auth, page };
 }
 /** 清除全域文件替身。@returns {void} */
@@ -29,6 +33,7 @@ test.afterEach(cleanup);
 
 /**
  * 以指定錯誤執行一次送出，回傳頁面環境供斷言。
+ * 送出前先填主題、按「自動生成」並套用一般需求草稿（未套用時頁面不會送單），再在整理好的內容後補充說明（CONTENT）。
  * @param {unknown} error 送單時拋出的錯誤。
  * @param {object} [services={}] 其他服務替身。
  * @returns {Promise<object>} 頁面環境。
@@ -38,14 +43,17 @@ async function submitWith(error, services = {}) {
   async function submitTicket() { throw error; }
   const mounted = mountPage({ submitTicket, ...services });
   await mounted.page.ready;
-  mounted.nodes.subject.value = '申請 VPN 帳號';
-  mounted.nodes.content.value = '新進同仁需要 VPN 連線權限';
+  await fillAndApply(mounted.nodes, mounted.page, '申請 VPN 帳號');
+  mounted.nodes.content.value = CONTENT;
+  await mounted.nodes.content.dispatch('input');
   await mounted.nodes.form.dispatch('submit');
   return mounted;
 }
 
 /**
- * 驗證名單載入失敗（404、格式不正確、逾時）維持停用、改預設項並在表單上方顯示原因；名單 401 回登入頁。
+ * 驗證部門資訊載入失敗（404、格式不正確、逾時）：只停用「查看各部門業務範圍」並在表單上方顯示原因，不導頁，
+ * 填寫主題後仍可按「自動生成」；非預期錯誤顯示固定原因並寫入主控台；部門資訊 401 回登入頁。
+ * @param {import('node:test').TestContext} context mock 管理器。
  * @returns {Promise<void>}
  */
 async function listFailures(context) {
@@ -58,13 +66,13 @@ async function listFailures(context) {
     async function loadDepartments() { throw failure; }
     const { nodes, page, win } = mountPage({ loadDepartments });
     await page.ready;
-    assert.equal(nodes.handlerSearch.disabled, true);
-    assert.equal(nodes.handlerSearch.placeholder, PROPOSE_TEXT.failed);
-    assert.equal(nodes.handler.value, '');
     assert.equal(nodes.departmentsButton.disabled, true);
     assert.equal(nodes.notice.hidden, false);
     assert.equal(nodes.notice.textContent, `${PROPOSE_TEXT.notice}原因：${failure.message}`);
     assert.deepEqual(win.redirects, []);
+    nodes.subject.value = '申請 VPN 帳號';
+    await nodes.subject.dispatch('input');
+    assert.equal(nodes.draftButton.disabled, false, '部門資訊失敗不影響自動生成');
     cleanup();
   }
   const errors = context.mock.method(console, 'error', () => {});
@@ -87,11 +95,12 @@ test('名單載入失敗的畫面狀態與 401 導回登入', listFailures);
 
 /**
  * 驗證 429 非額度錯誤依後端秒數倒數，倒數中不能送出，結束後恢復送出鈕。
+ * 先套用一般需求草稿再啟用模擬時間（Date 與 setInterval），避免模擬時間影響「自動生成」視窗的非同步流程；
+ * 恢復後再送一次成功，結果視窗依 FALLBACK 顯示人工分派說明。
  * @param {import('node:test').TestContext} context 可控制的時間。
  * @returns {Promise<void>}
  */
 async function busyCountdown(context) {
-  context.mock.timers.enable({ apis: ['Date', 'setInterval'], now: 1000 });
   let calls = 0;
   /** 第一次 429、之後成功。@returns {Promise<object>} 結果。@throws {TicketServiceError} 冷卻中。 */
   async function submitTicket() {
@@ -101,8 +110,9 @@ async function busyCountdown(context) {
   }
   const { nodes, page } = mountPage({ submitTicket });
   await page.ready;
-  nodes.subject.value = '申請 VPN 帳號';
-  nodes.content.value = '新進同仁需要 VPN 連線權限';
+  await fillAndApply(nodes, page, '申請 VPN 帳號');
+  nodes.content.value = CONTENT;
+  context.mock.timers.enable({ apis: ['Date', 'setInterval'], now: 1000 });
   await nodes.form.dispatch('submit');
   assert.equal(nodes.submitError.textContent, '請等待冷卻結束後再送出');
   assert.equal(nodes.submit.disabled, true);
@@ -166,7 +176,7 @@ async function displayedErrors() {
     assert.equal(nodes.submitError.textContent, error.message);
     assert.equal(nodes.resultDialog.open, false);
     assert.equal(nodes.subject.value, '申請 VPN 帳號');
-    assert.equal(nodes.content.value, '新進同仁需要 VPN 連線權限');
+    assert.equal(nodes.content.value, CONTENT);
     assert.equal(nodes.submit.disabled, false);
     assert.deepEqual(win.redirects, []);
     cleanup();
@@ -179,7 +189,7 @@ async function displayedErrors() {
 test('送出失敗只顯示提示並保留輸入內容', displayedErrors);
 
 /**
- * 驗證送單 401 與本機憑證過期都清除登入並回登入頁；非預期錯誤只顯示固定提示並寫入主控台。
+ * 驗證送單 401 與本機憑證過期都清除登入並回登入頁（本機過期時即使已套用草稿也不送單）；非預期錯誤只顯示固定提示並寫入主控台。
  * @param {import('node:test').TestContext} context mock 管理器。
  * @returns {Promise<void>}
  */
@@ -194,9 +204,8 @@ async function sessionAndUnexpected(context) {
   async function submitTicket() { calls += 1; return {}; }
   const local = mountPage({ submitTicket });
   await local.page.ready;
+  await fillAndApply(local.nodes, local.page, '申請 VPN 帳號');
   local.auth.user = null;
-  local.nodes.subject.value = '申請 VPN 帳號';
-  local.nodes.content.value = '新進同仁需要 VPN 連線權限';
   await local.nodes.form.dispatch('submit');
   assert.equal(calls, 0);
   assert.deepEqual(local.win.redirects, [PAGE_URLS.login]);

@@ -1,273 +1,319 @@
 # Backend
 
-Express 5 後端 API，使用 ES Modules。提供登入、健康檢查、部門與處理人名單、需求單送出（指定處理人直接送達，或由 Gemini 判斷部門）、需求單查詢與部門簽核。資料不使用資料庫，部門、帳號與需求單都保存在 `data/` 底下的 JSON 檔。
-完整規格以專案根目錄的《企業智慧服務台 Agent 前後端 API 介面規格書》與開發規格書為準；本文件是後端入門說明。
-
-對話 API（`/api/agent/chat`、`/api/agent/usage`）與知識庫檢索已移除，相關的空檔也已刪除。
+Node.js 22（Express 5）後端 API，使用 ES Modules，程式放在 `src/`；需求單、員工與假別時數存在 SQLite，前端是原生 HTML／CSS／JavaScript（見[前端說明](../frontend/README.md)）；本文件說明後端的架構與模組、環境參數、日誌、維運腳本用法與關機流程
+API 合約與畫面行為（登入、限流配額、AI 供應商、部門、需求單、自動生成、假別時數、管理 API、SQLite 儲存與錯誤處理）見 [API 介面規格書](../docs/企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)；需求類型的檔案格式與現有類型見[需求類型與 AI 資料來源規範](../docs/需求類型與AI資料來源規範.md)；專案總覽與本機快速啟動見[根目錄 README](../README.md)；Docker 與 Lightsail 部署見 [Docker 與 Lightsail 部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)
 
 ## 架構
 
 ```text
 backend/
-├── index.js                     # 啟動、監聽 port、關閉伺服器
-├── server.js                    # Express app、全域 middleware
-├── routes.js                    # /api 路由總入口
-├── routes/
-│   ├── authRoutes.js            # /auth：登入
-│   ├── departmentRoutes.js      # /departments：部門與處理人名單
-│   └── ticketRoutes.js          # /tickets：送出需求單
-├── controllers/
-│   └── ticketController.js      # 需求單：送出、我的需求單、部門待簽核、已完成查詢、簽核／退回、轉單、取消；部門名單處理器
-├── services/
-│   ├── authService.js           # 密碼比對、JWT；帳號名單取自 accountService
-│   ├── accountService.js        # 載入並驗證帳號設定檔（帳號與所屬部門）；帳號即可指定的處理人
-│   ├── usageService.js          # 冷卻、並行租約、每日配額、登入失敗計數
-│   ├── limitStore.js            # 限制儲存：單程序記憶體（含管理重置）
-│   ├── departmentService.js     # 載入並驗證部門設定檔（不含處理人）
-│   ├── ticketJudge.js           # 需求單判斷部門：一次 Gemini 呼叫、75 分分流
-│   ├── ticketStore.js           # 需求單儲存：單一 JSON 檔，含狀態與簽核紀錄
-│   └── chatTasks.js             # 需求單工作追蹤器，供關機流程等待
-├── data/
-│   ├── departments.json         # 部門設定檔（八個部門：部門、業務說明、關鍵字）
-│   ├── accounts.json            # 帳號設定檔（十組一般帳號與獨立管理員；僅一般帳號可當處理人）
-│   └── tickets.json             # 執行後產生的需求單資料（含原文、狀態與簽核紀錄，不提交 Git）
-├── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、shutdown（優雅關機）
-├── config/
-│   └── env.js                   # 載入 backend/.env 與驗證環境參數
-├── middleware/                  # authenticate、errorHandler、requestLogger、rateLimiter
-├── tests/                       # API、環境參數、日誌、保護、限流、可靠性與需求單測試
-├── .env                         # 本機設定，不提交 Git
-└── .env.example                 # 不含金鑰的設定範本
+├── src/
+│   ├── index.js                     # 啟動：先驗證需求類型定義，再開啟資料庫並匯入舊檔，最後監聽 port；註冊關機訊號、關閉伺服器與資料庫
+│   ├── server.js                    # Express app、全域 middleware（只建立 app，不監聽；測試直接匯入）
+│   ├── config/
+│   │   └── env.js                   # 載入 backend/.env（僅 local）與驗證環境參數（含 TRUST_PROXY）
+│   ├── routes/
+│   │   ├── index.js                 # /api 路由總入口：/health、/auth、/departments、/forms、/tickets、/me、/leave
+│   │   ├── authRoutes.js            # /auth：登入
+│   │   ├── departmentRoutes.js      # /departments：部門與處理人名單
+│   │   ├── requestTypeRoutes.js     # /forms：需求類型清單
+│   │   ├── ticketRoutes.js          # /tickets：送出、自動生成（/draft）、查詢、簽核、轉單、取消
+│   │   ├── meRoutes.js              # /me：本人的假別時數（/leave-balance）
+│   │   ├── leaveRoutes.js           # /leave：人資查詢假別時數（/balances，唯讀）
+│   │   └── adminRoutes.js           # /admin：管理監測與重置（自行掛載限流與 JSON 解析，由 server.js 直接掛載）
+│   ├── controllers/
+│   │   ├── ticketController.js      # 需求單：送出（含 form／department_id）、我的需求單、部門待簽核、已完成查詢、簽核／退回、轉單、取消
+│   │   ├── departmentController.js  # 部門與處理人名單（GET /api/departments）
+│   │   ├── requestTypeController.js # 需求類型清單（GET /api/forms）與「自動生成」對話（驗證請求後交給通用引擎 draftEngine）
+│   │   └── leaveController.js       # 本人假別時數與人資查詢（唯讀，讀取使用 leave_entitlements 的需求類型與通用額度帳）
+│   ├── middleware/
+│   │   ├── closeOnShutdown.js       # 關機中的回應加上 Connection: close
+│   │   ├── requestLogger.js         # 請求開始／完成日誌與 requestId
+│   │   ├── originGuard.js           # 選用的代理來源秘密（X-Origin-Verify）
+│   │   ├── authenticate.js          # Bearer 憑證驗證
+│   │   ├── authorize.js             # requireUser／requireAdmin 角色檢查
+│   │   ├── rateLimiter.js           # HTTP 限流（express-rate-limit、有界記憶體儲存）
+│   │   └── errorHandler.js          # 404 與統一錯誤 JSON（含 400／413／415 用戶端錯誤對應）
+│   ├── services/
+│   │   ├── authService.js           # 密碼比對、JWT；帳號名單取自 accountService
+│   │   ├── usageService.js          # 冷卻、並行租約、每日配額、登入失敗計數
+│   │   ├── departmentService.js     # 載入並驗證部門設定檔（不含處理人）
+│   │   ├── taskTracker.js           # 需求單工作追蹤器，供關機與管理重置等待
+│   │   ├── storage/                 # 儲存層：
+│   │   │   ├── dataStore.js         #   需求單儲存單例：all／find／insert（可帶交易內 guard）／update、clear、stats（監測用各狀態筆數）、通用額度帳 withLedger／ledgerBalances（唯讀；交易內 ledgerOverlaps／ledgerBusy）；需求單的送出與簽核只寫 tickets，本系統不寫入額度資料表、listAccounts／findAccount／departmentAccounts／listEmployees／findEmployee、prepare（啟動時開啟資料庫、全新資料庫寫入名冊並匯入舊檔）、close；每個操作一筆 SQLite 交易；前端不直接接觸 SQLite，所有讀寫都經後端 HTTP API 進入這個單例持有的唯一連線（啟動時於監聽前開啟）；better-sqlite3 為同步 API，每個操作在事件迴圈上以一筆完整交易執行完畢、彼此不會交錯，因此只有一個寫入者，不需要另外排隊
+│   │   │   ├── database.js          #   SQLite 連線、PRAGMA、schema 遷移（目前版本 8；版本 4 建立的請假額度異動紀錄 leave_log 在版本 5 刪除，人資調整紀錄 leave_adjustments 在版本 6 刪除，版本 7 在 accounts 加上部門的中文名稱 department_name，只供直接檢視資料庫，版本 8 改以員工編號 employee_no 關聯 accounts、employees 與 leave_entitlements）、額度表允許清單 LEDGER_TABLES、舊版 JSON 匯入、匯出、備份與還原
+│   │   │   └── limitStore.js        #   限制儲存：單程序記憶體（含管理重置）；重啟即歸零，不能當作永久費用上限；只適用單一程序與單副本，多個 instance 不會共用，不支援多副本或 PM2 cluster；管理重置只清除目前執行環境，不操作其他 instance 或 AWS 資源
+│   │   ├── personnel/               # 人員資料（只存在 SQLite）：
+│   │   │   ├── accountService.js    #   帳號查詢（SQLite accounts 資料表，每次呼叫重新查詢）；啟用中的一般帳號即可指定的處理人
+│   │   │   ├── accountDirectory.js  #   組出對外的帳號身分（附所屬部門）
+│   │   │   ├── employeeService.js   #   員工基本資料與假別額度查詢（SQLite employees、leave_entitlements）
+│   │   │   ├── personnel.js         #   人員資料驗證規則、全新資料庫寫入名冊、維運操作（服務與 scripts/personnel.js 共用）
+│   │   │   └── demoPersonnel.js     #   示範人員名冊（假資料；只在全新資料庫或版本 2 升級時使用）
+│   │   ├── ai/                      # AI 供應商與部門判斷：
+│   │   │   ├── providers.js         #   先用主要供應商（預設 Gemini），這一回合失敗（不論原因）時改用有金鑰的備援（預設 Claude）
+│   │   │   ├── claudeShared.js      #   Claude 呼叫共用：伺服器端 fallback 參數、取出回應文字、判斷輸出是否沒有正常完成
+│   │   │   ├── ticketJudge.js       #   需求單判斷部門：共用流程（期限、日誌、75 分分流）＋ Gemini 呼叫
+│   │   │   └── ticketJudgeClaude.js #   需求單判斷部門的 Claude 呼叫
+│   │   ├── admin/                   # 管理功能：
+│   │   │   ├── adminService.js      #   管理重置（維護鎖內清空需求單與保護計數）
+│   │   │   └── adminMetrics.js      #   管理監測快照（唯讀）
+│   │   ├── requestTypes/            # 需求類型通用引擎（不含任何類型專屬的程式）：
+│   │   │   ├── registry.js          #   載入並驗證 _catalog.json 與各定義檔；提供 GET /api/forms 的形狀（forClient）、自動生成回應的類型（draftView，另帶日期類欄位的 rules 與工作日曆摘要 calendars）、交給 AI 的完整定義（aiView）、關鍵字備援（match）
+│   │   │   ├── fieldTypes.js        #   欄位型別（self、enum、text、number、date、datetime、account、department）的定義驗證、值的整理（例如 2026/12/1 9:30 → 2026-12-01T09:30）與檢查
+│   │   │   ├── capabilities.js      #   具名能力：計算 work_minutes、檢查 ledger_balance／ledger_overlap，以及工具的伺服器端執行與存取規則
+│   │   │   ├── renderer.js          #   需求內容範本 {名稱|篩選器:參數} 與篩選器 date、time、date_range、hours_minutes、default
+│   │   │   ├── evaluator.js         #   依定義驗證欄位、產生候選、執行計算與檢查、渲染內容、檢核清單
+│   │   │   ├── draftEngine.js       #   「自動生成」對話流程（分類 → 填寫 → 伺服器驗證；API 規格書第 3.16 節）
+│   │   │   ├── aiAssistant.js       #   Gemini 呼叫：分類一次、填寫為工具階段（function calling，最多 3 次）＋整理階段；整回合 20 秒；兩家共用的回合守衛
+│   │   │   ├── claudeAssistant.js   #   Claude 呼叫：與 Gemini 版相同的流程（tool use、output_config 結構化輸出、effort low）
+│   │   │   └── workflow.js          #   送出、簽核與轉單時依定義執行的規則（API 規格書第 3.3、3.7、3.9 節）
+│   └── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、dates（台北日期、時間格式）、punctuation（AI 輸出的句號「。」：句中改成「；」、句尾刪除）、shutdown（連線追蹤、優雅關機、訊號處理）
+├── scripts/                         # 維運腳本：人員資料、請假紀錄查詢、舊檔匯入、匯出 JSON、線上備份、停機還原（一併複製進映像檔）；eval-classification.js 與 lib/ 為分類評測（開發用）
+├── evals/classification-cases.json  # 分類評測題庫（不複製進映像檔）
+├── data/                            # 規則設定檔（部門與需求類型，提交 Git）；人員資料不在這裡，只存在 SQLite
+│   ├── departments.json             # 部門設定檔（八個部門：部門、業務說明、關鍵字）
+│   ├── requestTypes/                # 需求類型（規則設定，提交 Git，整個資料夾複製進映像檔）
+│   │   ├── _catalog.json            #   目錄：AI 共通指示、類型清單（摘要與關鍵字）、default_type、AI 工具與存取規則
+│   │   ├── leave.json               #   請假申請 v2（人力資源部；欄位、工作日曆、請假時數、額度帳與檢查、固定文字、流程）
+│   │   ├── attendance.json          #   打卡補登 v1（人力資源部；示範用預設值）
+│   │   ├── vpn.json                 #   VPN 申請 v1（資訊管理一部；示範用預設值）
+│   │   ├── repair.json              #   報修 v1（總務與硬體組；示範用預設值）
+│   │   ├── equipment.json           #   設備申請 v1（總務與硬體組；示範用預設值）
+│   │   ├── purchase.json            #   採購申請 v1（採購部；示範用預設值）
+│   │   └── general.json             #   一般需求 v1（沒有專用定義的需求；部門由對話決定）
+├── storage/                         # 執行期資料（與容器的 /app/storage 同名）；目錄本身以 .gitkeep 提交，內容都不提交 Git、不放進映像檔
+│   ├── helpdesk.db                  # 本機 SQLite 資料庫（執行後產生，內容見 API 規格書第 3.4 節）；含需求單原文，不放進部署包；連同 -wal／-shm、還原保留的 .before-restore-*、.restore-tmp 與匯出的 tickets*.json 都不提交 Git
+│   └── tickets.json                 # 舊版 JSON 需求單檔（若有），不提交 Git；用途見 API 規格書第 3.4 節
+├── tests/                           # 自動化測試（npm test）；涵蓋範圍見部署操作手冊；各測試檔共用的環境參數在 helpers/testEnv.js
+├── Dockerfile、docker-healthcheck.js、.dockerignore   # 後端映像檔，見部署操作手冊
+├── .env                             # 本機設定（npm start／npm run dev 使用；Compose 不讀它），不提交 Git
+└── .env.example                     # 不含金鑰的設定範本
 ```
 
-需求單流程：`server.js → routes.js → ticketRoutes.js → ticketController.js`；指定處理人時直接保存為待簽核，沒指定時由 `ticketJudge.js` 呼叫 Gemini 判斷部門後保存；查詢與簽核都經 `ticketStore.js` 讀寫 `data/tickets.json`。
-健康檢查、登入與部門名單直接寫在路由或簡單處理器中；業務邏輯較多的 API 才拆 controller 與 service。
+需求單流程：`src/server.js → src/routes/index.js → src/routes/ticketRoutes.js → src/controllers/ticketController.js`；送出時決定送達方式、儲存與「自動生成」的處理流程見 API 規格書第 3.3、3.4、3.16 節
+「自動生成」以 AI 工具查詢公司資料：資料由伺服器依權限查出來後交給 AI，而不是寫死在程式的流程裡，這就是本系統的 RAG
+健康檢查與登入直接寫在路由或簡單處理器中；部門名單與業務邏輯較多的 API 拆成 controller 與 service
+
+整個專案的目錄樹見[根目錄 README](../README.md)「專案架構」，前端的目錄見[前端說明](../frontend/README.md)
 
 ## 啟動
 
-統一使用 Node.js 22（根目錄與 backend 的 `.nvmrc` 均指定 22，前後端 `engines` 均為 `22.x`）。使用 nvm 時執行 `nvm install 22`、`nvm use 22`，再執行 `npm ci`。
-
-```bash
-cd backend
-nvm use
-npm install
-npm run dev
-```
-
-一般啟動使用 `npm start`，測試使用 `npm test`。
-將 `.env.example` 的設定填入現有 `.env`，保留自己的真實金鑰：
+後端為 Node.js 22.23.4 單一程序（根目錄與 backend 的 `.nvmrc`、映像檔都固定 `22.23.4`），負責登入、需求單、管理與限量限流；backend `engines` 為 `>=22.14.0 <23`，因為 better-sqlite3 13.0.3 需要 Node-API 10（Node 22.14 以上）；frontend `engines` 維持 `22.x`，只用於執行前端測試
+安裝與啟動指令（nvm、`npm ci`、`npm run dev`、`npm start`）見[根目錄 README](../README.md) 的「本機啟動」；測試與驗證範圍見[部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)；第一次啟動建立資料庫、寫入示範人員名冊與匯入舊檔的規則見 API 規格書第 3.4、3.6 節
+`src/config/env.js` 只在 local 模式讀取 `backend/.env`（與從哪個目錄啟動無關）。將 `.env.example` 的設定填入現有 `.env`，保留自己的真實金鑰：
 
 ```dotenv
 PORT=3000
 CORS_ORIGIN=http://localhost:5173
-GEMINI_API_KEY=<請填入自己的金鑰>
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<請填入自己的 Gemini 金鑰>
+GEMINI_MODEL=gemini-3.5-flash
+# 選填：主要供應商 Gemini 失敗時改用 Claude（切換條件見下方參數表的 ANTHROPIC_API_KEY）
+ANTHROPIC_API_KEY=<選填，Claude 金鑰>
+ANTHROPIC_MODEL=claude-sonnet-5-5
 DEMO_PASSWORD=<請填入私下提供的一般登入密碼>
 ADMIN_PASSWORD=<請填入獨立管理密碼，不得與一般密碼相同>
-GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-`CORS_ORIGIN` 設為實際前端網址。本機未設定金鑰時健康檢查、登入、部門名單與指定處理人的需求單仍可使用，AI 判斷部門回傳 500 `SERVER_ERROR`。
-程式預設模型是 `gemini-2.5-flash`，曾有帳號回報 404，請在 `.env` 明確填寫已驗證可用的 `GEMINI_MODEL`。修改 `.env` 後重新啟動伺服器。
+`CORS_ORIGIN` 設為實際前端網址（格式見下方參數表）
+AI 供應商的選擇、備援的切換條件與期限、模型需求、Claude 的呼叫細節，以及未設定金鑰時各功能的行為，見 API 規格書第 1 節「AI 供應商」與第 3.16 節；修改 `.env` 後重新啟動伺服器（`npm run dev` 只監看程式檔，不會因 `.env` 變更而重啟）
 
 ## 登入、限流與配額
 
-一般帳號為十組英文姓名帳號（全小寫、格式為「名.姓」、區分大小寫），每個帳號屬於一個部門，定義在 `data/accounts.json`（`username`、`department_id`、選填 `role`）；對應的使用者代號為 `user-` 加帳號（例如 `user-racky.huang`）。帳號必須唯一、部門必須存在於部門設定檔，否則啟動失敗；修改後須重啟。前端不保存帳號名單，只檢查格式。這十組帳號同時就是「指定處理人」的名單：處理人 id 即帳號名稱，送達對象顯示「帳號（部門）」。
-登入密碼必須透過後端 `DEMO_PASSWORD` 設定，沒有內建預設值，也不在文件記錄實際密碼。另有 `alex.admin`（`dept-it-1`，`role: ADMIN`），只可使用管理頁與重置 API，不參與工作單、不列入處理人名單，密碼由 `ADMIN_PASSWORD` 獨立設定且不得與 `DEMO_PASSWORD` 相同。登入成功簽發 HS256 JWT，預設兩小時有效，回應的 `user` 含 `department` 與 `role`（部門與角色不寫入憑證，驗證時依目前設定檔查詢）；部門名單與需求單都需要 Bearer 憑證，提單人由憑證決定。
+帳號、登入與憑證的規則見 API 規格書第 2.1 節，限流與配額的完整規則見第 2.2 節；這裡只列後端的環境參數
 
 | 環境參數 | 預設 | 用途 |
 | --- | --- | --- |
-| `AUTH_SECRET` | 本機隨機、production 必填 | 至少 32 bytes 的隨機簽章金鑰，多個 instance 必須相同 |
+| `NODE_ENV` | local | 只接受 local 或 production；必須由 shell 或部署平台設定（寫在 `backend/.env` 不會改變模式），production 完全不讀 `.env` |
+| `PORT` | 3000 | 監聽埠，1～65535 的整數 |
+| `CORS_ORIGIN` | `http://localhost:5173`（僅 local） | 瀏覽器開啟前端的 origin，不含頁面路徑、`/helpdesk` 或結尾斜線；production 必填，正式值為網站的 HTTPS origin（例如 `https://alex-lin-lab.com`） |
+| `AI_PROVIDER` | `gemini` | AI 主要供應商：`gemini` 或 `anthropic`，其他值啟動失敗；判斷部門與「自動生成」共用；另一家有金鑰時為備援；production 只要求主要供應商的金鑰，備援的金鑰可以不設 |
+| `GEMINI_API_KEY` | 無（僅 local 可留空） | Gemini 金鑰；主要供應商為 Gemini 時 production 必填 |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini 模型，請填已驗證可用且支援 function calling 的名稱 |
+| `ANTHROPIC_API_KEY` | 無 | Claude 金鑰；選填，有填時作為備援：「自動生成」在主要供應商這一回合因 `RATE_LIMIT_EXCEEDED`、`AI_UPSTREAM_ERROR`、`AI_INVALID_RESPONSE`、`AI_TIMEOUT` 任一原因失敗時改用備援，AI 判斷部門在上游回 429 或 500 時改用備援，切換後 60 秒內直接用備援（`src/services/ai/providers.js`）；`AI_PROVIDER=anthropic` 時改為主要供應商、production 必填 |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude 模型 |
+| `LOG_LEVEL` | info | debug、info、warn、error 或 silent |
+| `AUTH_SECRET` | 本機自動產生並保存在 SQLite、production 必填 | 至少 32 bytes 的隨機簽章金鑰，多個 instance 必須相同 |
 | `AUTH_TTL_SECONDS` | 7200 | 憑證有效秒數 |
-| `DEMO_PASSWORD` | 必填，無預設值 | 十個帳號共用的課堂密碼，僅存於未追蹤的 .env 或平台環境參數 |
-| `CHAT_COOLDOWN_SECONDS` | 10 | 帳號獲准 AI 判斷部門後的冷卻秒數 |
-| `USER_DAILY_LIMIT` | 30 | 每帳號每日可獲准 AI 判斷的次數 |
-| `GLOBAL_DAILY_LIMIT` | 100 | 所有帳號共用的每日上限 |
-| `GLOBAL_CONCURRENCY` | 2 | 全站同時處理上限，每帳號固定同時一筆 |
-| `LOGIN_FAILURE_LIMIT` | 100 | 每 IP／IPv6 /64 在視窗內可失敗次數，成功登入不清除 |
-| `LOGIN_WINDOW_SECONDS` | 900 | IP 整體登入失敗視窗；達上限後正確帳密也需等待 |
-| `LOGIN_ACCOUNT_FAILURE_LIMIT` | 5 | 已知帳號＋IP／IPv6 /64 的失敗次數上限 |
-| `LOGIN_ACCOUNT_WINDOW_SECONDS` | 300 | 帳號組合失敗視窗；達上限只封鎖該組合，除非 IP 整體也超限 |
-| `HTTP_RATE_WINDOW_SECONDS` | 60 | 各 HTTP 限流使用的視窗秒數 |
-| `HTTP_RATE_MAX_KEYS` | 2048 | 每個 HTTP middleware 最多追蹤的識別碼；滿載拒絕新識別碼 |
-| `HTTP_API_LIMIT` | 300 | 每 IP／IPv6 /64 的 API 請求數（不含健康檢查與 OPTIONS） |
-| `HTTP_LOGIN_LIMIT` | 120 | 每 IP／IPv6 /64 的登入總請求數，包含成功與失敗 |
-| `HTTP_TICKET_LIMIT` | 12 | 每個驗證後帳號的需求單送出請求數（含被業務規則拒絕的） |
-| `HTTP_DEPARTMENTS_LIMIT` | 30 | 每個驗證後帳號的部門名單請求數 |
-| `HTTP_QUERY_LIMIT` | 60 | 每個驗證後帳號的需求單查詢請求數（我的需求單、部門需求單） |
-| `TICKETS_FILE` | `data/tickets.json` | 需求單 JSON 檔的絕對路徑；留空使用預設 |
-| `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 25000 |
+| `DEMO_PASSWORD` | 必填，無預設值 | 16 個一般帳號共用的課堂密碼，僅存於未追蹤的 .env 或平台環境參數 |
+| `ADMIN_PASSWORD` | 必填，無預設值 | 應用程式管理員的獨立密碼，不得與 `DEMO_PASSWORD` 相同；不是 AWS IAM 密碼 |
+| `DATABASE_FILE` | `storage/helpdesk.db` | 需求單 SQLite 資料庫檔的絕對路徑；留空使用預設。所在目錄必須已存在（不自動建立）；新檔在 SQLite 開啟前先以 600 權限建立，之後產生的 `-wal`／`-shm` 也沿用 600 |
+| `TICKETS_FILE` | `storage/tickets.json` | 舊版 JSON 需求單檔的絕對路徑，只作匯入與回滾的來源，服務不會寫入；留空使用預設 |
+| `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 30000（自動生成一回合的 20 秒期限加 10 秒；下限原為 25000，一回合期限改為 20 秒時提高為 30000，compose.yaml 固定 75000 不受影響） |
 | `LIMIT_STORE` | memory | local 與 production 都只允許 memory；重啟及管理重置會歸零 |
-| `ADMIN_PASSWORD` | 必填 | 應用程式管理員的獨立密碼，不是 AWS IAM 密碼 |
-| `ORIGIN_VERIFY_SECRET` | 無 | 可選代理來源秘密，設定後至少 32 bytes；目前 Compose 強制停用，其他拓撲啟用時除健康檢查外 API（含 OPTIONS）需帶 X-Origin-Verify |
-| `NODE_ENV` | local | 只接受 local 或 production；正式環境不讀 .env |
-| `TRUST_PROXY` | 不信任代理 | 依實際代理鏈填可信任 IP、網段或 hop 數，勿盲目填 true |
+| `ORIGIN_VERIFY_SECRET` | 無 | 可選代理來源秘密，設定後至少 32 bytes；目前 Compose 強制停用（固定為空，避免舊 CloudFront 參數阻擋同站點 API），功能保留供其他拓撲使用：啟用時除 `GET /api/health` 外的 API（含 OPTIONS）需由代理附上 `X-Origin-Verify`，一般瀏覽器不持有來源秘密 |
+| `TRUST_PROXY` | 不信任代理（未設定或空白） | 依實際代理鏈填信任的跳數（純十進位整數）、`loopback`／`linklocal`／`uniquelocal`，或以逗號分隔的 IP／CIDR；啟動時以 proxy-addr 2.0.8（Express 使用的同一套件，後端已明列為直接相依）編譯驗證，`true`／`false`（不分大小寫）與無法解析的值會讓後端拒絕啟動，錯誤訊息不回顯原值 |
 
-冷卻、並行與每日用量只在「沒有指定處理人、需要呼叫 Gemini」時檢查並預扣；指定處理人的需求單不扣額度。獲准後的上游錯誤也計入，不退額；拒絕或輸入／身分驗證失敗不扣額。台北午夜重置每日計數，但不清除執行中租約或冷卻。
+限流與配額參數（`CHAT_COOLDOWN_SECONDS`、`USER_DAILY_LIMIT`、`GLOBAL_DAILY_LIMIT`、`GLOBAL_CONCURRENCY`、`LOGIN_FAILURE_LIMIT`、`LOGIN_WINDOW_SECONDS`、`LOGIN_ACCOUNT_FAILURE_LIMIT`、`LOGIN_ACCOUNT_WINDOW_SECONDS`、`HTTP_RATE_WINDOW_SECONDS`、`HTTP_RATE_MAX_KEYS`、`HTTP_API_LIMIT`、`HTTP_LOGIN_LIMIT`、`HTTP_TICKET_LIMIT`、`HTTP_DEPARTMENTS_LIMIT`、`HTTP_QUERY_LIMIT`、`HTTP_DRAFT_LIMIT`、`DRAFT_USER_DAILY_LIMIT`、`DRAFT_GLOBAL_DAILY_LIMIT`）的預設值與用途見 API 規格書第 2.2 節；Docker Compose 使用的參數見「正式環境與部署」
 
-本機記憶體模式只適用單一程序，重啟會歸零。未設定 `AUTH_SECRET` 時本機使用暫時金鑰，重啟後需重新登入；要保留相同簽章金鑰可自行產生隨機值放入 `.env`，勿提交或分享：
+未設定 `AUTH_SECRET` 時本機簽章金鑰的產生與保存方式見 API 規格書第 2.1 節；也可以自行產生隨機值放入 `.env`（優先使用），勿提交或分享：
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-登出只清除前端分頁憑證，舊 JWT 到期前仍有效。修改 `DEMO_PASSWORD` 不會撤銷已簽發憑證；需要使全部憑證失效時更換 `AUTH_SECRET` 並重新部署所有 instance。
+## 需求單 API、部門設定檔與人員資料
 
-登入失敗以 `LIMIT_STORE` 原子保存來源整體與已知帳號＋來源兩種視窗；封鎖後即使正確帳密也需等待。未知帳號只累積來源整體；狀態最多 512 筆，滿載回傳 503。IPv6 以 /64 分組。IP 登入保護只相信 Express 判定的 `req.ip`；目前只有 Caddy 一層代理且後端不發布 port，Compose 使用 `TRUST_PROXY=1`，更換拓撲須重新驗證。
+部門設定檔、需求單 API（送出、查詢、簽核、轉單、取消）與 SQLite 儲存的完整規則見 API 規格書第 3.1～3.11 節，人員資料的資料表與規則見第 3.6 節
 
-## 需求單 API、部門與帳號設定檔
+- 啟動時匯入舊版 `tickets.json`（`TICKETS_FILE`）的判斷規則見第 3.4 節；匯入紀錄為 `source: "none"`（初始化時沒有舊檔）而之後才出現 `tickets.json` 時，確認要匯入再執行 `node scripts/import-legacy-tickets.js --import-late`（可先加 `--dry-run` 預覽）：只有資料表為空時才匯入並以 tickets.json 紀錄取代 none 紀錄，否則以 `LEGACY_CONFLICT` 拒絕
+- 任何失敗都記錄 `storage.failed` 並以結束碼 1 結束，不開始監聽；成功記錄 `storage.ready`，需要提醒時另記 warn `storage.legacy_warning`（欄位見「日誌與排查」）
 
-部門定義放在 `data/departments.json`（目前八個部門，每個部門至少一個登入帳號，AI 判斷送達的需求單才有人能簽核），由後端啟動時讀入並驗證；每個部門的欄位為 `id`、`name`、`type`（選填）、`duty`、`business`（關鍵字陣列）。部門 id 全檔唯一；`business` 含「IT資訊服務台」的部門是接收對不到部門需求單的預設部門，必須恰有一個，否則啟動失敗。處理人不寫在部門設定檔（若仍含 `handlers` 欄位會啟動失敗），而是由 `data/accounts.json` 的帳號決定：每個部門可指定的處理人就是該部門的登入帳號。修改任一設定檔後須重啟後端。
+## 需求類型與自動生成
 
-`GET /api/departments` 回傳部門設定檔內容並合併處理人（`handlers` 為該部門的帳號：`id` 與 `name` 都是帳號名稱；`type` 缺漏為空字串）。`POST /api/tickets` 接收 `{ subject, content, handler_id }`：`subject` 1～100 字、`content` 1～2000 字（去空白後以 Unicode code points 計），`handler_id` 為字串或 null。兩種路徑都把需求單保存為「待簽核」（`status: PENDING`）：
+需求類型的檔案格式、每個鍵的意義、現有七種類型的內容、修改既有類型的規則與新增類型的步驟見[需求類型與 AI 資料來源規範](../docs/需求類型與AI資料來源規範.md)；`GET /api/forms`、「自動生成」對話 `POST /api/tickets/draft`、AI 工具與假別時數 API 的合約見 API 規格書第 3.15～3.17 節
 
-- 有 `handler_id`：查帳號設定檔，找不到回 400「指定的處理人不存在」；找到就保存並回 `{ ticket_id, route: "HANDLER", department, handler: { name }, status }`，不扣額度、不呼叫 Gemini。
-- 沒有 `handler_id`：先預扣冷卻、並行與每日配額，呼叫 Gemini 一次（逾時 15 秒、temperature 0.2、maxOutputTokens 1024、結構化輸出 `department_id`、`confidence_score`、`basis`），部門 id 在設定檔內且信心分數達 75 分回 `DEPARTMENT`，否則回 `FALLBACK` 並送預設部門；`basis` 去空白後最多 200 字，空字串時省略。保存成功後才回應，保存失敗回 503 `TICKET_STORE_UNAVAILABLE`，已扣的額度不退還。成功回應帶 `X-User-Remaining`、`X-Global-Remaining` 標頭。
-
-需求單資料保存在 `data/tickets.json`（可用 `TICKETS_FILE` 改路徑），每張需求單含 `ticket_id`、`created_at`、`updated_at`、`requester`（提單人與其部門）、`subject`、`content`、`route`、`department_id`、`department_name`、`handler`、`judgement`（AI 判斷的部門、分數、依據、模型）、`status`、`decision`、`history`。檔案含需求單原文，不得提交 Git，也不放進部署包；寫入先寫暫存檔再改名並在程序內排隊，改名遇到 Windows 暫時性鎖定（EPERM／EBUSY）最多重試三次；新增需求單寫檔失敗時會從記憶體移除該筆，避免呼叫端重送後出現重複的需求單。只適用單一程序，多個 instance 不會共用。
-
-查詢、簽核、轉單與取消（狀態：`PENDING` 待簽核、`APPROVED` 已簽核、`REJECTED` 已退回、`CANCELLED` 已取消；沒有刪除）：
-
-- `GET /api/tickets/mine`：我提出的需求單，最新在前。
-- `GET /api/tickets/department`：送達我所屬部門的需求單，待簽核在前（最早優先），其餘依更新時間由新到舊；回應另含 `department`。
-- `GET /api/tickets/completed?status=&q=&from=&to=&limit=`：我提出且已結案的需求單，加上我所屬部門已簽核、已退回、已取消的需求單，依簽核時間由新到舊，預設最新 100 筆（最多 500）；`q` 比對單號、主題、內容、提單人、簽核人、備註與處理人，`from`／`to` 是簽核日期的台北日期；回應含 `total`（符合條件總數）與 `limit`。
-- `POST /api/tickets/{id}/decision`：`{ action: "APPROVE" | "REJECT", comment? }`，備註最多 200 字；只有送達部門的成員可操作（403 `FORBIDDEN`），需求單必須是待簽核（409 `TICKET_ALREADY_DECIDED`），查無回 404 `TICKET_NOT_FOUND`；成功回 `{ ticket }`。
-- `POST /api/tickets/{id}/transfer`：`{ department_id, handler_id?, comment? }`，送達部門的成員把待簽核的單轉到其他部門（可指定該部門的處理人），狀態維持待簽核、歷程追加 `TRANSFERRED`；目標部門不存在或與目前相同、處理人不屬於目標部門都回 400。
-- `POST /api/tickets/{id}/cancel`：`{ comment? }`，提單人可取消自己待簽核的單（原因選填）；送達部門的成員替提單人取消時必須填原因；其他人 403；已簽核或已取消回 409`decision.cancelled_by` 記錄是 `REQUESTER` 或 `DEPARTMENT`。
+- 需求類型定義驗證錯誤時記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 含檔名與鍵路徑，例如 `equipment.json fields[2].type 未知的欄位型別「slider」…`）並以結束碼 1 結束，成功記錄 `request_types.ready`（`types`、`defaultType`、`catalogVersion`）；修改定義後的重啟與重新建置規則見規範文件第 2 節
+- 通用引擎在 `src/services/requestTypes/`，不含任何類型的 id、欄位 key 或領域用語；`tests/requestTypes.test.js` 會掃描 `src/` 確認（資料庫結構、人員資料與人資假別 API 不在掃描範圍）。新增類型只需新增 JSON 檔並在目錄加一筆，不改程式（`tests/draftFlow.test.js` 以一個只存在測試中的 `overtime.json` 驗證）。需要新的欄位型別、計算或檢查能力時才改程式，並同步更新規範文件。
+- 分類評測：`npm run eval:classify` 以 `evals/classification-cases.json` 的題目量測第一回合分類（類型、部門、混淆、邊界題、多輪是否一致）；使用的 AI 供應商與備援、`--provider`、`--offline` 等選項，以及如何依結果修改摘要見規範文件第 15 節
 
 ## API 端點
 
+業務 API 的端點總表、請求與回應見 API 規格書第 1 節與第 2、3 節，錯誤回應格式、錯誤代碼與用戶端錯誤的對應見第 4 節；這裡只列不屬於業務 API 的兩項
+
 | 方法 | 路徑 | 用途 |
 | --- | --- | --- |
-| GET | `/api/admin/metrics` | 管理員唯讀監測：AI、帳號、HTTP 與登入保護摘要 |
-| POST | `/api/admin/reset` | 管理員清空全部工作單與一般保護計數 |
-| GET | `/api/health` | 檢查伺服器是否運作，不檢查 Gemini 連線 |
-| POST | `/api/auth/login` | 驗證一般帳號或獨立管理員並取得登入憑證 |
-| GET | `/api/departments` | 以 Bearer 憑證取得部門與處理人名單，不呼叫 Gemini、不扣額度 |
-| POST | `/api/tickets` | 以 Bearer 憑證送出需求單；指定處理人時直接送達，沒指定時呼叫 Gemini 判斷部門；保存為待簽核 |
-| GET | `/api/tickets/mine` | 我提出的需求單 |
-| GET | `/api/tickets/department` | 送達我所屬部門的需求單 |
-| GET | `/api/tickets/department/completed` | 我所屬部門的簽核紀錄（已簽核、已退回、已取消），可篩選，預設最新 100 筆 |
-| POST | `/api/tickets/{id}/decision` | 簽核或退回一張送達我所屬部門的待簽核需求單 |
-| POST | `/api/tickets/{id}/transfer` | 把待簽核的需求單轉到其他部門 |
-| POST | `/api/tickets/{id}/cancel` | 取消待簽核的需求單（提單人或送達部門成員） |
+| GET | `/api/health` | 檢查伺服器是否運作；不需要認證，回 `{ "success": true, "data": { "status": "ok" } }`；只驗證 HTTP 程序，不檢查 AI 連線，也不能證明需求單寫入正常 |
 | OPTIONS | 所有路徑 | CORS 預檢，由 middleware 處理；允許 GET、POST、OPTIONS |
 
-以下 `<PASSWORD>`、`<token>`、`<TICKET_ID>` 為佔位文字，請自行替換，勿提交實際值；`handler_id` 是處理人的帳號名稱。
-
-```bash
-curl http://localhost:3000/api/health
-curl -X POST http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"racky.huang","password":"<PASSWORD>"}'
-curl http://localhost:3000/api/departments -H 'Authorization: Bearer <token>'
-curl -X POST http://localhost:3000/api/tickets \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <token>' \
-  -d '{"subject":"VPN 帳號申請","content":"新進同仁需要 VPN 連線權限","handler_id":"racky.huang"}'
-```
-
-成功回應（指定處理人）：
-
-```json
-{ "ticket_id": "TK-123e4567-e89b-42d3-a456-426614174000", "route": "HANDLER", "department": "資訊管理一部", "handler": { "name": "racky.huang" }, "status": "PENDING" }
-```
-
-簽核（`<TICKET_ID>` 為上面回應的單號，由送達部門的帳號執行）：
-
-```bash
-curl -X POST http://localhost:3000/api/tickets/<TICKET_ID>/decision \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <token>' \
-  -d '{"action":"APPROVE","comment":"已安排"}'
-```
-
-錯誤回應一律為 `{"error":{"code":"...","message":"..."}}`，有等待期限時另有 `error.retry_after` 與相同的 `Retry-After` 標頭。錯誤包含 400 輸入無效、401 未登入／登入失敗、403 無權限（不是送達部門、不是提單人）、404 未知路由／方法不符／查無需求單、409 已簽核或已取消、413 本文超過 16 KB、429 冷卻／每日配額／處理中／登入失敗過多、500 未設金鑰／輸出格式異常／上游失敗、503 全站忙碌／限制儲存故障／需求單儲存故障。完整代碼以 API 規格書為準。
+各環境的基礎 API 網址見 API 介面規格書第 1 節
+本文件與 API 規格書列出的 `/api/...` 為 Express 內部路徑，Docker 與正式環境的公開網址須加 `/helpdesk`（例如公開健康端點為 `/helpdesk/api/health`）；JSON 請求、回應及驗證規則不變
 
 ## 正式環境與部署
 
-不使用資料庫。工作單存在單一 JSON 檔，配額、冷卻、並行租約、登入失敗與 HTTP 計數都存在記憶體。local 與 production 使用相同保護邏輯；重啟、換機或管理重置會清空保護計數，不能當作永久的費用上限。`LIMIT_STORE` 預設且只接受 `memory`；已移除 AWS 資料庫 SDK、表格參數及資料庫權限需求。
+只區分 `NODE_ENV=local` 與 `NODE_ENV=production`，不接受第三種模式，模式須設定在 shell 或平台；本機預設 local，讀取 `backend/.env`，shell 參數優先；正式環境完全不讀 `.env`，必須由平台設定主要 AI 供應商的金鑰（預設 `GEMINI_API_KEY`；`AI_PROVIDER=anthropic` 時為 `ANTHROPIC_API_KEY`；另一家的金鑰選填，作為備援）、`CORS_ORIGIN`、`AUTH_SECRET`（至少 32 bytes）、`DEMO_PASSWORD`、獨立的 `ADMIN_PASSWORD`；正式服務也不要以本機模式啟動來規避必要設定，測試則使用隔離的 local 參數及假密碼
 
-只區分 `NODE_ENV=local` 與 `NODE_ENV=production`。本機預設 local，讀取 `backend/.env`，shell 參數優先；正式環境完全不讀 `.env`，必須由平台設定 `GEMINI_API_KEY`、`CORS_ORIGIN`、`AUTH_SECRET`（至少 32 bytes）、`DEMO_PASSWORD`、獨立的 `ADMIN_PASSWORD`。模式須設定在 shell 或平台；不接受第三種模式。測試使用隔離的 local 參數及假密碼。
+部署架構、映像檔內容、volume、版本升級與回滾、備份與還原的完整步驟見 [Docker 與 Lightsail 部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)；Compose 與反向代理對 API 的限制見 API 規格書第 3.13 節
 
-目前部署架構為 **單台 Lightsail Linux 主機 → Docker Compose → Caddy（HTTPS、/helpdesk/ 前端、/helpdesk/api 代理）→ 單一 Node.js 22 程序**，不使用 GitHub Pages、CloudFront、ALB 或資料庫。公開 API 加上 /helpdesk 前綴；Caddy 只移除 /helpdesk，Express 路由、健康檢查與請求／回應仍維持 /api。CORS_ORIGIN 僅填 origin（例如 https://alex-lin-lab.com），不加 /helpdesk。後端沒有發布主機 port，僅 Caddy 可由外部進入；Caddy 為唯一代理，因此 Compose 固定 `TRUST_PROXY=1`，並清空舊的 `ORIGIN_VERIFY_SECRET`。修改拓撲後須重新驗證來源 IP，不可直接沿用此跳數。
+要回滾到先前的 JSON 版映像時，先以 `scripts/export-tickets-json.js` 匯出目前的需求單，因為 volume 內原本的 `tickets.json` 只含遷移當時的資料
 
-Compose 的參數來源是專案根目錄未追蹤的 `.env`，與原本 `backend/.env` 分開；後端容器固定 `PORT=3000`、`TICKETS_FILE=/app/storage/tickets.json`、`LIMIT_STORE=memory`、`SHUTDOWN_TIMEOUT_MS=75000`，停止寬限 90 秒。Node 使用非 root 的 node 帳號執行。`/api/health` 是容器健康檢查，不呼叫 Gemini；健康狀態本身不會自動重啟卡住的程序，restart policy 只處理程序結束或主機重啟等情況。
+### Docker Compose 的環境參數（根目錄 `.env`）
 
-工作單以名為 tickets 的 Docker volume 掛載整個 `/app/storage`，保留暫存檔改名的寫入方式。新 volume 為空，不匯入本機 `data/tickets.json`；第一次成功寫單才產生檔案。正常重建容器不會清除 volume，但換主機、刪除磁碟或刪除 volume 仍可能遺失資料，必須另行備份。禁止多副本與 PM2 cluster。日誌輪替每個服務最多 3 個 10 MB 檔；Caddy 憑證另存 volume。
+Compose 的參數來源是專案根目錄未追蹤的 `.env`（或 `HELPDESK_ENV_FILE` 指定的檔案），與 `backend/.env` 分開：
 
-詳細的本機啟動、Lightsail 建立、DNS／HTTPS、更新、備份與還原步驟見 [Docker 與 Lightsail 部署操作手冊](../Docker與Lightsail部署操作手冊.md)。AWS 資源與公開 HTTPS 尚須自行依手冊建立及驗收；程式不建立雲端資源，也不需要 AWS Access Key。舊的 [EB／CloudFront 手冊](./單台EB與CloudFront部署操作手冊.md) 已標示為歷史方案。
+- 根目錄 `.env.example` 是 Docker 參數範本；先確認根目錄沒有既有 `.env`（避免覆蓋設定），再複製成 `.env` 私下填寫，不提交 Git
+- `backend/.env` 保留給 `npm start`／`npm run dev`（`node src/index.js`）使用，Compose 不讀它；Compose 將根目錄 `.env` 的值注入容器，production 後端只讀程序環境，映像檔不包含 `.env`，這兩份檔案的修改不會互相同步
+- 值含 `$` 或 `#` 時，以單引號包住整個值；在 `.env` 中修改既有項目，不要新增重複設定
+
+| 參數 | 本機設定 | 正式設定 | 原因 |
+| --- | --- | --- | --- |
+| `NODE_ENV` | `local` | `production` | 只區分 local／production |
+| `SITE_ADDRESS` | `http://localhost` | `alex-lin-lab.com` | 本機先驗證 HTTP，不申請公開憑證；正式不加 `http://`，讓 Caddy 啟用自動 HTTPS |
+| `CORS_ORIGIN` | `http://localhost:8080` | `https://alex-lin-lab.com` | 與網站來源一致；不加 `/helpdesk`、結尾斜線或頁面路徑 |
+| `HTTP_BIND`／`HTTP_PORT` | `127.0.0.1`／`8080` | `0.0.0.0`／`80` | 本機設定只允許本機連入 |
+| `HTTPS_BIND`／`HTTPS_PORT` | `127.0.0.1`／`8443` | `0.0.0.0`／`443` | 本機 HTTP 模式不會提供正式 HTTPS |
+
+`NODE_ENV` 與 `CORS_ORIGIN` 一定要寫在這份 `.env`：只由這個 env_file 提供，`compose.yaml` 不再另外設定或提供預設值（`environment` 會蓋過 env_file）；缺少 `NODE_ENV` 時後端以 local 執行，缺少 `CORS_ORIGIN` 時 local 預設 `http://localhost:5173`、production 拒絕啟動；密碼、金鑰等其餘設定也由 env_file 提供
+
+後端容器的 `environment` 固定下列值，寫在 `.env` 也會被覆蓋：`PORT=3000`、`DATABASE_FILE=/app/storage/helpdesk.db`（需求單資料庫，目錄須已存在，即 tickets volume）、`TICKETS_FILE=/app/storage/tickets.json`（只作舊版 JSON 匯入來源，服務不寫入）、`LIMIT_STORE=memory`、`TRUST_PROXY=1`（只適用唯一 Caddy 代理且後端沒有對外發布 port 的拓撲）、`ORIGIN_VERIFY_SECRET=`（空）、`SHUTDOWN_TIMEOUT_MS=75000`；後端啟動時會驗證 `TRUST_PROXY`，`true`／`false` 或無法解析的值會拒絕啟動；容器停止寬限 90 秒（不要縮短），`init: true`
+
+## 人員資料（只存 SQLite）
+
+人員資料（帳號、所屬部門、角色、啟用狀態、員工基本資料與假別額度）的資料表、示範名冊、結構升級與哪些帳號可以登入或被指定，見 API 規格書第 3.6 節；這裡說明維運腳本 `scripts/personnel.js` 的用法
+
+| 指令 | 說明 |
+| --- | --- |
+| `node scripts/personnel.js list [--department <id>]` | 列出帳號（含已停用）、`department_missing`、員工資料與額度（JSON 陣列，欄位 `username`、`department_id`、`department_missing`、`role`、`active`、`display_name`、`employee_no`、`hire_date`、`entitlements`） |
+| `node scripts/personnel.js add <username> --department <id> [--role USER\|ADMIN] [--name <顯示名稱> --employee-no <編號> --hire-date YYYY-MM-DD]` | 新增帳號；USER 必須提供三個員工欄位，ADMIN 不可提供；新員工沒有額度，請再用 grant |
+| `node scripts/personnel.js set-department <username> <department_id>` | 調整所屬部門（部門必須存在），立即改變處理人名單與代理人候選 |
+| `node scripts/personnel.js deactivate <username>`／`activate <username>` | 停用（不能登入、不是處理人或代理人）／恢復 |
+| `node scripts/personnel.js grant <username> <假別> <年度> <分鐘>` | 設定（取代）某年度某假別的年度額度；本系統不記錄增減，額度的扣除與調整由人資在公司既有的系統處理 |
+
+每個子指令都可加 `--dry-run`：以唯讀連線開啟、不寫入任何內容，輸出 `{ action, username, changed, changes, dryRun: true }`。驗證規則與服務相同（`src/services/personnel.js`）；不提供刪除帳號。腳本與服務一樣使用 WAL 與 busy timeout 5000 ms，可在服務執行中使用；日誌只含帳號、部門 id、角色、狀態與額度數字，不含姓名或員工編號。
+
+### 人員調整的操作步驟（已實作）
+
+本機在 `backend/` 目錄執行（local 模式讀取 `backend/.env`，資料庫為 `DATABASE_FILE`，未設定時是 `storage/helpdesk.db`）；Docker 部署改在 backend 容器內執行，指令前加 `sudo docker compose exec -T backend`，見[部署手冊](../docs/Docker與Lightsail部署操作手冊.md)第 5.7 節。每次調整都依這個順序：
+
+1. **先備份**：人員資料沒有其他副本，調整前以 `node scripts/db-backup.js <備份檔>` 做一次線上備份（服務執行中也可以），確認日誌 `storage.backup.completed` 的 `schemaVersion` 為 8
+2. **確認資料庫路徑與現況**：`node scripts/personnel.js list`。`list` 與 `--dry-run` 在資料庫檔不存在或尚未升級到目前版本（8）時會拒絕（`PERSONNEL_NOT_FOUND`、`PERSONNEL_SCHEMA_OLD`），可藉此確認路徑正確。正式寫入的指令不做這項檢查：`DATABASE_FILE` 打錯時會建立一個新的版本 4 資料庫並寫入該筆帳號，之後在那個檔案啟動服務也不會再寫入示範名冊，因此務必先跑 `list`。
+3. **預覽**：同一個指令加 `--dry-run`，看 `changes` 是否符合預期；`changed: false` 表示內容已相同、不會寫入。
+4. **執行**：拿掉 `--dry-run` 再執行一次。每個指令在一筆交易內完成，失敗時不留下部分修改。
+5. **確認**：再跑一次 `list`；執行中的服務下一個請求就使用新資料，不需要重啟。
+
+常見調整（帳號與部門 id 為示意，部門 id 必須存在於 `data/departments.json`）：
+
+```bash
+# 調整所屬部門：處理人名單、代理人候選與簽核權限立即改用新部門
+node scripts/personnel.js set-department cindy.wang dept-it-1 --dry-run
+node scripts/personnel.js set-department cindy.wang dept-it-1
+
+# 新增一般帳號：三個員工欄位都必填，員工編號不可重複；新員工沒有額度，接著用 grant 設定
+node scripts/personnel.js add test.user --department dept-it-2 --name "測試人員" --employee-no T-9001 --hire-date 2026-11-01 --dry-run
+node scripts/personnel.js add test.user --department dept-it-2 --name "測試人員" --employee-no T-9001 --hire-date 2026-11-01
+node scripts/personnel.js grant test.user 特休 2026 6720
+
+# 新增管理員：不可帶員工欄位
+node scripts/personnel.js add test.admin --department dept-it-1 --role ADMIN
+
+# 停用／恢復：停用後不能登入、既有憑證立即失效、不出現在處理人名單與代理人候選
+node scripts/personnel.js deactivate test.user
+node scripts/personnel.js activate test.user
+
+# 設定額度：把某年度某假別的額度「設為」指定分鐘數（不是加減）；假別只接受事假、病假、特休，年度為四位數
+node scripts/personnel.js grant test.user 病假 2027 14400
+```
+
+注意事項：
+
+- 帳號與密碼的關係、調整部門與停用對既有資料的影響、`grant` 的用途與限制，見 API 規格書第 3.6、3.17 節
+- 結束碼：參數錯誤 2（stderr 另印出用法），驗證或資料庫錯誤 1（日誌 `storage.personnel.failed` 的 `reason`：`PERSONNEL_INVALID` 格式或部門不符、`PERSONNEL_NOT_FOUND` 帳號或員工資料不存在、`PERSONNEL_CONFLICT` 帳號或員工編號已存在、`PERSONNEL_SCHEMA_OLD` 資料庫尚未升級）。
+- stdout 同時有結果 JSON 與一行 info 日誌（warn／error 日誌寫入 stderr）。要把 `list` 交給 JSON 工具處理時，加上 `LOG_LEVEL=warn` 只保留結果，例如 `LOG_LEVEL=warn node scripts/personnel.js list > personnel.json`（shell 的環境參數優先於 `.env`）。`list` 的結果含顯示名稱與員工編號，輸出檔不要提交 Git 或貼到公開處。
+
+## 維運腳本
+
+`scripts/` 底下的腳本已複製進映像檔，使用後端相同的環境參數（`DATABASE_FILE`、`TICKETS_FILE`，以及 `src/config/env.js` 的必填檢查，因此 `DEMO_PASSWORD`、`ADMIN_PASSWORD` 也要能讀到）；本機在 backend 目錄以 `node scripts/<檔名>.js` 執行（local 模式讀取 `backend/.env`），Docker 部署在 backend 容器內執行；輸出為單行 JSON 日誌，只含狀態、筆數、結構版本或雜湊，不含需求單原文；輸出檔已存在時一律拒絕覆寫；失敗時以結束碼 1 結束
+
+| 指令 | 用途 |
+| --- | --- |
+| `node scripts/personnel.js <子指令> [--dry-run]` | 維護人員資料（帳號、部門、角色、啟用狀態、員工資料與假別額度），見上方「人員資料」；結果另以 JSON 寫到 stdout（`list` 為多行 JSON 陣列），日誌 `storage.personnel.changed`／`storage.personnel.dry_run`／`storage.personnel.listed`，失敗為 `storage.personnel.failed`（參數錯誤結束碼 2、驗證或資料庫錯誤結束碼 1） |
+| `node scripts/import-legacy-tickets.js [--dry-run] [--import-late]` | 預覽（`--dry-run`）或執行舊版 `tickets.json` 匯入；判斷規則、選項與日誌見 API 規格書第 3.4、3.13 節 |
+| `node scripts/export-tickets-json.js <out.json>` | 以唯讀連線開啟資料庫（服務執行中也可使用），依建立順序匯出成舊版 `tickets.json` 格式，供回滾到先前的 JSON 版映像（只含需求單，不含員工、額度與人資調整）；先寫入權限 600 的 `<out.json>.tmp` 再改名；輸出檔或殘留的 `<out.json>.tmp` 已存在時以 `OUTPUT_EXISTS` 拒絕、不覆寫，此時改用新的檔名；成功日誌 `storage.export.completed`（`tickets` 為匯出筆數），失敗為 `storage.export.failed` |
+| `node scripts/db-backup.js <out.db>` | 線上備份；權限、完整性檢查與日誌見[部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)第 6.2 節 |
+| `node scripts/db-restore.js <backup.db>` | 停機還原；執行條件、流程與日誌見部署操作手冊第 6.3 節 |
+
+備份與還原的範圍、Lightsail 上的操作指令、維運容器的執行帳號與擁有者修正，見[部署操作手冊](../docs/Docker與Lightsail部署操作手冊.md)第 6 節
 
 ## 管理員與課堂重置
 
-`alex.admin` 登入後導向 `frontend/admin/admin.html`，顯示限制設定與即時取樣用量；沒有工作單操作入口，後端所有 `/api/tickets` 與 `/api/departments` 也明確拒絕 ADMIN（403）。帳號設定的 `role` 只接受 USER 或 ADMIN，省略為 USER，禁止從請求本文或前端角色決定授權。
-
-`POST /api/admin/reset` 需要 Bearer 管理員憑證及本文：
-
-```json
-{ "confirmation": "RESET_HELPDESK" }
-```
-
-成功回 HTTP 200：
-
-```json
-{ "deletedTickets": 12, "resetAt": "2026-10-28T00:00:00.000Z" }
-```
-
-維護鎖先拒絕新登入與業務工作（503 SERVICE_BUSY），等待已開始的登入、AI、查詢及工作單變更完成，再依序將檔案及快取清為 `[]`、清除全部配額／冷卻／租約／登入失敗記錄、清除一般 HTTP 計數。檔案寫入失敗回 503 TICKET_STORE_UNAVAILABLE，還原快取並保留計數。重複重置回 503，不會排入無限等待。
-
-管理路徑使用獨立的 IP 與管理員 HTTP 保護，不受一般 API 入口已耗盡影響；管理路徑自己的計數不會被重置，以免反覆清除繞過保護。未登入回 401、一般帳號回 403、確認文字不符回 400。帳號與已核發 JWT 保留；重置不會重送請求或通知其他分頁，也不會退還 Gemini 實際費用。`admin.reset.completed` 僅記錄操作者 userID、筆數及時間。
-
-不要在執行中手動刪檔或覆寫檔案，否則快取可能把舊資料寫回。管理清除不可復原，畫面要求輸入確認文字；連線中斷不自動重試，因為伺服器可能已完成操作。
+管理員帳號 `alex.admin`、管理頁與管理重置 `POST /api/admin/reset` 的完整規則（維護鎖、清除範圍、獨立的管理路徑保護與掛載順序、錯誤代碼）見 API 規格書第 3.12 節；執行中不要手動刪除、覆寫或搬移 `helpdesk.db` 及其 `-wal`／`-shm`，相關說明與重置前的備份方式見部署操作手冊第 6 節
 
 ## 管理監測
 
-`GET /api/admin/metrics` 只接受 Bearer ADMIN，未登入回 401、一般帳號回 403。回傳 observedAt、pollSeconds、runtime、ai、users、login、http、monitoring，採明確欄位白名單，不包含金鑰、密碼、IP、來源雜湊、租約 ID 或工作單原文。
-
-管理頁每次請求完成後等待 5 秒再取樣，也提供「立即更新」與「暫停自動更新」。各帳號只列 USER，顯示部門、AI 今日已用／上限／剩餘、處理中與剩餘冷卻。全站顯示每日額度、AI 並行數、午夜重置時間、維護／關機狀態、業務工作數與程序運行時間；設定值取自執行中的後端，不在前端寫死預設值。
-
-HTTP 表格顯示五種一般限制的設定、有效識別數／容量、有效視窗請求合計、達上限識別數與超額次數。視窗起點因識別碼而異，不是每秒流量或啟動以來的歷史累計；超額次數不含容量不足或更上層 middleware 的拒絕。來源只回總量，帳號層可回 userID 的視窗資料。登入失敗另分來源與帳號＋來源的有效視窗摘要，同次失敗可能進入兩類，不能相加視為總次數。
-
-監測使用獨立固定 60 秒視窗：每 IP／IPv6 /64 最多 120 次、每已驗證管理員最多 60 次。與一般入口、查詢、管理重置的計數完全分開，不受一般入口耗盡影響，也不被管理重置清除。監測不扣 AI 額度、不呼叫 Gemini、不載入工作單、不寫入或清除任何業務保護狀態；到期與跨午夜只在輸出時投影。仍經過可選來源驗證與 no-store；目前 Compose 停用來源秘密，Caddy 不快取 API。
-
-維護中可持續讀取監測，重置後畫面立即要求新快照（若監測已被限流則等待 Retry-After）。分頁隱藏、離開或開始重置會取消監測請求；過時回應不覆蓋新快照。恢復可見後自動更新；手動暫停後不自行恢復。429 尊重等待秒數、其他連線或格式錯誤逐步退避，保留舊值並標示不是最新快照；401 停止輪詢並登出，403 停止自動更新。
-
-此功能為單程序、短間隔取樣，沒有逐筆推播、歷史儲存、Gemini Token／帳單或 AWS 費用監控。各儲存依序取樣，並非跨儲存交易；重啟後記憶體數據消失。清除一般計數會增加可用保護額度，不會退還實際費用。
+管理監測 `GET /api/admin/metrics` 的回應欄位（含需求單資料庫摘要 `ticketStore`）、獨立的監測限流與管理頁的取樣規則見 API 規格書第 3.14 節
 
 ## 日誌與排查
 
-後端以單行 JSON 輸出日誌，warn 與 error 寫入 stderr。預設 `LOG_LEVEL=info`；排查時設 `LOG_LEVEL=debug` 並重啟。debug 不輸出需求單原文、原始 SDK 錯誤或金鑰；欄位名稱含 key、token、secret、password、subject、content 等的值一律顯示 `[REDACTED]`。
+後端以單行 JSON 輸出日誌，warn 與 error 寫入 stderr；預設 `LOG_LEVEL=info`，排查時設 `LOG_LEVEL=debug` 並重啟；debug 不輸出需求單原文、原始 SDK 錯誤或金鑰；欄位名稱含 key、token、secret、authorization、password、message、content、subject、body、prompt 等的值一律顯示 `[REDACTED]`；日誌也遮蔽兩家 AI 供應商設定的金鑰與 `AIza…`、`sk-ant-…` 格式的字串；Docker Compose 的日誌輪替上限為每個服務 3 個 10 MB 檔，不是總磁碟空間上限
 
 排查順序：
 
-1. 啟動後查看 `server.started`（其後沒有 `server.failed`）：確認 `credentialsConfigured=true`、`model`、port 及 CORS origin。這只代表已設定金鑰，不代表金鑰有效。
-2. 送出需求單後，找出 `http.request.started`，用相同 `requestId` 追蹤後續日誌。
-3. 指定處理人會記錄 `ticket.assigned`；AI 判斷會依序記錄 `limits.reserved`、`ticket.judge.started`、`gemini.generate.started`、`gemini.generate.completed`、`ticket.judge.completed`、`ticket.record.saved`；簽核或退回記錄 `ticket.decided`，轉單記錄 `ticket.transferred`，取消記錄 `ticket.cancelled`。
-4. 遇到 `ticket.judge.failed`，查看 `stage`（client.initialize、gemini.generate、response.parse、response.validate）、`upstreamStatus`、`reason`、`hint`、`model`；`tickets.store.unavailable` 代表需求單檔案無法讀寫（`operation` 為 load 或 persist）。
+1. 啟動時先查看 `storage.ready`（`engine`、`schemaVersion`（目前為 8）、`legacyImport`、`legacyCount`、`seededAccounts`、`seededEmployees`、`seededEntitlements`；後三者是本次寫入示範名冊的帳號、員工與額度筆數，全新資料庫第一次啟動為 17、16、96，帳號表已有資料（之後的啟動，或由版本 2 升級）時皆為 0）；接著可能有 warn `storage.account_department_missing`（`username`、`departmentId`、`active`、`hint`），表示該帳號的部門已不在 `data/departments.json`，帳號不能登入，修正部門設定或以 `scripts/personnel.js set-department` 調整（每個這樣的帳號各記一筆，不讓啟動失敗）；部門設定檔或需求類型定義不符時，程序在開啟資料庫前就以錯誤結束，訊息只列出位置與原因；需求類型的錯誤記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 的格式是「檔名 鍵路徑 原因」，例如 `equipment.json fields[2].type 未知的欄位型別「slider」，只接受 self、enum、text、number、date、datetime、account、department`；依 detail 修正 `data/requestTypes/` 後重啟，常見錯誤見規範文件第 13 節步驟 8），正常時在 `storage.ready` 之前先有 `request_types.ready`（`types` 為類型 id，目前依序為 leave、attendance、vpn、repair、equipment、purchase、general；`defaultType` 為 general；另有 `catalogVersion`）；`legacyImport` 可能為 `imported`、`already-imported`、`legacy-changed`、`legacy-appeared`、`legacy-unreadable`、`no-legacy-file`；新主機第一次啟動為 `no-legacy-file`，之後的啟動為 `already-imported`；後三種需要提醒的情況（`legacy-changed`、`legacy-appeared`、`legacy-unreadable`）另記 warn `storage.legacy_warning`（`legacyImport`、只有 `legacy-unreadable` 才有的 `errorCode`、`hint`），服務照常啟動但不匯入也不合併舊檔；`legacy-appeared` 的 hint 會提示以 `--import-late` 匯入；若出現 `storage.failed`，程序不會監聽；`reason` 是固定代碼：`NODE_TOO_OLD`（Node 版本低於 22.14.0，better-sqlite3 13 需要 Node-API 10；請依 `.nvmrc` 改用 22.23.4）、`DIRECTORY_MISSING`（`DATABASE_FILE` 目錄不存在）、`FOREIGN_DATABASE`（路徑指到其他程式的 SQLite 檔）、`SCHEMA_TOO_NEW`（改用對應版本的映像）、`LEGACY_UNREADABLE`／`LEGACY_INVALID`／`LEGACY_CONFLICT`（檢查舊版 `tickets.json`）、`PERSONNEL_UNMAPPED`（版本 2 資料庫有員工不在示範名冊，無法決定部門；整步回滾，資料庫仍是版本 2）、`PERSONNEL_INVALID`（示範名冊驗證失敗）、`FOREIGN_KEY_VIOLATION`（版本 3 重建後外鍵不一致，已回滾），或 SQLite／檔案系統代碼如 `SQLITE_CANTOPEN`、`EACCES`（目錄或檔案權限、擁有者）、`SQLITE_NOTADB`（不是 SQLite 檔）；沒有代碼的錯誤為 `PREPARE_FAILED`；`detail` 為不含需求單內容的錯誤訊息（最多 200 字），`hint` 為排查提示；關閉資料庫失敗另記 `storage.close_failed`（`sqliteCode`）
+2. 資料庫準備完成後才開始監聽；接著查看 `server.started`（`port`、`nodeEnv`、`nodeVersion`、`corsOrigin`、`model`（主要供應商的模型）、`aiProvider`（主要供應商）、`aiFallbackProvider`（有金鑰的備援，沒有時為 null）、`credentialsConfigured`、`logLevel`、`localUrl`），以及 `server.limits`（含 `draftUserDailyLimit`、`draftGlobalDailyLimit`）、`server.http_limits`（含 `draft`）；未設金鑰另有 warn `server.credentials.missing`，本機未設 `AUTH_SECRET` 另有 warn `server.auth.local_secret`（改用保存在 SQLite 的本機簽章金鑰）；`server.started` 只在真正監聽成功（`listening` 事件）後記錄；監聽失敗只會記錄 `server.failed`（`reason` 為 `PORT_IN_USE` 或 `LISTEN_FAILED`）並以結束碼 1 結束，不會同時出現 `server.started`；`credentialsConfigured=true` 只代表已設定金鑰，不代表金鑰有效；改用備援供應商時記錄 warn `ai.fallback.used`（含 `reason`）
+3. 送出需求單後，找出 `http.request.started`，用相同 `requestId` 追蹤後續日誌，最後是 `http.request.completed`；被拒絕的請求另有 `http.request.rejected`（`status`、`code`、`retryAfter`；4xx 以 warn、5xx 以 error 記錄）
+4. 指定處理人會記錄 `ticket.assigned`；AI 判斷會依序記錄 `limits.reserved`、`ticket.judge.started`、`claude.generate.started`／`completed`（或 `gemini.generate.started`／`completed`）、`ticket.judge.completed`、`ticket.record.saved`；簽核或退回記錄 `ticket.decided`，轉單記錄 `ticket.transferred`，取消記錄 `ticket.cancelled`；帶需求類型表單的送出記錄 `ticket.form.saved`（`route`、`typeId`、`departmentId`、`withHandler`、`computedCount`），只帶 `department_id` 的送出記錄 `ticket.record.saved`（`source: "draft"`）；每次自動生成記錄 `ticket.draft.evaluated`（`typeId`、`departmentId`、`firstCall`、`aiAttempted`、`aiUsed`、`aiError`、`aiUpdates`、`toolsUsed`（工具 id）、`historyCount`、`lockedCount`、`missingCount`、`invalidCount`、`complete`）；有呼叫 AI 時另有 `ticket.draft.ai.started`（`purpose` 為 `ticket.draft.classify` 或 `ticket.draft.fill`）、每次 AI 呼叫（`purpose` 為 `ticket.draft.classify`、`ticket.draft.tools` 或 `ticket.draft.fill`）的 `claude.generate.started`／`completed`（Claude，含停止原因與 input／output token 數，不含內容）或 `gemini.generate.started`／`completed`（Gemini，`completed` 另記 `finishReason`（例如 `STOP`、`MAX_TOKENS`）、`inputUsage`、`outputUsage`、`thoughtUsage`（思考用量））、`ticket.draft.ai.completed`（`durationMs`、`typeId`、`departmentId`、`confidence`、`updateCount`、`toolCount`、`answered`），失敗為 `ticket.draft.ai.failed`（`purpose`、`stage` 為 client.initialize／claude.tools 或 gemini.tools／tool.execute／claude.generate 或 gemini.generate／response.validate、`reason`）；人資調整記錄 `leave.adjusted`（`actorID`、`leaveType`、`year`、`deltaMinutes`）；這些日誌都不含主題、訊息、對話、欄位值或調整原因；`ticket.draft.evaluated` 與 `ticket.draft.ai.*` 只記錄 id、筆數、代碼、工具 id 與是否完成，`leave.adjusted` 只記錄 actorID、假別、年度與分鐘數
+5. 遇到 `ticket.judge.failed`，查看 `stage`（client.initialize、gemini.generate、response.parse、response.validate）、`upstreamStatus`、`reason`、`hint`、`model`；`tickets.store.unavailable` 代表需求單資料庫無法讀寫（`operation` 為 load 或 persist，`errorCode` 為 SQLite 錯誤代碼或開啟時的固定代碼，例如 `SQLITE_BUSY`、`FOREIGN_DATABASE`；只記錄這兩個欄位，不記錄需求單內容；管理監測讀不到資料庫時也會記錄（`operation` 為 load），此時監測回應的 `ticketStore.available` 為 false，其餘欄位照常回傳）；若曾以 root 執行維運腳本，`helpdesk.db` 或 `-wal`／`-shm` 可能變成 root 擁有而使後端啟動失敗或回 503，修正方式見部署操作手冊第 6.3 節
+6. 關機依序記錄 `server.stopping`（`signal`、`timeoutMs`）與 `server.stopped`；逾時或排空失敗為 `server.shutdown.failed`（`DRAIN_FAILED_OR_TIMEOUT`），強制結束為 `server.shutdown.forced`（`REPEATED_SIGNAL`），1 秒內的重複訊號只記 debug `server.signal.ignored`（`DUPLICATE_SIGNAL`）。
 
-| 診斷原因 | 排查方向 |
-| --- | --- |
-| `API_KEY_INVALID`／`MISSING_API_KEY` | 後端金鑰是否有效、環境參數是否覆蓋 `.env`、是否已重新啟動 |
-| `MODEL_NOT_FOUND` | 模型是否存在、支援結構化輸出且可由目前專案存取 |
-| `ACCESS_DENIED` | 金鑰限制、API 啟用、權限與地區限制 |
-| `RATE_LIMIT_OR_QUOTA` | 專案配額、速率限制及計費狀態（上游 429 對前端是 429 `RATE_LIMIT_EXCEEDED`） |
-| `INVALID_ARGUMENT` | 結構化輸出 schema 與模型是否相容 |
-| `NETWORK_ERROR`／`TIMEOUT` | DNS、代理、防火牆、TLS 與連線品質；判斷超過 15 秒也是 `TIMEOUT` |
-| `INVALID_AI_RESPONSE` | 模型輸出未通過 JSON 或欄位驗證 |
-| `UPSTREAM_UNAVAILABLE`／`UNKNOWN` | 上游服務狀態；未知錯誤保留為未知 |
+AI 診斷原因（`API_KEY_INVALID`、`MISSING_API_KEY`、`MODEL_NOT_FOUND`、`ACCESS_DENIED`、`RATE_LIMIT_OR_QUOTA`、`INVALID_ARGUMENT`、`NETWORK_ERROR`、`TIMEOUT`、`INVALID_AI_RESPONSE`、`UPSTREAM_UNAVAILABLE`、`UNKNOWN`）的排查方向見 API 規格書第 4 節
 
 ## HTTP 限流 middleware
 
-`middleware/rateLimiter.js` 使用 express-rate-limit，一般五個 middleware 各有獨立的有界記憶體儲存：`/api` 入口 IP 限流、登入總請求限流、需求單送出／簽核／轉單／取消的帳號限流、部門名單帳號限流、需求單查詢（含已完成）帳號限流。`server.js` 掛載順序為日誌 → API no-store 與選用來源驗證 → CORS → 獨立管理路由 → 一般 /api IP 粗限流 → POST 登入總請求限流 → JSON 解析 → 路由 → 錯誤處理。GET /api/health（含尾斜線）與 OPTIONS 不計入 HTTP 限流。
-`ticketRoutes.js` 與 `departmentRoutes.js` 先 authenticate 與 USER 角色驗證，再套用各自的帳號限流，最後才呼叫處理器；帳號 middleware 只採 `req.user.userID`。
+HTTP 限流的種類、上限、套用範圍與超限回應見 API 規格書第 2.2 節（實作在 `src/middleware/rateLimiter.js`）；`src/server.js` 掛載順序為關機連線關閉（closeOnShutdown）→ 日誌 → API no-store 與選用來源驗證 → CORS → 獨立管理路由（自帶 IP 限流 → JSON 解析 → 驗證，見「管理員與課堂重置」）→ 一般 /api IP 粗限流 → POST 登入總請求限流 → JSON 解析（16 KB）→ 路由 → 404 → 錯誤處理
 
-HTTP 超限維持 429／`RATE_LIMIT_EXCEEDED` 與既有 JSON，`error.retry_after` 與 `Retry-After` 是相同的實際剩餘整數秒。`http.rate_limit.blocked` 日誌標示 api／login／ticket／departments／query，沒有原始 IP、帳密或 token。被 HTTP 限流拒絕不扣額度，也不呼叫 Gemini。HTTP 計數使用單程序記憶體，重啟歸零，多 instance 各自計數。
+`http.rate_limit.blocked` 日誌標示 api／login／ticket／departments／query／draft，沒有原始 IP、帳密或 token
 
 ## 關機
 
-`index.js` 收到 SIGINT 或 SIGTERM 後停止接受新需求單與連線，等待既有需求單（含預扣、判斷、記錄寫入與租約釋放）完成，最多 `SHUTDOWN_TIMEOUT_MS`；逾時強制關閉連線並以結束碼 1 結束。部署平台的終止寬限須大於這個值。
+`src/index.js` 以 `process.on` 持續監聽 SIGINT 與 SIGTERM（`src/utils/shutdown.js`；關機期間的回應標頭由 `src/middleware/closeOnShutdown.js` 加上）；Docker Compose 的 `stop`、`down` 與重建容器都會先送 SIGTERM：
+
+- 第一次訊號開始優雅關機（`server.stopping`）：停止接受新的登入、部門、需求單、查詢與維護工作（已建立的連線上的新請求回 503 `SERVICE_BUSY`，Retry-After 10 秒；健康檢查與管理監測不受此限），停止監聽新連線，等待既有需求單（含預扣、判斷、記錄寫入與租約釋放）完成，最多 `SHUTDOWN_TIMEOUT_MS`（預設與 Compose 皆為 75000 毫秒）；關機期間每個回應都帶 `Connection: close`，讓 Caddy 等代理的 keep-alive 連線在回應後關閉；工作排空後每 50 毫秒清掃一次真正閒置（沒有處理中或排隊的請求、也沒有新到資料）的 keep-alive 連線，有請求未完成的連線會等回應寫完才關閉；全部結束後關閉資料庫（WAL 合併回主檔）並以結束碼 0 結束（`server.stopped`）；逾時或關閉失敗時記錄 `server.shutdown.failed`，強制關閉所有連線，仍嘗試關閉資料庫，並以結束碼 1 結束
+- 第一次訊號後 1 秒內的重複訊號（例如 `npm start`／`npm run dev` 下按一次 Control + C，終端機與 npm 各送一次 SIGINT）只記錄 debug 日誌 `server.signal.ignored`，不中斷優雅關機；超過 1 秒後再收到訊號才強制結束（`server.shutdown.forced`）：關閉所有連線與資料庫後以結束碼 1 結束，不會落回 Node 預設的直接終止
+
+部署平台的終止寬限須大於 `SHUTDOWN_TIMEOUT_MS`（Compose 為 90 秒，不要縮短）；程序被強制終止也不會損毀資料庫，已提交的交易會在下次開啟時由 WAL 自動復原
 
 ## 新增功能
 
-例如新增查詢 API：建立 `routes/xxxRoutes.js`，在 `routes.js` 掛載 `router.use('/xxx', xxxRoutes)`，將請求處理放在 `controllers/xxxController.js`，需要業務邏輯時再建立 service；需求單 API 的掛法（`routes/ticketRoutes.js` → `controllers/ticketController.js` → `services/ticketJudge.js`）可作為範例。
+例如新增查詢 API：建立 `src/routes/xxxRoutes.js`，在 `src/routes/index.js` 掛載 `router.use('/xxx', xxxRoutes)`，將請求處理放在 `src/controllers/xxxController.js`，需要業務邏輯時再建立 `src/services/` 底下的 service；需求單 API 的掛法（`src/routes/ticketRoutes.js` → `src/controllers/ticketController.js` → `src/services/ai/ticketJudge.js`）可作為範例；新增需求類型不改程式：在 `data/requestTypes/` 新增一個定義檔，並在 `_catalog.json` 的 `types` 加一筆（`id`、`file`、`name`、`summary`、`keywords`），重啟後端（Docker 部署重新建置 backend 映像檔）即可；啟動驗證會指出錯誤的檔名與鍵路徑，步驟以 `equipment.json` 為例寫在[需求類型與 AI 資料來源規範](../docs/需求類型與AI資料來源規範.md)；需要改程式的情況見規範文件第 12 節；開發約定見 [AGENTS.md](../AGENTS.md)
 
-SDK 與錯誤處理參考：[Gemini Structured Output](https://ai.google.dev/gemini-api/docs/structured-output)、[Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)。
+SDK 與錯誤處理參考：[Claude Tool Use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview)、[Gemini Structured Output](https://ai.google.dev/gemini-api/docs/structured-output)、[Gemini Function Calling](https://ai.google.dev/gemini-api/docs/function-calling)、[Express 5 錯誤處理](https://expressjs.com/en/5x/guide/error-handling/)。

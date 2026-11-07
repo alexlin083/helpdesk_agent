@@ -7,9 +7,9 @@
 export function createPageUrls(moduleUrl = import.meta.url) {
   return Object.freeze({
     login: new URL('../index.html', moduleUrl).href,
-    propose: new URL('../propose.html', moduleUrl).href,
-    tickets: new URL('../tickets/tickets.html', moduleUrl).href,
-    admin: new URL('../admin/admin.html', moduleUrl).href,
+    propose: new URL('../pages/propose/propose.html', moduleUrl).href,
+    tickets: new URL('../pages/tickets/tickets.html', moduleUrl).href,
+    admin: new URL('../pages/admin/admin.html', moduleUrl).href,
   });
 }
 export const PAGE_URLS = createPageUrls();

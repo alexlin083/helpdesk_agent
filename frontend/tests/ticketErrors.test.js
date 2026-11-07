@@ -31,6 +31,8 @@ function statusMapping() {
     [403, undefined, MESSAGES.forbidden, 0],
     [404, backend('NOT_FOUND', '找不到此 API'), MESSAGES.notFound, 0],
     [413, backend('PAYLOAD_TOO_LARGE', '請求內容超過大小限制'), MESSAGES.tooLarge, 0],
+    [415, backend('UNSUPPORTED_MEDIA_TYPE', '不支援的請求內容格式或編碼，請使用 UTF-8 JSON'), '不支援的請求內容格式或編碼，請使用 UTF-8 JSON', 0],
+    [415, undefined, MESSAGES.unsupportedMedia, 0],
     [429, backend('RATE_LIMIT_EXCEEDED', '請等待冷卻結束後再送出', 7), '請等待冷卻結束後再送出', 7],
     [429, backend('REQUEST_IN_PROGRESS', '此帳號仍有問題處理中', 2), '此帳號仍有問題處理中', 2],
     [429, backend('RATE_LIMIT_EXCEEDED', ''), MESSAGES.busy, 0],

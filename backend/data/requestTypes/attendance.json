@@ -1,0 +1,35 @@
+{
+  "id": "attendance",
+  "version": 1,
+  "name": "打卡補登",
+  "department_id": "dept-hr-1",
+  "ai": {
+    "description": "有上班但沒有打到卡，事後補登出勤紀錄，由人力資源部簽核：需要補登的是上班卡或下班卡、實際打卡時間（台北時間、24 小時制）與補登原因（忘記打卡、打卡機故障、因公外出、其他）。那段時間沒有上班屬於請假申請；打卡機本身壞了要修屬於報修。",
+    "examples": ["昨天下班忘記打卡", "11/3 早上打卡機故障沒打到卡", "上午外出拜訪客戶，要補上班卡"],
+    "greeting": "{username} 你好，這邊已經收到你想要補登打卡的需求，根據您的需求您的業務將會由人資部進行處理，由於打卡補登需要您先提供一些基本的訊息，請告訴我要補登上班卡或下班卡、實際的打卡時間與補登原因，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式等等",
+    "ask_order": ["punch_kind", "punch_at", "reason"],
+    "tools": ["department_directory"]
+  },
+  "fields": [
+    { "key": "applicant", "label": "申請人", "type": "self" },
+    { "key": "punch_kind", "label": "補登類別", "type": "enum", "options": ["上班", "下班"], "required": true },
+    { "key": "punch_at", "label": "實際打卡時間", "type": "datetime", "required": true },
+    { "key": "reason", "label": "補登原因", "type": "enum", "options": ["忘記打卡", "打卡機故障", "因公外出", "其他"], "required": true },
+    { "key": "note", "label": "說明", "type": "text", "max_length": 200 }
+  ],
+  "render": {
+    "lines": [
+      "[申請人]: {applicant}",
+      "[補登類別]: {punch_kind}",
+      "[實際打卡時間]: {punch_at|date} {punch_at|time}",
+      "[補登原因]: {reason}",
+      "[說明]: {note|default:無}"
+    ]
+  },
+  "workflow": {
+    "route": "FORM",
+    "approver": { "department": "definition", "not_requester": true },
+    "transfer": false,
+    "transfer_error": { "code": "FORM_TICKET_LOCKED", "message": "打卡補登由人力資源部處理，不能轉單" }
+  }
+}
