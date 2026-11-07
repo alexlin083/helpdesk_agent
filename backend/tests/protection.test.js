@@ -8,6 +8,35 @@ const { createUsageService, taipeiDay } = await import('../src/services/usageSer
 const { createMemoryLimitStore } = await import('../src/services/storage/limitStore.js');
 
 /**
+ * 以可控制時鐘驗證自動生成租約在 AI 的 60 秒期限後仍保護帳號與全站並行，90 秒才容許故障復原。
+ * 同時驗證正常釋放可立即回收名額；拒絕重複請求不扣額，成功或故障過期均不退還已預扣次數。
+ * 全程使用記憶體儲存與假帳號，不呼叫 AI 或使用真實資料庫。
+ * @returns {Promise<void>} 租約、並行與扣額行為驗證完成。
+ */
+async function draftLeaseBuffer() {
+  let now = 100000;
+  /** 回傳測試控制的 epoch 毫秒。@returns {number} 模擬時間。 */
+  function clock() { return now; }
+  const store = createMemoryLimitStore();
+  const usage = createUsageService({ store, clock, config: { ...env, globalConcurrency: 1 } });
+  await usage.reserveDraft('test-user-a');
+  now += 60000;
+  await assert.rejects(usage.reserveDraft('test-user-a'), { code: 'REQUEST_IN_PROGRESS' });
+  await assert.rejects(usage.reserveDraft('test-user-b'), { code: 'SERVICE_BUSY' });
+  now += 29999;
+  await assert.rejects(usage.reserveDraft('test-user-a'), { code: 'REQUEST_IN_PROGRESS' });
+  now += 1;
+  const recovered = await usage.reserveDraft('test-user-a');
+  assert.equal((await store.read()).draft.total, 2);
+  await usage.releaseDraft('test-user-a', recovered.id);
+  const next = await usage.reserveDraft('test-user-b');
+  await usage.releaseDraft('test-user-b', next.id);
+  assert.deepEqual((await store.read()).leases, {});
+  assert.equal((await store.read()).draft.total, 3);
+}
+test('自動生成租約涵蓋 60 秒回合與清理緩衝，90 秒故障復原', draftLeaseBuffer);
+
+/**
  * 驗證十組帳密、有效簽章、偽造 token 與過期憑證，不呼叫外部服務。
  * @param {import('node:test').TestContext} context 模擬時間工具。
  * @returns {Promise<void>}

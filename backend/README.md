@@ -64,7 +64,7 @@ backend/
 │   │   │   ├── renderer.js          #   需求內容範本 {名稱|篩選器:參數} 與篩選器 date、time、date_range、hours_minutes、default
 │   │   │   ├── evaluator.js         #   依定義驗證欄位、產生候選、執行計算與檢查、渲染內容、檢核清單
 │   │   │   ├── draftEngine.js       #   「自動生成」對話流程（分類 → 填寫 → 伺服器驗證；API 規格書第 3.16 節）
-│   │   │   ├── aiAssistant.js       #   Gemini 呼叫：分類一次、填寫為工具階段（function calling，最多 3 次）＋整理階段；整回合 20 秒；兩家共用的回合守衛
+│   │   │   ├── aiAssistant.js       #   Gemini 呼叫：分類一次、填寫為工具階段（function calling，最多 3 次）＋整理階段；無備援整回合 60 秒；兩家共用的回合守衛
 │   │   │   ├── claudeAssistant.js   #   Claude 呼叫：與 Gemini 版相同的流程（tool use、output_config 結構化輸出、effort low）
 │   │   │   └── workflow.js          #   送出、簽核與轉單時依定義執行的規則（API 規格書第 3.3、3.7、3.9 節）
 │   └── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、dates（台北日期、時間格式）、punctuation（AI 輸出的句號「。」：句中改成「；」、句尾刪除）、shutdown（連線追蹤、優雅關機、訊號處理）
@@ -139,7 +139,7 @@ AI 供應商的選擇、備援的切換條件與期限、模型需求、Claude �
 | `ADMIN_PASSWORD` | 必填，無預設值 | 應用程式管理員的獨立密碼，不得與 `DEMO_PASSWORD` 相同；不是 AWS IAM 密碼 |
 | `DATABASE_FILE` | `storage/helpdesk.db` | 需求單 SQLite 資料庫檔的絕對路徑；留空使用預設。所在目錄必須已存在（不自動建立）；新檔在 SQLite 開啟前先以 600 權限建立，之後產生的 `-wal`／`-shm` 也沿用 600 |
 | `TICKETS_FILE` | `storage/tickets.json` | 舊版 JSON 需求單檔的絕對路徑，只作匯入與回滾的來源，服務不會寫入；留空使用預設 |
-| `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 30000（自動生成一回合的 20 秒期限加 10 秒；下限原為 25000，一回合期限改為 20 秒時提高為 30000，compose.yaml 固定 75000 不受影響） |
+| `SHUTDOWN_TIMEOUT_MS` | 75000 | 關機最多等待既有需求單與租約清理的毫秒數，至少 70000（無備援的自動生成一回合 60 秒加 10 秒清理緩衝；2026-11-05 調整，compose.yaml 固定 75000 不受影響） |
 | `LIMIT_STORE` | memory | local 與 production 都只允許 memory；重啟及管理重置會歸零 |
 | `ORIGIN_VERIFY_SECRET` | 無 | 可選代理來源秘密，設定後至少 32 bytes；目前 Compose 強制停用（固定為空，避免舊 CloudFront 參數阻擋同站點 API），功能保留供其他拓撲使用：啟用時除 `GET /api/health` 外的 API（含 OPTIONS）需由代理附上 `X-Origin-Verify`，一般瀏覽器不持有來源秘密 |
 | `TRUST_PROXY` | 不信任代理（未設定或空白） | 依實際代理鏈填信任的跳數（純十進位整數）、`loopback`／`linklocal`／`uniquelocal`，或以逗號分隔的 IP／CIDR；啟動時以 proxy-addr 2.0.8（Express 使用的同一套件，後端已明列為直接相依）編譯驗證，`true`／`false`（不分大小寫）與無法解析的值會讓後端拒絕啟動，錯誤訊息不回顯原值 |

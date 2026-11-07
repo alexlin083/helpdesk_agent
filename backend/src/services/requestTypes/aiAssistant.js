@@ -6,7 +6,7 @@ import { logger, diagnoseError } from '../../utils/logger.js';
 import { removeFullStops } from '../../utils/punctuation.js';
 
 // 一回合（含工具呼叫與整理輸出）的總期限；關機最少等待時間（env.SHUTDOWN_TIMEOUT_MS）以這個值加 10 秒為下限。
-export const DRAFT_TIMEOUT_MS = 20000;
+export const DRAFT_TIMEOUT_MS = 60000;
 export const MAX_TOOL_CALLS = 3;
 export const DRAFT_REPLY_MAX = 400;
 export const INTENT_MAX = 80;
@@ -226,7 +226,7 @@ export function parseJson(text) {
  * - classify：第一次開啟視窗，一次結構化輸出判斷需求類型與部門；
  * - fill：之後各回合，先在允許的工具中讓模型以原生 function calling 取得資料（伺服器端執行、整回合最多 3 次），
  *   再以一次結構化輸出整理欄位更新與回覆（因為模型不一定能同時使用工具與結構化輸出，所以分成工具階段與整理階段）。
- * 整回合（含所有 Gemini 呼叫與工具執行）在 20 秒期限內完成；欄位是否有效、部門規則與數字一律由後端另行驗證與計算。
+ * 整回合（含所有 Gemini 呼叫與工具執行）預設在 60 秒期限內完成；有備援時由供應商切換器傳入較短期限；欄位是否有效、部門規則與數字一律由後端另行驗證與計算。
  * @param {object} [options={}] 設定。
  * @param {Function} [options.getAI=getClient] SDK client 取得函式。
  * @param {string} [options.model=env.geminiModel] 模型名稱。

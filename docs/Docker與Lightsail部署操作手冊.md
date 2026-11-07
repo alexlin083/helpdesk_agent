@@ -16,7 +16,7 @@ Caddy 提供 HTML／CSS／JS 與 /helpdesk/ 網站，並把 /helpdesk/api 轉送
 
 | 檔案／元件 | 用途與理由 |
 | --- | --- |
-| `backend/Dockerfile` | 以 `node:22.23.4-bookworm-slim` 建置，固定 Node.js 22.23.4（better-sqlite3 13 需 22.14 以上）；只複製 `package.json`、`package-lock.json`（以 `npm ci --omit=dev` 依 lockfile 安裝正式相依，SQLite 驅動附預編譯檔，不需編譯工具）、`src/`、`scripts/`、`data/departments.json`（部門）、整個 `data/requestTypes/` 資料夾（需求類型目錄 `_catalog.json` 與 `leave.json`、`equipment.json`、`general.json` 等定義檔）與 `docker-healthcheck.js`，並於建置時載入 better-sqlite3 確認原生模組可用；部門與需求類型的啟動驗證見[需求類型與 AI 資料來源規範](需求類型與AI資料來源規範.md)第 2 節；新增或修改需求類型只改 JSON 並重新建置 backend image（第 5.9 節）；人員資料（帳號、部門、員工與額度）不在 image 內，只存在 volume 的資料庫；以非 root 的 node 帳號用 `node src/index.js` 直接啟動（不經 npm），直接接收 SIGTERM 並交給優雅關機流程 |
+| `backend/Dockerfile` | 以 `node:22.23.4-bookworm-slim` 建置，固定 Node.js 22.23.4（better-sqlite3 13 需 22.14 以上）；只複製 `package.json`、`package-lock.json`（以 `npm ci --omit=dev` 依 lockfile 安裝正式相依，SQLite 原生驅動以 node-gyp 編譯，建置期間安裝 Python、make 與 g++，完成後移除建置工具）、`src/`、`scripts/`、`data/departments.json`（部門）、整個 `data/requestTypes/` 資料夾（需求類型目錄 `_catalog.json` 與 `leave.json`、`equipment.json`、`general.json` 等定義檔）與 `docker-healthcheck.js`，並於建置時載入 better-sqlite3 確認原生模組可用；部門與需求類型的啟動驗證見[需求類型與 AI 資料來源規範](需求類型與AI資料來源規範.md)第 2 節；新增或修改需求類型只改 JSON 並重新建置 backend image（第 5.9 節）；人員資料（帳號、部門、員工與額度）不在 image 內，只存在 volume 的資料庫；以非 root 的 node 帳號用 `node src/index.js` 直接啟動（不經 npm），直接接收 SIGTERM 並交給優雅關機流程 |
 | `backend/.dockerignore` | 排除 `.env`、測試、Markdown，以及 `data/` 內的資料庫、還原保留檔、匯出與舊版 JSON 檔 |
 | `backend/docker-healthcheck.js` | 檢查本容器 /api/health，不登入、不寫單、不呼叫 AI |
 | `deploy/web.Dockerfile` | 以 `caddy:2-alpine` 為基底，將網站資產（`frontend/index.html`、`frontend/styles/`、`frontend/pages/`、`frontend/src/`）與 Caddy 設定包成另一個 image，不含 README、測試、後端檔案或 .env，沒有前端建置工具需求 |
@@ -828,6 +828,13 @@ Lightsail Ubuntu 的 ubuntu 使用者通常也是 UID 1000，第 6.2 節改回�
 - 執行方式：在 `backend/` 與 `frontend/` 各執行 `npm test`（`node --test`），目前後端 129 項、前端 137 項，都不呼叫 Claude 或 Gemini
 - 後端 `tests/` 涵蓋 API、環境參數、日誌、保護、限流、可靠性、管理本文限制、需求單、資料庫、人員資料、需求類型定義與引擎（requestTypes）、自動生成與各類型流程（draftFlow）、分類評測的題庫與計分（classificationEval）、本機登入簽章金鑰（authSecret）；測試使用 `:memory:` 或暫存檔，不會碰到 `data/helpdesk.db`，並以替身取代 Gemini 與 Claude；claudeProvider 測試 Claude 的請求參數、工具流程與錯誤對應
 - 前端 `tests/` 含開發伺服器的路徑檢查（devServer.test.js），以 fetch 與 DOM 替身驗證請求合約、欄位驗證、錯誤提示、倒數、卡片動作狀態、頁面網址與頁面流程；瀏覽器替身為 `tests/helpers/fakeDom.js`（含自動生成視窗的節點與 DRAFT_DIALOG_IDS），注入的假服務為 `tests/helpers/draftFixtures.js`（含請假 v2、設備申請與一般需求的假定義與回應）；不驗證版面，也不呼叫付費 API 或真後端，自動生成視窗只用注入的假服務測試，實際串接要啟動後端並在頁面操作
-- 前端「自動生成」相關測試：draftService.test.js（請求與回應整理，含 30 秒逾時）、draftDialog.test.js（視窗互動，含只靠定義就能顯示的設備申請與一個虛構的未來類型）、proposeDraft.test.js（與提出需求單頁的整合）、formFormatters.test.js（表單格式）、formTickets.test.js（表單需求單卡片）、ticketsPage.test.js（需求類型目錄的載入）
+- 前端「自動生成」相關測試：draftService.test.js（請求與回應整理，含 70 秒逾時）、draftDialog.test.js（視窗互動，含只靠定義就能顯示的設備申請與一個虛構的未來類型）、proposeDraft.test.js（與提出需求單頁的整合）、formFormatters.test.js（表單格式）、formTickets.test.js（表單需求單卡片）、ticketsPage.test.js（需求類型目錄的載入）
 - 領域字串掃描：`backend/tests/requestTypes.test.js` 掃描後端程式，`frontend/tests/genericRequestTypes.test.js` 掃描前端 `src/` 與 `pages/` 的程式（不含註解）；出現任何類型的 id、欄位 key 或領域用語（例如請假或設備申請的欄位 key）就失敗，新增擴充點的程式同樣不可以出現
 - 新增需求類型後：分類評測題庫在 `npm test` 會被檢查（類型與部門必須存在、主題不可重複、每種類型至少 8 題）；完成前確認本機啟動有 `request_types.ready`、實際操作送出並簽核一次、`npm test` 通過（部署步驟見第 5.9 節）
+
+
+## 2026-11-05：自動生成等待期限調整（本機已實作，尚待部署驗收）
+
+無備援時，AI 工具呼叫與欄位整理共用的整回合期限由 20 秒延長為 60 秒；前端自動生成等待由 30 秒延長為 70 秒，其他 API 的等待不變。有備援時仍為主要 10 秒加備援 15 秒。SHUTDOWN_TIMEOUT_MS 下限改為 70000，Compose 既有的 75000 與停止寬限 90 秒足夠，不需修改正式 .env 或 Compose。更新需重新建置並部署 backend 與 web images；資料庫結構、工作單與金鑰不變。自動生成並行租約延長為 90 秒以保留清理緩衝，正常回應前仍提早釋放；較長等待會延長並行名額占用，不新增應用層重試，也無法消除 Gemini 上游 503。
+
+本機驗證使用 Node.js 22.23.3：前端 137 項、後端 131 項測試通過；新增虛擬時間測試，驗證工具與整理合計 50 秒可完成、整回合到 60 秒取消，以及 90 秒租約的並行保護與故障復原。首輪後端套件的既有已完成清單排序測試曾失敗（簽核時間相近時順序不同），重跑完整套件通過，本次未修改該排序邏輯。測試未呼叫付費 AI 或連線正式環境；仍需重新建置 images 及 Lightsail 實際驗收。

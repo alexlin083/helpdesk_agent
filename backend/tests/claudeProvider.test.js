@@ -75,7 +75,7 @@ async function rejectsWith(promise, reason) {
 
 /**
  * 驗證 Claude 分類：送出的參數符合 Sonnet 5.5 的規則（不送 temperature 與 tool_choice、effort low、json_schema 結構化輸出、
- * 伺服器端 fallback），回應中的思考區塊被略過，只採信清單內的 id；schema 的物件都設 additionalProperties: false 且沒有數值範圍。
+ * 伺服器端 fallback、無備援預設期限 60 秒），回應中的思考區塊被略過，只採信清單內的 id；schema 的物件都設 additionalProperties: false 且沒有數值範圍。
  * @returns {Promise<void>}
  */
 async function classifyRequest() {
@@ -91,7 +91,7 @@ async function classifyRequest() {
   assert.deepEqual(params.output_config, { effort: 'low', format: { type: 'json_schema', schema: claudeClassifySchema(lists) } });
   assert.deepEqual([params.betas, params.fallbacks], [['server-side-fallback-2026-07-01'], 'default']);
   for (const name of ['temperature', 'tool_choice', 'thinking']) assert.ok(!(name in params), `不送 ${name}`);
-  assert.equal(options.timeout, 20000);
+  assert.equal(options.timeout, 60000);
   assert.ok(options.signal instanceof AbortSignal);
   const schema = claudeClassifySchema(lists);
   assert.equal(schema.additionalProperties, false);
@@ -246,7 +246,7 @@ function fakeAssistant(name, outcomes, time, elapsed = 10) {
 
 /**
  * 驗證自動生成的備援切換：
- * 1. 有備援時主要供應商期限 10 秒、備援 15 秒；沒有備援時主要供應商維持 20 秒；
+ * 1. 有備援時主要供應商期限 10 秒、備援 15 秒；沒有備援時主要供應商使用 60 秒；
  * 2. Gemini 這回合不論是限流、上游錯誤（含 503 過載、404）、回應格式異常或逾時，同一個請求都改由 Claude 處理，使用者拿到 Claude 的結果；
  * 3. 切換後 60 秒內的分類與填寫直接交給 Claude，冷卻結束後重新先試 Gemini；
  * 4. 不是 AI 的錯誤（例如資料庫無法讀取，沒有 draftReason）不切換、原樣拋出；Claude 也失敗時拋出 Claude 的錯誤。
@@ -270,7 +270,7 @@ async function draftFallback() {
     assert.equal((await assistant.fill({})).model, 'claude', `${failure.draftReason} ${failure.upstreamStatus ?? ''} 時改用 Claude`);
   }
   assert.deepEqual(built.slice(0, 2), [['gemini', PRIMARY_DRAFT_TIMEOUT_MS], ['anthropic', FALLBACK_DRAFT_TIMEOUT_MS]]);
-  assert.equal(PRIMARY_DRAFT_TIMEOUT_MS + FALLBACK_DRAFT_TIMEOUT_MS < 30000, true, '兩段加起來在前端 30 秒等待上限內');
+  assert.equal(PRIMARY_DRAFT_TIMEOUT_MS + FALLBACK_DRAFT_TIMEOUT_MS < 70000, true, '兩段加起來在前端 70 秒等待上限內');
 
   const pair = { gemini: fakeAssistant('gemini', [{ draftReason: 'AI_INVALID_RESPONSE' }, 'ok'], time), claude: fakeAssistant('claude', [], time) };
   const cooled = createDraftAssistant(config, { clock, build: builder(pair) });
@@ -290,7 +290,7 @@ async function draftFallback() {
   built.length = 0;
   const only = fakeAssistant('gemini', [], time);
   assert.equal(createDraftAssistant({ ...config, aiFallbackProvider: null }, { clock, build: (name, timeoutMs) => { built.push([name, timeoutMs]); return only.assistant; } }), only.assistant);
-  assert.deepEqual(built, [['gemini', 20000]], '沒有備援時直接使用主要供應商，期限 20 秒');
+  assert.deepEqual(built, [['gemini', 60000]], '沒有備援時直接使用主要供應商，期限 60 秒');
 }
 test('自動生成在 Gemini 這回合失敗時一律改用 Claude', draftFallback);
 

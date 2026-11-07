@@ -114,7 +114,7 @@ function getClient() {
  * - classify：第一次開啟視窗，一次結構化輸出（output_config.format）判斷需求類型與部門；
  * - fill：之後各回合，先讓模型在允許的工具中呼叫需要的工具（伺服器端執行、整回合最多 3 次），再以一次結構化輸出整理欄位更新與回覆。
  * 使用適應式思考與 effort（預設 low，分類與擷取類工作的建議起點）；不送 temperature（新版 API 會拒絕）與強制 tool_choice（Sonnet 5.5 會拒絕）。
- * 支援的模型另加伺服器端 fallback。整回合在 20 秒期限內完成；欄位是否有效、部門規則與數字一律由後端另行驗證與計算。
+ * 支援的模型另加伺服器端 fallback。整回合預設在 60 秒期限內完成；有備援時由供應商切換器傳入較短期限；欄位是否有效、部門規則與數字一律由後端另行驗證與計算。
  * @param {object} [options={}] 設定。
  * @param {Function} [options.getAI=getClient] SDK client 取得函式（需提供 beta.messages.create）。
  * @param {string} [options.model=env.anthropicModel] 模型名稱。

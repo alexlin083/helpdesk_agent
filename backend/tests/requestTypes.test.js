@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setImmediate as flushTasks } from 'node:timers/promises';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,7 +94,7 @@ function evaluate(type, input, extra = {}) {
 }
 
 /**
- * 驗證實際定義檔可載入：目錄、七種類型（目錄順序即關鍵字備援的比對順序）、對外形狀、版本與期間規格；設定檔內容與規格書約定的值一致。
+ * 驗證無備援時自動生成整回合預設為 60 秒，並驗證實際定義檔可載入：目錄、七種類型（目錄順序即關鍵字備援的比對順序）、對外形狀、版本與期間規格；設定檔內容與規格書約定的值一致。
  * @returns {void}
  */
 function realDefinitions() {
@@ -131,7 +132,7 @@ function realDefinitions() {
   assert.ok(!view.fields.some(/** 是否含申請人。@param {object} field 欄位。@returns {boolean} self 時 true。 */ (field) => field.type === 'self'));
   assert.deepEqual(view.rules_data.calendar.work_windows, ['09:00-12:00', '13:00-18:00']);
   assert.equal(getRequestTypes().ids().length, 7, '預設目錄（實際部門設定）可載入');
-  assert.equal(DRAFT_TIMEOUT_MS, 20000);
+  assert.equal(DRAFT_TIMEOUT_MS, 60000);
 }
 test('實際需求類型目錄與定義檔可載入', realDefinitions);
 
@@ -501,7 +502,7 @@ test('自動生成請求與招呼語', requestParsing);
 
 /**
  * 驗證 Gemini 助手：分類一次結構化輸出；填寫先在工具階段以原生 function calling 執行工具（最多 3 次），再附上工具結果做一次結構化輸出；
- * 沒有工具時只呼叫一次；輸出整理只採信清單內的值；上游錯誤轉成帶 draftReason 的錯誤。
+ * 沒有工具時只呼叫一次，SDK 等待預設為 60 秒；輸出整理只採信清單內的值；上游錯誤轉成帶 draftReason 的錯誤。
  * @returns {Promise<void>}
  */
 async function assistantPipeline() {
@@ -517,7 +518,7 @@ async function assistantPipeline() {
   const classified = await assistant.classify({ instructions: '指示', context: { subject: 's' }, lists });
   assert.deepEqual({ ...classified }, { intent: '請假', typeId: 'leave', departmentId: 'dept-hr-1', confidence: 95, reply: '好的', toolsUsed: [], model: 'test-model' });
   assert.equal(requests[0].config.responseMimeType, 'application/json');
-  assert.equal(requests[0].config.httpOptions.timeout, 20000);
+  assert.equal(requests[0].config.httpOptions.timeout, 60000);
   const tools = [types.tool('colleagues'), types.tool('my_leave_balance')];
   const ran = [];
   /** 工具執行替身。@param {string} id 工具 id。@param {object} args 參數。@returns {Promise<object>} 結果。 */
@@ -574,6 +575,63 @@ async function assistantPipeline() {
   assert.ok(Object.isFrozen(LEDGER_TABLES), '額度資料表允許清單不可修改');
 }
 test('Gemini 助手的分類、工具階段與整理階段', assistantPipeline);
+
+/**
+ * 以虛擬計時器重現工具與整理各需 25 秒的回合，確認超過舊 20 秒期限仍能在新 60 秒期限內完成。
+ * 再以永不回應的 SDK 驗證兩階段共用同一期限，到 60 秒會取消訊號並回傳 AI_TIMEOUT。
+ * 全程使用假 SDK 與虛擬時間，不連線供應商、不讀寫資料庫，也不實際等待 60 秒。
+ * @param {import('node:test').TestContext} context 測試上下文，負責還原虛擬計時器。
+ * @returns {Promise<void>} 成功與逾時路徑均驗證完成。
+ */
+async function slowDraftDeadline(context) {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const signals = [];
+  const lists = { typeIds: ['general'], departmentIds: ['dept-test'], keys: [] };
+  /**
+   * 模擬每次生成耗時 25 秒；第一次無工具呼叫，第二次回傳合法填寫結果。
+   * @param {object} request SDK 請求，內含整回合共用的取消訊號。
+   * @returns {Promise<object>} 延遲完成的假回應。
+   */
+  function generateContent(request) {
+    signals.push(request.config.abortSignal);
+    const response = signals.length === 1 ? {} : {
+      text: JSON.stringify({ intent: '', type_id: 'general', department_id: null, confidence_score: 90, updates: [], handler_id: null, reply: '收到' }),
+    };
+    return new Promise(/** 排入假 SDK 回應。@param {Function} resolve 回應完成函式。@returns {void} */ (resolve) => {
+      setTimeout(/** 回傳不含個資的測試結果。@returns {void} */ () => resolve(response), 25000);
+    });
+  }
+  /** 回傳延遲 SDK 替身，不建立真實連線。@returns {object} SDK 替身。 */
+  function getAI() { return { models: { generateContent } }; }
+  /** 工具階段不應要求執行工具。@returns {Promise<never>} 不會正常回傳。@throws {Error} 意外執行工具。 */
+  async function runTool() { throw new Error('不應執行工具'); }
+  const assistant = createGeminiAssistant({ getAI, model: 'test-model' });
+  const work = assistant.fill({ instructions: '測試', context: {}, lists, tools: [types.tool('colleagues')], runTool });
+  context.mock.timers.tick(25000);
+  await flushTasks();
+  assert.equal(signals.length, 2, '舊期限過後仍可進入整理階段');
+  assert.equal(signals[0], signals[1], '工具與整理共用取消訊號');
+  assert.equal(signals[0].aborted, false);
+  context.mock.timers.tick(25000);
+  assert.equal((await work).reply, '收到');
+
+  let timeoutSignal;
+  /** 永不完成的 SDK，保留訊號以驗證到期取消。@param {object} request SDK 請求。@returns {Promise<never>} 永久等待。 */
+  function never(request) {
+    timeoutSignal = request.config.abortSignal;
+    return new Promise(/** 不安排任何回應。@returns {void} */ () => {});
+  }
+  /** 回傳永不完成的 SDK 替身。@returns {object} SDK 替身。 */
+  function stalledAI() { return { models: { generateContent: never } }; }
+  const stalled = createGeminiAssistant({ getAI: stalledAI, model: 'test-model' });
+  const rejected = assert.rejects(stalled.classify({ instructions: '測試', context: {}, lists }), { draftReason: 'AI_TIMEOUT' });
+  context.mock.timers.tick(59999);
+  assert.equal(timeoutSignal.aborted, false);
+  context.mock.timers.tick(1);
+  await rejected;
+  assert.equal(timeoutSignal.aborted, true);
+}
+test('慢速工具與整理共用 60 秒期限，成功後清理且到期取消', slowDraftDeadline);
 
 /**
  * 驗證實際類型不接受指定處理人：送出時帶 handler_id 回 400「「設備申請」不提供指定處理人」；沒有帶時為 null。

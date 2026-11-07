@@ -127,6 +127,7 @@ export function createUsageService({ store = limitStore, config = env, clock = D
      * 預扣一次「自動生成」AI 額度並取得並行租約。自動生成的每日額度（DRAFT_USER_DAILY_LIMIT／DRAFT_GLOBAL_DAILY_LIMIT）
      * 與需求單判斷分開計算、沒有冷卻；並行租約與需求單判斷共用 GLOBAL_CONCURRENCY 上限，租約鍵為 draft: 加 userID，
      * 因此同一帳號同時只能有一個自動生成請求，但不會擋住自己的需求單判斷。驗證失敗或限制拒絕不扣額。
+     * 租約有效 90 秒，涵蓋無備援的 60 秒 AI 回合與 30 秒故障清理緩衝；正常回應前由 releaseDraft 提早釋放。
      * @param {string} userID 從憑證取得的可信任身分。
      * @returns {Promise<object>} id（租約識別碼）與 usage（userDailyLimit、userRemaining、globalDailyLimit、globalRemaining、resetAt）。
      * @throws {HttpError} 429 REQUEST_IN_PROGRESS／DAILY_QUOTA_EXCEEDED／GLOBAL_QUOTA_EXCEEDED、503 SERVICE_BUSY 或儲存故障。
@@ -135,7 +136,7 @@ export function createUsageService({ store = limitStore, config = env, clock = D
       const now = clock();
       const id = randomUUID();
       const leaseKey = `draft:${userID}`;
-      /** 原子檢查並提交自動生成的租約與額度。@param {object} state 狀態。@returns {object} 預扣結果。 */
+      /** 原子檢查並預扣自動生成額度，提交 90 秒租約以涵蓋 AI 回合及清理緩衝；拒絕時不扣額。@param {object} state 可變的記憶體限量狀態。@returns {object} 租約 id 與剩餘額度。@throws {HttpError} 帳號已有租約、每日額度不足或全站並行已滿。 */
       function reserveState(state) {
         prepare(state, now);
         if (state.leases[leaseKey]) throw blocked(429, 'REQUEST_IN_PROGRESS', '上一則訊息仍在整理中，請稍候', 2);
@@ -145,8 +146,8 @@ export function createUsageService({ store = limitStore, config = env, clock = D
         if (Object.keys(state.leases).length >= config.globalConcurrency) throw blocked(503, 'SERVICE_BUSY', '目前服務忙碌，請稍後再試', 2);
         state.draft.total += 1;
         state.draft.users[userID] = (state.draft.users[userID] ?? 0) + 1;
-        // 自動生成一回合（可能含工具階段與整理階段的數次 Gemini 呼叫）總期限 20 秒；60 秒租約另留故障復原緩衝。
-        state.leases[leaseKey] = { id, until: now + 60000 };
+        // 無備援時整回合最多 60 秒；90 秒租約另留 30 秒清理緩衝，避免到期時提前放行並行請求。
+        state.leases[leaseKey] = { id, until: now + 90000 };
         return { id, usage: summarizeDraft(state, userID, now) };
       }
       return store.transact(reserveState);

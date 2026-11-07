@@ -39,7 +39,7 @@ function parseTrustProxy(raw) {
  * （Gemini 預設模型 gemini-3.5-flash，Claude 預設 claude-sonnet-5-5，可用 GEMINI_MODEL、ANTHROPIC_MODEL 覆寫）；
  * aiFallbackProvider 是另一家有設定金鑰時的備援供應商（沒有金鑰時為 null）；兩家的原始設定也一併保留。production 只要求主要供應商的金鑰。
  * @returns {Readonly<object>} 包含 AI 供應商與模型、日誌、HTTP 頻率（含自動生成 httpDraftLimit）、自動生成每日額度（draftUserDailyLimit、draftGlobalDailyLimit）、登入失敗視窗、獨立管理密碼、來源驗證、關機緩衝、記憶體限制儲存、需求單 SQLite 檔（databaseFile）與舊版 JSON 匯入來源（ticketsFile）路徑的設定。
- * @throws {Error} 模式不是 local／production、AI_PROVIDER 不是 gemini／anthropic、必要密碼缺少或共用、正式環境缺少主要供應商的金鑰或其他必要設定、限制無效、TRUST_PROXY 格式無效（含 true／false）或關機緩衝不足 30 秒。
+ * @throws {Error} 模式不是 local／production、AI_PROVIDER 不是 gemini／anthropic、必要密碼缺少或共用、正式環境缺少主要供應商的金鑰或其他必要設定、限制無效、TRUST_PROXY 格式無效（含 true／false）或關機緩衝不足 70 秒。
  */
 export function loadEnv({ environment = process.env, envFile = defaultEnvFile } = {}) {
   // 先依平台參數決定模式；production 完全不讀取本機 .env。
@@ -111,9 +111,9 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
     return value;
   }
 
-  // 需求單判斷的單次上游逾時為 15 秒、自動生成一回合（含工具呼叫）的總期限為 20 秒；關機至少再保留 10 秒等待租約與記錄寫入完成。
+  // 需求單判斷的單次上游逾時為 15 秒、自動生成一回合（含工具呼叫）的總期限為 60 秒；關機至少再保留 10 秒等待租約與記錄寫入完成。
   const shutdownTimeoutMs = positive('SHUTDOWN_TIMEOUT_MS', 75000);
-  if (shutdownTimeoutMs < 30000) throw new Error('SHUTDOWN_TIMEOUT_MS 至少需要 30000 毫秒');
+  if (shutdownTimeoutMs < 70000) throw new Error('SHUTDOWN_TIMEOUT_MS 至少需要 70000 毫秒');
   const geminiModel = environment.GEMINI_MODEL?.trim() || AI_PROVIDERS.gemini.defaultModel;
   const anthropicModel = environment.ANTHROPIC_MODEL?.trim() || AI_PROVIDERS.anthropic.defaultModel;
 

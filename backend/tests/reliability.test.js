@@ -107,14 +107,14 @@ async function timeoutReleasesQuotaLease() {
 }
 test('判斷逾時仍扣額、取消上游等待並釋放真實記憶體租約', timeoutReleasesQuotaLease);
 
-/** 確認關機期限的預設值與下限。@returns {void} */
+/** 確認關機預設 75 秒與下限 70 秒，確保 60 秒自動生成回合仍有 10 秒清理緩衝；過短設定在啟動前拒絕。@returns {void} */
 function shutdownConfiguration() {
   const options = { environment: { NODE_ENV: 'local', DEMO_PASSWORD: 'test-only-password', ADMIN_PASSWORD: 'test-admin-only-password' }, envFile: '/nonexistent/helpdesk/.env' };
   assert.equal(loadEnv(options).shutdownTimeoutMs, 75000);
-  assert.equal(loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '30000' } }).shutdownTimeoutMs, 30000);
-  /** 嘗試低於新下限（自動生成 20 秒＋10 秒緩衝）的期限。@returns {object} 設定。@throws {Error} 不合法的期限。 */
-  function belowDraftDeadline() { return loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '25000' } }); }
-  assert.throws(belowDraftDeadline, /30000/);
+  assert.equal(loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '70000' } }).shutdownTimeoutMs, 70000);
+  /** 嘗試低於新下限（自動生成 60 秒＋10 秒緩衝）的期限。@returns {object} 設定。@throws {Error} 不合法的期限。 */
+  function belowDraftDeadline() { return loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '69999' } }); }
+  assert.throws(belowDraftDeadline, /70000/);
   /** 嘗試過短的關機緩衝。@returns {object} 設定。@throws {Error} 不合法的期限。 */
   function shortDrain() { return loadEnv({ ...options, environment: { ...options.environment, SHUTDOWN_TIMEOUT_MS: '10000' } }); }
   assert.throws(shortDrain, /SHUTDOWN_TIMEOUT_MS/);

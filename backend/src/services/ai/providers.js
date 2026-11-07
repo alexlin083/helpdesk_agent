@@ -8,7 +8,7 @@ import { createClaudeAssistant } from '../requestTypes/claudeAssistant.js';
 import { createTicketJudge, JUDGE_TIMEOUT_MS } from './ticketJudge.js';
 import { createClaudeTicketJudge } from './ticketJudgeClaude.js';
 
-// 有備援時兩段的期限：兩段加起來仍在前端的等待上限內（自動生成 10 + 15 = 25 秒 < 30 秒；送單 6 + 12 = 18 秒 < 20 秒）。
+// 有備援時兩段的期限：兩段加起來仍在前端的等待上限內（自動生成 10 + 15 = 25 秒 < 70 秒；送單 6 + 12 = 18 秒 < 20 秒）。
 // 主要供應商較慢時（超過期限）也會交給備援，使用者不必空等。
 export const PRIMARY_DRAFT_TIMEOUT_MS = 10000;
 export const FALLBACK_DRAFT_TIMEOUT_MS = 15000;
@@ -77,7 +77,7 @@ function judgeFor(name, timeoutMs) {
 }
 
 /**
- * 依設定建立「自動生成」AI 助手：只有一個可用供應商時直接使用它（期限 20 秒）；有備援時，主要供應商期限 10 秒、備援 15 秒，
+ * 依設定建立「自動生成」AI 助手：只有一個可用供應商時直接使用它（整回合期限 60 秒，工具與整理階段共用）；有備援時，主要供應商期限 10 秒、備援 15 秒，
  * classify 與 fill 在主要供應商以 DRAFT_FALLBACK_REASONS 任一原因失敗時改用備援。
  * 自動生成的對話不在伺服器保存，每回合都帶完整狀態，因此同一段對話中途換供應商不影響後續回合。不會在建立時呼叫外部服務。
  * @param {object} [config=env] 設定（aiProvider、aiApiKey、aiFallbackProvider）。
