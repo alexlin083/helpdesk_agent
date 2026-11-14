@@ -91,7 +91,7 @@ curl --fail http://localhost:8080/helpdesk/api/health
 
 1. 一般帳號登入，輸入主題（例如「座位調整」）按「自動生成」，在右側欄位選處理部門、填寫需求說明，「Apply 套用」後送出，確認成功、查詢得到（畫面行為見[API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 3.18 節）
 2. 重新建立後端容器：`docker compose up -d --force-recreate --wait backend`，重新整理查詢，工作單應保留，登入仍有效（重建後登入狀態與記憶體限量的行為見規格書第 2.1、2.2 節）
-3. 設定有效的 Gemini 金鑰後，以「自動生成」用一句話描述需求，確認 AI 判斷需求類型與處理部門並填入欄位（後端日誌 `ticket.draft.evaluated`）；這一步會使用自動生成額度並可能產生模型費用；AI 判斷部門的送單路徑要另外驗證：以 API 用戶端送出不帶 `form`、`department_id`、`handler_id` 的 `POST /api/tickets`
+3. 設定有效的主要供應商金鑰（2026-11-14 起範本為 `AI_PROVIDER=anthropic`，即 `ANTHROPIC_API_KEY`；Gemini 金鑰作為備援）後，以「自動生成」用一句話描述需求，確認 AI 判斷需求類型與處理部門並填入欄位（後端日誌 `ticket.draft.evaluated`）；這一步會使用自動生成額度並可能產生模型費用；AI 判斷部門的送單路徑要另外驗證：以 API 用戶端送出不帶 `form`、`department_id`、`handler_id` 的 `POST /api/tickets`
 4. alex.admin 登入管理頁，確認監測能更新，「待簽核需求單」卡片與「需求單資料庫」區塊顯示筆數、結構版本（3）與檔案大小；清除測試工作單前確認資料可刪，再完整輸入確認文字操作。
 5. 一般使用者不能呼叫管理 API；管理員不能進入工作單 API。
 6. 請假（不需要 AI 金鑰也能驗證）：以 racky.huang 輸入主題「請假」按「自動生成」，第一則訊息應說明由人資部處理並列出需要的資料；在右側欄位（窄畫面為下方）選假別、填一段 2026 或 2027 年的平日上班時間（其他年度尚未開放）、代理人選 kevin.ho，確認面板列出請假時數，以及該假別剩餘時數的「前 → 後」（例如「特休剩餘時數：112 小時 0 分鐘 → 105 小時 0 分鐘」），「Apply 套用」後送出，結果為「依表單規則送達」人力資源部；再以 emily.wu 或 frank.liu 登入簽核；有金鑰時另用一句話描述請假內容（例如問「代理人可以選誰」），確認 AI 會填入欄位並查詢同事；這一步會使用自動生成額度並可能產生模型費用
@@ -251,7 +251,7 @@ HTTPS_BIND=0.0.0.0
 HTTPS_PORT=443
 ```
 
-再私下填入 GEMINI_API_KEY、已驗證的 GEMINI_MODEL（要用 Claude 當備援時再填 ANTHROPIC_API_KEY）、兩組不同密碼，以及至少 32 bytes 的固定 AUTH_SECRET；範例不提供任何可用密碼或金鑰；NODE_ENV、CORS_ORIGIN 與 SITE_ADDRESS 的寫法規則見第 2.2 節與 [backend/README.md](../backend/README.md)「正式環境與部署」
+再私下填入主要供應商的金鑰（範本為 `AI_PROVIDER=anthropic`，填 ANTHROPIC_API_KEY）、作為備援的 GEMINI_API_KEY 與已驗證的 GEMINI_MODEL（不填就沒有備援；要改回 Gemini 為主見第 5.13 節）、兩組不同密碼，以及至少 32 bytes 的固定 AUTH_SECRET；範例不提供任何可用密碼或金鑰；NODE_ENV、CORS_ORIGIN 與 SITE_ADDRESS 的寫法規則見第 2.2 節與 [backend/README.md](../backend/README.md)「正式環境與部署」
 
 Compose 在後端容器的 `environment` 固定 PORT=3000、TRUST_PROXY=1、ORIGIN_VERIFY_SECRET 為空、LIMIT_STORE=memory、SHUTDOWN_TIMEOUT_MS=75000、DATABASE_FILE=/app/storage/helpdesk.db（工作單資料庫，目錄須已存在，即 tickets volume）、TICKETS_FILE=/app/storage/tickets.json（只作舊版 JSON 匯入來源，服務不寫入）；這些值寫在 `.env` 也會被覆蓋；資料庫與 JSON 檔位於同一個 tickets volume（掛載整個 /app/storage 目錄，volume 名稱不變），容器另設停止寬限 90 秒與 `init: true`；TRUST_PROXY 的啟動驗證見 [backend/README.md](../backend/README.md)「登入、限流與配額」；不要把舊的 CloudFront 來源秘密帶入這個架構；只有 Caddy 對外，Caddy 依實際連線建立來源資訊；不要另加 backend ports，否則 TRUST_PROXY=1 的單跳信任條件失效
 
@@ -626,6 +626,8 @@ sudo docker compose logs --tail=100 backend | grep -E 'request_types\.|storage\.
 3. 啟動後確認 `server.started` 日誌的 `aiProvider` 為 `gemini`、`aiFallbackProvider` 為 `anthropic`（沒有 Claude 金鑰時為 null）。Gemini 額度用完時，日誌會出現 `ai.fallback.used` 與 `claude.generate.completed`。
 4. 回滾到上一版 image 時，上一版只使用 Gemini，`.env` 多出的 Claude 設定會被忽略。
 
+2026-11-14 起改為 Claude 為主、Gemini 為輔，設定方式見第 5.13 節。
+
 ### 5.11 升級到請假額度異動紀錄版（結構版本 4，2026-11-04）
 
 這一版新增資料表 `leave_log`，記錄每張請假單送出、簽核、退回、取消時的時數、假別、期間與前後剩餘，也記錄人資調整與年度額度變更（欄位見[API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 3.4 節）；API 請求與回應結構不變，web image 不受這張資料表影響（同日的前端畫面改版另依第 5.2 節更新 web image）；新版 backend 第一次啟動、開始監聽前會在一筆交易內建立 `leave_log`，並依時間順序重播既有請假單的歷程與人資調整回填（`source` 為 `backfill`）；失敗時整步回滾，資料庫維持版本 3
@@ -649,6 +651,44 @@ sudo docker compose logs --tail=100 backend | grep -E 'request_types\.|storage\.
 4. 開啟狀態追蹤頁，確認有「申請表單」「待辦表單」「已完成表單」三個分頁；升級前登錄過的人資調整會隨 `leave_adjustments` 一併刪除，剩餘時數改為年度額度
 
 回滾到 `pre-v8`：舊 image 只支援到版本 4，遇到版本 5 以上會記錄 `storage.failed`（reason `SCHEMA_TOO_NEW`）；先停止 backend，以 `before-v8` 備份依第 6.3 節還原，再把 backend 與 web 換回舊 image；回滾後剩餘時數恢復為舊算法（扣除已核准與待簽核），人資調整紀錄也隨備份回來
+
+### 5.13 切換為 Claude 為主、Gemini 備援（2026-11-14）
+
+依使用者決定，正式站改以 Claude 為主要供應商、Gemini 為備援；`AI_PROVIDER=anthropic` 自 2026-11-02 起已支援，設定改在 Lightsail 根目錄 `.env`（或 `HELPDESK_ENV_FILE` 指定的檔案）；同日依本機實測把有備援時自動生成的主要期限由 10 秒放寬為 30 秒（`PRIMARY_DRAFT_TIMEOUT_MS`，見本節最後的實測紀錄），所以這一版要重新建置並部署 backend image（web image 不變）；程式在 `AI_PROVIDER` 未設定時仍以 Gemini 為主，`.env.example` 範本改填 `anthropic`。API 請求與回應結構、額度與資料庫結構不變；切換條件與期限見[API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 1 節「AI 供應商」
+
+前提：Lightsail 的 backend image 必須是 2026-11-02 Claude 備援版或更新的版本（含 `@anthropic-ai/sdk`）。可用 `sudo docker compose logs backend | grep server.started` 檢查：日誌沒有 `aiProvider` 欄位就是舊 image，只改 `.env` 不會生效，要先依第 5.2 節重新建置並部署 backend 與 web image（建置前在 Mac 以 Node.js 22 執行 `npm test`，並先 commit，記下部署的 commit）
+
+1. 依第 6.2 節備份資料庫；更新 image 時，替目前的 image 加上回滾標籤（例如 `sudo docker tag helpdesk-backend:latest helpdesk-backend:pre-claude`，web 同樣處理）再載入新 image
+2. 以 `nano .env` 修改既有的 AI 設定，不要新增重複的行；金鑰只在主機上輸入，不貼到聊天、截圖或 Git：
+
+```dotenv
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=<Claude 金鑰>
+ANTHROPIC_MODEL=claude-sonnet-5-5
+GEMINI_API_KEY=<保留原本的 Gemini 金鑰，作為備援>
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+   舊的 `.env` 若沒有 `AI_PROVIDER`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_MODEL` 這幾行，才加到檔案最後；production 會要求主要供應商的金鑰，`AI_PROVIDER=anthropic` 卻沒有 `ANTHROPIC_API_KEY` 時後端拒絕啟動；以 `grep -cE '^(AI_PROVIDER|ANTHROPIC_API_KEY|GEMINI_API_KEY)=' .env` 確認結果為 3（只印出筆數，不印出值）
+3. 以 `sudo docker compose up -d --no-build --pull never --wait` 重建容器；`docker compose restart` 不會載入修改後的 `.env`
+4. 以 `sudo docker compose logs --tail=100 backend | grep server.started` 確認 `aiProvider` 為 `anthropic`、`aiFallbackProvider` 為 `gemini`；再實際操作「自動生成」幾次，日誌應出現 `claude.generate.completed`
+5. 觀察 `ai.fallback.used` 的頻率：有備援時主要供應商有期限（自動生成一回合 30 秒、判斷部門 6 秒），超過就交給 Gemini，切換後 60 秒內的請求也都直接用 Gemini（全站共用）；`sudo docker compose logs --since 1h backend | grep -c ai.fallback.used` 可以算出次數；經常出現 `reason` 為 `AI_TIMEOUT` 時，先看 `claude.generate.completed` 的 `durationMs` 找出慢的階段；`ANTHROPIC_MODEL` 可改為 `claude-haiku-5-5` 比較（改 `.env` 後重做步驟 3，本機實測只換模型無法解決 10 秒期限的問題）；要再調整期限需修改程式（`PRIMARY_DRAFT_TIMEOUT_MS`，主要＋備援須小於前端 70 秒）並同步更新規格書
+
+改回 Gemini 為主：把 `AI_PROVIDER` 改為 `gemini`，再執行步驟 3；回滾程式時把 `pre-claude` 標籤改回 `latest`，其餘同第 5.2 節
+
+狀態：只完成文件與範本修改，並以 Node.js 22.23.3 執行 `npm test`（後端 131 項、前端 137 項通過）；這些測試以假金鑰與替身 client 驗證 Claude 路徑的請求參數、切換與錯誤對應，不會呼叫真正的 Claude API；尚未在 Lightsail 執行這一節
+
+本機實測（2026-11-14，`AI_PROVIDER=anthropic`、`ANTHROPIC_MODEL=claude-sonnet-5-5`、Gemini 備援 `gemini-3.5-flash-lite`，以使用者私下設定的真實金鑰呼叫，日誌確認 `server.started` 的 `aiProvider` 為 `anthropic`）：設備申請的整理回合由 AI 在 4.9 秒內完成，但貼出的日誌沒有記錄供應商（沒有 `claude.generate.*` 行），無法確認是哪一家回答；請假的分類回合由 Claude 回答，3.0 秒，判斷為人力資源部；接著請假的整理回合，Claude 工具階段兩次請求為 4.3 秒與 0.9 秒（呼叫 `colleagues`），整理階段開始後在整回合 10 秒期限（`PRIMARY_DRAFT_TIMEOUT_MS`）到時被取消（`ticket.draft.ai.failed` reason `TIMEOUT`），記錄 `ai.fallback.used`（`AI_TIMEOUT`）後由 Gemini 在 4.5 秒內完成，HTTP 請求共 14.5 秒；下一回合在 60 秒冷卻內直接由 Gemini 回答（4.6 秒）。改用 `ANTHROPIC_MODEL=claude-haiku-5-5` 重測同一流程：分類回合 Haiku 2.7 秒（請假、人力資源部）；整理回合 Haiku 工具階段三次請求為 2.3、2.0、1.8 秒（比 Sonnet 多一次工具請求），整理階段同樣在整回合 10 秒期限到時被取消，改由 Gemini 在 4.2 秒內完成（HTTP 共 14.2 秒），之後兩回合在冷卻內直接由 Gemini 回答（3.7、3.2 秒）。Claude 整理階段的實際耗時因被取消而未知（Sonnet 超過 4.8 秒、Haiku 超過 3.9 秒）。結論：不論 Sonnet 或 Haiku，含工具的回合都超過主要供應商的 10 秒期限而交給 Gemini，冷卻期間的對話實際上都由 Gemini 處理；只換模型無法解決，因此把主要期限放寬為 30 秒（程式與規格書第 1 節已同步修改，後端與前端測試通過）。放寬後以 Haiku 重測請假對話，兩個含工具的回合都由 Claude 完成、沒有 `ai.fallback.used`：第一回合工具階段 1.7＋2.0 秒、整理階段 5.1 秒，共 11.6 秒；第二回合工具階段一次 5.5 秒（沒有呼叫工具，但輸出 959 tokens）、整理階段 5.4 秒，共 11.0 秒，兩回合在舊的 10 秒期限下都會被取消。同時觀察到：第一回合 `toolsUsed` 含目錄沒有的工具 id `unused`（伺服器拒絕執行並回錯誤，計入工具次數）；第二回合 `updateCount` 為 0、`missingCount` 停在 2，欄位沒有進展。這兩點是 Haiku 的回答品質問題，與期限無關。再改回 `claude-sonnet-5-5` 重測：請假的整理回合由 Claude 完成、沒有 `ai.fallback.used`，工具階段 3.4＋1.3 秒（呼叫 `colleagues`）、整理階段 3.1 秒，共 7.8 秒；一則訊息即填好 4 個欄位（`missingCount` 0、`complete` 為 true），沒有呼叫目錄以外的工具。這次低於 10 秒，但第一次 Sonnet 實測同一類回合超過 10 秒，耗時有波動，因此保留 30 秒期限；範本維持 `ANTHROPIC_MODEL=claude-sonnet-5-5`。以上都是少量回合的本機觀察，尚未在 Lightsail 執行
+
+### 5.14 管理頁顯示自動生成用量（2026-11-14）
+
+問題：管理頁「今日 AI 已用／剩餘」與帳號表的用量只統計需求單 AI 判斷部門，而提出需求單頁只以「自動生成」套用的結果送單，不會用到判斷部門，所以這些數字一直不變；自動生成的用量只存在後端記憶體、沒有出現在監測回應。這不是部署或串接失敗。
+
+修改：`GET /api/admin/metrics` 新增 `draft` 與 `users[].draft`（欄位見[API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 3.14 節）；管理頁改以「今日自動生成已用／剩餘」為主要卡片與進度條，「今日 AI 判斷部門」另列一張卡片，帳號表分開顯示兩種用量，HTTP 表的 `draft` 列顯示為「自動生成對話」。
+
+部署：backend 與 web image 都要重新建置並一起更新、一起回滾（新版管理頁要求回應含 `draft`，只更新 web 時監測會顯示格式異常；只更新 backend 時舊管理頁忽略新增欄位，仍顯示原本的判斷部門數字）；`.env`、資料庫結構與 Compose 不變。驗收：以一般帳號在提出需求單頁用「自動生成」對話一次，再以管理員帳號開管理頁，「今日自動生成已用」與該帳號的「自動生成 今日已用」應各增加 1；計數只存在記憶體，後端重啟或管理重置後歸零。
+
+狀態：本機 `npm test` 通過（新增後端自動生成用量、跨午夜與租約到期的檢查，前端卡片、帳號表與格式檢查）；尚未以管理員帳號在瀏覽器實際查看，也尚未在 Lightsail 執行。
 
 ## 6. 工作單清除、備份與還原
 
@@ -734,7 +774,7 @@ Lightsail Ubuntu 的 ubuntu 使用者通常也是 UID 1000，第 6.2 節改回�
 | 現象 | 排查方向 |
 | --- | --- |
 | 缺少 ADMIN_PASSWORD／DEMO_PASSWORD | 編輯的是根目錄 .env 嗎？值是否空白？兩個值是否不同？ |
-| production 啟動失敗 | 檢查 AI_PROVIDER 與主要供應商的金鑰（預設 GEMINI_API_KEY）、CORS_ORIGIN、AUTH_SECRET；不貼出實際值 |
+| production 啟動失敗 | 檢查 AI_PROVIDER 與主要供應商的金鑰（`anthropic` 為 ANTHROPIC_API_KEY，`gemini` 或未設定為 GEMINI_API_KEY）、CORS_ORIGIN、AUTH_SECRET；不貼出實際值 |
 | 502／backend 不健康 | 查看 backend 日誌、環境參數與 health；健康等待約數十秒，不能只看 web 啟動 |
 | backend 反覆重啟、日誌有 storage.failed | reason 為固定代碼，detail 為不含工作單內容的說明：NODE_TOO_OLD 看 Node 版本；DIRECTORY_MISSING、EACCES 或 SQLITE_CANTOPEN 看主機 compose.yaml 是否含 DATABASE_FILE=/app/storage/helpdesk.db（缺少時後端改用 image 內 root 擁有的 /app/data，reason 為 EACCES）、目錄與檔案是否可由 node 寫入；FOREIGN_DATABASE 表示 DATABASE_FILE 指到不是本服務的 SQLite 檔（application_id 不是 HDK1 且不是全新空檔），服務在任何寫入前就拒絕，不會改動該檔；SCHEMA_TOO_NEW 改用對應版本 image；LEGACY_UNREADABLE／LEGACY_INVALID／LEGACY_CONFLICT 檢查 tickets.json 權限、格式，或舊檔尚未匯入資料庫卻已有工作單；SQLITE_NOTADB 等 SQLite 代碼表示檔案無法當資料庫開啟。不刪資料檔，需要時依第 5.5 節回滾 image |
 | 503 TICKET_STORE_UNAVAILABLE | 看 tickets.store.unavailable 的 operation 與 errorCode（SQLite 代碼或上列開啟時代碼）；檢查 /app/storage 與 helpdesk.db、-wal、-shm 是否屬於 node、磁碟是否已滿；不手動修改或刪除資料庫檔 |
@@ -838,3 +878,17 @@ Lightsail Ubuntu 的 ubuntu 使用者通常也是 UID 1000，第 6.2 節改回�
 無備援時，AI 工具呼叫與欄位整理共用的整回合期限由 20 秒延長為 60 秒；前端自動生成等待由 30 秒延長為 70 秒，其他 API 的等待不變。有備援時仍為主要 10 秒加備援 15 秒。SHUTDOWN_TIMEOUT_MS 下限改為 70000，Compose 既有的 75000 與停止寬限 90 秒足夠，不需修改正式 .env 或 Compose。更新需重新建置並部署 backend 與 web images；資料庫結構、工作單與金鑰不變。自動生成並行租約延長為 90 秒以保留清理緩衝，正常回應前仍提早釋放；較長等待會延長並行名額占用，不新增應用層重試，也無法消除 Gemini 上游 503。
 
 本機驗證使用 Node.js 22.23.3：前端 137 項、後端 131 項測試通過；新增虛擬時間測試，驗證工具與整理合計 50 秒可完成、整回合到 60 秒取消，以及 90 秒租約的並行保護與故障復原。首輪後端套件的既有已完成清單排序測試曾失敗（簽核時間相近時順序不同），重跑完整套件通過，本次未修改該排序邏輯。測試未呼叫付費 AI 或連線正式環境；仍需重新建置 images 及 Lightsail 實際驗收。
+
+## 2026-11-07：Gemini 預設模型與思考深度調整（本機已實作，尚待部署驗收）
+
+正式站常出現「AI 助手處理逾時」，本機以同一組 3 段對話（請假、報修、一般需求，共 7 回合，無備援）比較兩個模型：`gemini-3.5-flash` 單次請求 3～59 秒，只有 2 回合正常，其餘遇到 503、504 或 429（最慢的一回合 59.3 秒，接近 60 秒期限）；`gemini-3.5-flash-lite` 7 回合全部成功，每次請求 1.2～2.0 秒、每回合最多 4.4 秒。因此 Gemini 預設模型改為 `gemini-3.5-flash-lite`，所有 Gemini 呼叫（自動生成的分類、工具與整理階段，以及 AI 判斷部門）一律送 `thinkingConfig: { thinkingLevel: LOW }`。API 請求與回應結構、期限、額度、並行與備援規則都不變，資料庫結構不變。
+
+部署步驟：
+
+1. 檢查正式站專案根目錄的 `.env`：`GEMINI_MODEL` 若為 `gemini-3.5-flash`，改為 `gemini-3.5-flash-lite`；未設定時會使用新的預設值。只修改這一行，不要把 `.env` 內容貼到其他地方。
+2. 重新建置並部署 backend image（前端沒有變更）。
+3. 確認後端啟動日誌 `server.started` 的 `model` 為 `gemini-3.5-flash-lite`，再實際操作「自動生成」幾次，觀察 `gemini.generate.completed` 的 `durationMs` 與是否仍有 `ticket.draft.ai.failed`。
+
+503／504 是 Google 端模型過載，與付費方案無關；429 才是學生方案的每分鐘請求數不足，換模型後仍常出現時再評估升級方案。
+
+本機驗證使用 Node.js 22.23.3：後端 131 項測試通過（新增自動生成三個階段與部門判斷都帶思考深度 LOW 的檢查）；既有的 `tests/ticketFlows.test.js`「已完成清單：排序、筆數上限、篩選與可見範圍」單獨執行時偶發失敗（簽核時間相近時順序不同），還原本次修改後同樣會失敗，與本次調整無關，未修改。模型比較為本機實際呼叫 Gemini 的結果。修改後的程式也已在本機以同一組對話實測（`GEMINI_MODEL` 留空，使用新預設 `gemini-3.5-flash-lite`）：7 回合全部成功、類型與部門判斷正確，共 13 次請求、平均 1.6 秒，每回合最多 5.2 秒；flash-lite 修改前後的思考 token 都是 0，速度差異在正常波動內，主要改善來自換模型，思考深度 LOW 是避免改回會深度思考的模型時耗時暴增。尚未在 Lightsail 驗收。

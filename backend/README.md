@@ -107,7 +107,7 @@ PORT=3000
 CORS_ORIGIN=http://localhost:5173
 AI_PROVIDER=gemini
 GEMINI_API_KEY=<請填入自己的 Gemini 金鑰>
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 # 選填：主要供應商 Gemini 失敗時改用 Claude（切換條件見下方參數表的 ANTHROPIC_API_KEY）
 ANTHROPIC_API_KEY=<選填，Claude 金鑰>
 ANTHROPIC_MODEL=claude-sonnet-5-5
@@ -127,9 +127,9 @@ AI 供應商的選擇、備援的切換條件與期限、模型需求、Claude �
 | `NODE_ENV` | local | 只接受 local 或 production；必須由 shell 或部署平台設定（寫在 `backend/.env` 不會改變模式），production 完全不讀 `.env` |
 | `PORT` | 3000 | 監聽埠，1～65535 的整數 |
 | `CORS_ORIGIN` | `http://localhost:5173`（僅 local） | 瀏覽器開啟前端的 origin，不含頁面路徑、`/helpdesk` 或結尾斜線；production 必填，正式值為網站的 HTTPS origin（例如 `https://alex-lin-lab.com`） |
-| `AI_PROVIDER` | `gemini` | AI 主要供應商：`gemini` 或 `anthropic`，其他值啟動失敗；判斷部門與「自動生成」共用；另一家有金鑰時為備援；production 只要求主要供應商的金鑰，備援的金鑰可以不設 |
+| `AI_PROVIDER` | `gemini` | AI 主要供應商：`gemini` 或 `anthropic`，其他值啟動失敗；2026-11-14 起範本填 `anthropic`（Claude 為主、Gemini 備援），未設定時仍為 `gemini`；判斷部門與「自動生成」共用；另一家有金鑰時為備援；production 只要求主要供應商的金鑰，備援的金鑰可以不設 |
 | `GEMINI_API_KEY` | 無（僅 local 可留空） | Gemini 金鑰；主要供應商為 Gemini 時 production 必填 |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | Gemini 模型，請填已驗證可用且支援 function calling 的名稱 |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini 模型，請填已驗證可用且支援 function calling 的名稱；所有 Gemini 呼叫的思考深度固定為 LOW（`thinkingConfig.thinkingLevel`）；2026-11-07 實測 `gemini-3.5-flash` 單次請求 3～59 秒且常回 503／504，不建議使用 |
 | `ANTHROPIC_API_KEY` | 無 | Claude 金鑰；選填，有填時作為備援：「自動生成」在主要供應商這一回合因 `RATE_LIMIT_EXCEEDED`、`AI_UPSTREAM_ERROR`、`AI_INVALID_RESPONSE`、`AI_TIMEOUT` 任一原因失敗時改用備援，AI 判斷部門在上游回 429 或 500 時改用備援，切換後 60 秒內直接用備援（`src/services/ai/providers.js`）；`AI_PROVIDER=anthropic` 時改為主要供應商、production 必填 |
 | `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude 模型 |
 | `LOG_LEVEL` | info | debug、info、warn、error 或 silent |

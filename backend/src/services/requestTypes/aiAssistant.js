@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { env } from '../../config/env.js';
 import { HttpError } from '../../middleware/errorHandler.js';
 import { withAgentDeadline } from '../../utils/agentDeadline.js';
@@ -14,6 +14,10 @@ export const UPDATE_VALUE_MAX = 2000;
 const UPDATES_MAX = 20;
 // Gemini 每次呼叫的輸出上限（與 Claude 助手相同）。Gemini 3.x 預設會先思考，思考用掉的 token 也算在上限內，上限太小時 JSON 會在中途被截斷。
 export const GEMINI_OUTPUT_LIMITS = Object.freeze({ classify: 4096, tools: 2048, fill: 4096 });
+// 所有 Gemini 呼叫（自動生成的分類、工具與整理階段，以及需求單的部門判斷）共用的思考深度：分類與欄位擷取不需要深度思考，
+// 未設定時由模型自行決定思考長度，耗時忽長忽短；2026-11-07 實測 flash-lite 在自動生成對話中的思考 token 本來就是 0，
+// 這項設定主要避免 GEMINI_MODEL 改成會深度思考的模型（例如 flash）時，單次請求耗時暴增。
+export const GEMINI_THINKING_CONFIG = Object.freeze({ thinkingLevel: ThinkingLevel.LOW });
 const HANDLER_ID_MAX = 100;
 const PARAM_TYPES = Object.freeze({ string: Type.STRING, integer: Type.INTEGER, number: Type.NUMBER, boolean: Type.BOOLEAN });
 
@@ -239,9 +243,9 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
 
   /**
    * 呼叫一次 Gemini 並記錄耗時、停止原因（finishReason，例如 STOP、MAX_TOKENS）與用量（輸入、輸出與思考的 token 數，不含內容），
-   * 方便判斷輸出是否因達到上限而被截斷。
+   * 方便判斷輸出是否因達到上限而被截斷。每次呼叫一律加上思考深度 GEMINI_THINKING_CONFIG（LOW）、期限與取消訊號，呼叫端不必各自設定。
    * @param {object} ai SDK client。
-   * @param {object} request generateContent 的 contents 與 config。
+   * @param {object} request generateContent 的 contents 與 config（config 不需含 thinkingConfig、httpOptions 與 abortSignal）。
    * @param {AbortSignal} signal 逾時取消訊號。
    * @param {string} purpose 日誌用途。
    * @returns {Promise<object>} SDK 回應。
@@ -249,7 +253,7 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
   async function generate(ai, request, signal, purpose) {
     const started = Date.now();
     logger('info', 'gemini.generate.started', { model, purpose });
-    const response = await ai.models.generateContent({ model, ...request, config: { ...request.config, httpOptions: { timeout: timeoutMs }, abortSignal: signal } });
+    const response = await ai.models.generateContent({ model, ...request, config: { ...request.config, thinkingConfig: GEMINI_THINKING_CONFIG, httpOptions: { timeout: timeoutMs }, abortSignal: signal } });
     signal.throwIfAborted();
     const usage = response.usageMetadata ?? {};
     logger('info', 'gemini.generate.completed', { model, purpose, durationMs: Date.now() - started, finishReason: response.candidates?.[0]?.finishReason ?? null,

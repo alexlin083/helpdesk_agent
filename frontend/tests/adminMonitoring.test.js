@@ -13,7 +13,9 @@ function fixture() {
     runtime: { startedAt: '2026-10-27T23:00:00Z', uptimeSeconds: 3600, environment: 'production', storage: 'memory', maintaining: false, stopping: false, pending: 1 },
     ticketStore: { engine: 'sqlite', available: true, schemaVersion: 1, total: 12, pending: 3, approved: 6, rejected: 2, cancelled: 1, fileBytes: 49152, walBytes: 0 },
     ai: { day: '2026-10-28', resetAt: '2026-10-28T16:00:00Z', used: 4, remaining: 76, dailyLimit: 80, userDailyLimit: 20, active: 1, concurrencyLimit: 2, userConcurrencyLimit: 1, cooldownSeconds: 15 },
-    users: [{ username: '<script>fake</script>', userID: 'user-test.user', department: { name: '測試部門' }, used: 4, remaining: 16, dailyLimit: 20, cooldownSeconds: 8, inProgress: true }],
+    draft: { used: 37, remaining: 263, dailyLimit: 300, userDailyLimit: 60, active: 1 },
+    users: [{ username: '<script>fake</script>', userID: 'user-test.user', department: { name: '測試部門' }, used: 4, remaining: 16, dailyLimit: 20, cooldownSeconds: 8, inProgress: false,
+      draft: { used: 12, remaining: 48, dailyLimit: 60, inProgress: true } }],
     login: { capacity: 512, ip: { limit: 100, windowSeconds: 900, activeKeys: 1, atLimitKeys: 0, failures: 7 }, account: { limit: 5, windowSeconds: 300, activeKeys: 1, atLimitKeys: 1, failures: 5 } },
     http: [{ scope: 'ticket', by: 'user', limit: 9, windowSeconds: 120, maxKeys: 2048, activeKeys: 1, totalHits: 10, atLimitKeys: 1, overLimitRequests: 1 }],
     monitoring: { pollSeconds: 5, windowSeconds: 60, ipLimit: 120, userLimit: 60 },
@@ -55,13 +57,18 @@ function rendering() {
   const ids = pageIds(new URL('../pages/admin/admin.html', import.meta.url));
   for (const id of Object.keys(nodes)) assert.ok(ids.has(id), id);
   renderAdminMetrics(doc, fixture());
-  assert.match(nodes['metrics-cards'].textContent, /4 \/ 80/);
-  assert.match(nodes['metrics-cards'].textContent, /76 次/);
-  assert.match(nodes['metrics-policy'].textContent, /15 秒/);
+  assert.match(nodes['metrics-cards'].textContent, /今日自動生成已用37 \/ 300/);
+  assert.match(nodes['metrics-cards'].textContent, /今日自動生成剩餘263 次每帳號上限 60 次/);
+  assert.match(nodes['metrics-cards'].textContent, /其中自動生成 1 筆/);
+  assert.match(nodes['metrics-cards'].textContent, /今日 AI 判斷部門4 \/ 80/);
+  assert.match(nodes['metrics-policy'].textContent, /AI 判斷部門冷卻 15 秒/);
   assert.match(nodes['metrics-http'].textContent, /9 次／120 秒/);
-  assert.equal(nodes['metrics-quota-progress'].max, 80);
-  assert.equal(nodes['metrics-quota-progress'].value, 4);
+  assert.equal(nodes['metrics-quota-progress'].max, 300, '進度條顯示自動生成額度');
+  assert.equal(nodes['metrics-quota-progress'].value, 37);
   assert.match(nodes['metrics-users'].textContent, /<script>fake<\/script>/);
+  /** 取出帳號列的儲存格文字。@param {HTMLElement} cell 儲存格。@returns {string} 文字。 */
+  function userCell(cell) { return cell.textContent; }
+  assert.deepEqual(nodes['metrics-users'].children[0].children.map(userCell), ['<script>fake</script>', '測試部門', '12 / 60', '48', '4 / 20', '自動生成中', '8 秒']);
   assert.equal(doc.querySelectorAll('script').length, 0);
   assert.match(nodes['metrics-login'].textContent, /100 次／900 秒/);
   assert.match(nodes['metrics-cards'].textContent, /待簽核需求單3 筆資料庫共 12 筆/);
@@ -94,6 +101,15 @@ function ticketStoreContract() {
   const negative = fixture();
   negative.ticketStore.pending = -1;
   assert.equal(isValidMetrics(negative), false);
+  const noDraft = fixture();
+  delete noDraft.draft;
+  assert.equal(isValidMetrics(noDraft), false, '缺少自動生成用量（舊版後端）視為格式異常');
+  const noUserDraft = fixture();
+  delete noUserDraft.users[0].draft;
+  assert.equal(isValidMetrics(noUserDraft), false);
+  const badDraft = fixture();
+  badDraft.draft.used = -1;
+  assert.equal(isValidMetrics(badDraft), false);
   const inMemory = fixture();
   inMemory.ticketStore.fileBytes = null;
   assert.equal(isValidMetrics(inMemory), true, '記憶體資料庫的檔案大小為 null');

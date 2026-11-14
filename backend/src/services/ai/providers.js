@@ -8,9 +8,11 @@ import { createClaudeAssistant } from '../requestTypes/claudeAssistant.js';
 import { createTicketJudge, JUDGE_TIMEOUT_MS } from './ticketJudge.js';
 import { createClaudeTicketJudge } from './ticketJudgeClaude.js';
 
-// 有備援時兩段的期限：兩段加起來仍在前端的等待上限內（自動生成 10 + 15 = 25 秒 < 70 秒；送單 6 + 12 = 18 秒 < 20 秒）。
+// 有備援時兩段的期限：兩段加起來仍在前端的等待上限內（自動生成 30 + 15 = 45 秒 < 70 秒；送單 6 + 12 = 18 秒 < 20 秒）。
 // 主要供應商較慢時（超過期限）也會交給備援，使用者不必空等。
-export const PRIMARY_DRAFT_TIMEOUT_MS = 10000;
+// 自動生成的主要期限 2026-11-14 由 10 秒放寬為 30 秒：Claude 為主時，含工具的回合（工具階段 2～3 次請求＋整理 1 次）
+// 本機實測 Sonnet 與 Haiku 都在 10 秒到時被取消而交給 Gemini；送單的判斷部門只呼叫一次且受送單 20 秒等待限制，維持 6 秒。
+export const PRIMARY_DRAFT_TIMEOUT_MS = 30000;
 export const FALLBACK_DRAFT_TIMEOUT_MS = 15000;
 export const PRIMARY_JUDGE_TIMEOUT_MS = 6000;
 export const FALLBACK_JUDGE_TIMEOUT_MS = 12000;
@@ -77,7 +79,7 @@ function judgeFor(name, timeoutMs) {
 }
 
 /**
- * 依設定建立「自動生成」AI 助手：只有一個可用供應商時直接使用它（整回合期限 60 秒，工具與整理階段共用）；有備援時，主要供應商期限 10 秒、備援 15 秒，
+ * 依設定建立「自動生成」AI 助手：只有一個可用供應商時直接使用它（整回合期限 60 秒，工具與整理階段共用）；有備援時，主要供應商期限 30 秒、備援 15 秒（合計 45 秒，在前端 70 秒等待與 90 秒並行租約內），
  * classify 與 fill 在主要供應商以 DRAFT_FALLBACK_REASONS 任一原因失敗時改用備援。
  * 自動生成的對話不在伺服器保存，每回合都帶完整狀態，因此同一段對話中途換供應商不影響後續回合。不會在建立時呼叫外部服務。
  * @param {object} [config=env] 設定（aiProvider、aiApiKey、aiFallbackProvider）。

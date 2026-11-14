@@ -25,19 +25,20 @@
       <p id="metrics-status" role="status" aria-live="polite">等待取得監測資料…</p>
       <p id="metrics-updated" class="muted">尚無成功快照</p>
       <div id="metrics-cards" class="metric-grid"></div>
-      <label for="metrics-quota-progress">全站今日 AI 額度使用情況</label>
+      <label for="metrics-quota-progress">全站今日自動生成額度使用情況</label>
       <progress id="metrics-quota-progress" max="1" value="0"></progress>
       <p id="metrics-policy"></p>
       <p id="metrics-runtime" class="muted"></p>
-      <p class="monitor-note">只監測目前這個後端程序；重啟或管理重置會讓一般計數歸零。這是本地保護額度，不是 Gemini 帳單或 Token 用量。指定處理人的工作單不扣 AI 額度。</p>
+      <p class="monitor-note">只監測目前這個後端程序；重啟或管理重置會讓一般計數歸零。這是本地保護額度，不是 AI 供應商（Claude／Gemini）的帳單或 Token 用量。自動生成每回合扣一次，一回合內切換到備援供應商也只扣一次；以自動生成結果送單、指定處理人的工作單不扣 AI 判斷部門額度。</p>
       <h3>需求單資料庫</h3>
       <p id="metrics-ticket-store" class="muted"></p>
       <div class="table-scroll" tabindex="0" role="region" aria-label="需求單資料庫摘要">
         <table><thead><tr><th scope="col">全部</th><th scope="col">待簽核</th><th scope="col">已簽核</th><th scope="col">已退回</th><th scope="col">已取消</th><th scope="col">資料庫檔</th><th scope="col">WAL 檔</th></tr></thead><tbody id="metrics-tickets"></tbody></table>
       </div>
       <h3>各帳號 AI 使用狀態</h3>
+      <p class="muted">自動生成是提出需求單頁的 AI 對話；AI 判斷部門只在 API 送單未指定部門時使用，冷卻也只套用在判斷部門。</p>
       <div class="table-scroll" tabindex="0" role="region" aria-label="各帳號 AI 使用狀態">
-        <table><thead><tr><th scope="col">帳號</th><th scope="col">部門</th><th scope="col">今日已用／上限</th><th scope="col">剩餘次數</th><th scope="col">目前狀態</th><th scope="col">剩餘冷卻</th></tr></thead><tbody id="metrics-users"></tbody></table>
+        <table><thead><tr><th scope="col">帳號</th><th scope="col">部門</th><th scope="col">自動生成 今日已用／上限</th><th scope="col">自動生成 剩餘</th><th scope="col">判斷部門 今日已用／上限</th><th scope="col">目前狀態</th><th scope="col">判斷部門冷卻</th></tr></thead><tbody id="metrics-users"></tbody></table>
       </div>
       <h3>一般 HTTP 頻率保護</h3>
       <p class="muted">計數是各個仍有效固定視窗的合計，不是每秒流量或歷史總次數。達上限表示下一次請求將被拒絕；超額次數不含容量不足的拒絕。不顯示來源 IP。</p>

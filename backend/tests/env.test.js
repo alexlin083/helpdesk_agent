@@ -75,7 +75,7 @@ test('production 忽略 .env，使用平台參數及 PORT', () => {
 });
 
 /**
- * 驗證 AI 供應商設定：主要供應商預設 gemini（模型 gemini-3.5-flash，金鑰 GEMINI_API_KEY）；另一家有金鑰時為備援（aiFallbackProvider），
+ * 驗證 AI 供應商設定：主要供應商預設 gemini（模型 gemini-3.5-flash-lite，金鑰 GEMINI_API_KEY）；另一家有金鑰時為備援（aiFallbackProvider），
  * 沒有金鑰時為 null；AI_PROVIDER=anthropic 時主要改為 Claude（claude-sonnet-5-5，可用 ANTHROPIC_MODEL 覆寫）、備援為 Gemini；
  * 大小寫與前後空白不影響；不支援的供應商啟動失敗；production 只要求主要供應商的金鑰。
  * @returns {void}
@@ -84,7 +84,7 @@ function aiProviderConfig() {
   const envFile = '/nonexistent/helpdesk/.env';
   const base = { DEMO_PASSWORD: 'test-only-password', ADMIN_PASSWORD: 'test-admin-only-password', GEMINI_API_KEY: 'fake-gemini-key', ANTHROPIC_API_KEY: 'fake-anthropic-key' };
   const gemini = loadEnv({ environment: { ...base }, envFile });
-  assert.deepEqual([gemini.aiProvider, gemini.aiApiKey, gemini.aiModel, gemini.aiKeyName, gemini.aiFallbackProvider], ['gemini', 'fake-gemini-key', 'gemini-3.5-flash', 'GEMINI_API_KEY', 'anthropic']);
+  assert.deepEqual([gemini.aiProvider, gemini.aiApiKey, gemini.aiModel, gemini.aiKeyName, gemini.aiFallbackProvider], ['gemini', 'fake-gemini-key', 'gemini-3.5-flash-lite', 'GEMINI_API_KEY', 'anthropic']);
   assert.equal(loadEnv({ environment: { ...base, ANTHROPIC_API_KEY: '' }, envFile }).aiFallbackProvider, null, '沒有 Claude 金鑰時沒有備援');
   const claude = loadEnv({ environment: { ...base, AI_PROVIDER: ' Anthropic ', ANTHROPIC_MODEL: 'claude-haiku-5-5' }, envFile });
   assert.deepEqual([claude.aiProvider, claude.aiApiKey, claude.aiModel, claude.aiKeyName, claude.aiFallbackProvider], ['anthropic', 'fake-anthropic-key', 'claude-haiku-5-5', 'ANTHROPIC_API_KEY', 'gemini']);
