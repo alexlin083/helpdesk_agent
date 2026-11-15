@@ -52,6 +52,8 @@ function isValidTicketStore(store, count) {
 /**
  * 檢查監測回應的必要欄位與數值，避免破損資料被誤顯示為零或仍在即時更新。
  * runtime.storage 描述限流計數（固定 memory），需求單資料庫另由 ticketStore 檢查。
+ * 自動生成用量（draft 與每個帳號的 users[].draft）為必要欄位：缺少時視為格式異常並保留上次數據，
+ * 因此 web 與 backend image 必須一起更新（2026-11-14 起）。
  * @param {unknown} data 後端快照。
  * @returns {boolean} 是否符合管理監測契約。
  */
@@ -68,6 +70,8 @@ export function isValidMetrics(data) {
   if (!isValidTicketStore(data.ticketStore, count)) return false;
   if (!ai || !date(ai.resetAt) || typeof ai.day !== 'string') return false;
   for (const key of ['used', 'remaining', 'dailyLimit', 'userDailyLimit', 'active', 'concurrencyLimit', 'userConcurrencyLimit', 'cooldownSeconds']) if (!count(ai[key])) return false;
+  if (!data.draft) return false;
+  for (const key of ['used', 'remaining', 'dailyLimit', 'userDailyLimit', 'active']) if (!count(data.draft[key])) return false;
   if (!login || !count(login.capacity) || !monitoring) return false;
   for (const key of ['windowSeconds', 'ipLimit', 'userLimit']) if (!count(monitoring[key])) return false;
   for (const key of ['ip', 'account']) {
@@ -78,6 +82,8 @@ export function isValidMetrics(data) {
   for (const user of data.users) {
     if (!user || typeof user.username !== 'string' || typeof user.userID !== 'string' || typeof user.department?.name !== 'string' || typeof user.inProgress !== 'boolean') return false;
     for (const field of ['used', 'remaining', 'dailyLimit', 'cooldownSeconds']) if (!count(user[field])) return false;
+    if (!user.draft || typeof user.draft.inProgress !== 'boolean') return false;
+    for (const field of ['used', 'remaining', 'dailyLimit']) if (!count(user.draft[field])) return false;
   }
   for (const row of data.http) {
     if (!row || typeof row.scope !== 'string' || !['ip', 'user'].includes(row.by)) return false;

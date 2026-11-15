@@ -13,7 +13,7 @@ const { computeWorkMinutes, normalizeCalendar, executeTool, parseToolParams, app
 const { normalizeFieldValue, fieldError, clientField } = await import('../src/services/requestTypes/fieldTypes.js');
 const { compileTemplate, renderSegments } = await import('../src/services/requestTypes/renderer.js');
 const { evaluateForm, renderContent, buildPrompt, parseFormInput } = await import('../src/services/requestTypes/evaluator.js');
-const { createGeminiAssistant, buildFill, buildClassification, fillSchema, toolDeclaration, DRAFT_TIMEOUT_MS } = await import('../src/services/requestTypes/aiAssistant.js');
+const { createGeminiAssistant, buildFill, buildClassification, fillSchema, toolDeclaration, DRAFT_TIMEOUT_MS, GEMINI_THINKING_CONFIG } = await import('../src/services/requestTypes/aiAssistant.js');
 const { parseDraftRequest, greetingFor } = await import('../src/services/requestTypes/draftEngine.js');
 const { createDepartmentService } = await import('../src/services/departmentService.js');
 const { createAccountService } = await import('../src/services/personnel/accountService.js');
@@ -502,7 +502,7 @@ test('自動生成請求與招呼語', requestParsing);
 
 /**
  * 驗證 Gemini 助手：分類一次結構化輸出；填寫先在工具階段以原生 function calling 執行工具（最多 3 次），再附上工具結果做一次結構化輸出；
- * 沒有工具時只呼叫一次，SDK 等待預設為 60 秒；輸出整理只採信清單內的值；上游錯誤轉成帶 draftReason 的錯誤。
+ * 沒有工具時只呼叫一次，SDK 等待預設為 60 秒，每次呼叫（分類、工具與整理階段）都帶思考深度 LOW；輸出整理只採信清單內的值；上游錯誤轉成帶 draftReason 的錯誤。
  * @returns {Promise<void>}
  */
 async function assistantPipeline() {
@@ -540,6 +540,8 @@ async function assistantPipeline() {
   assert.equal(final.tool_results.length, 3, '整理階段附上工具結果');
   assert.equal(requests[3].config.tools, undefined, '整理階段不帶工具');
   assert.deepEqual(requests[3].config.responseSchema, fillSchema(lists));
+  assert.deepEqual(GEMINI_THINKING_CONFIG, { thinkingLevel: 'LOW' });
+  for (const request of requests) assert.deepEqual(request.config.thinkingConfig, { thinkingLevel: 'LOW' }, '分類、工具與整理階段都限制思考深度');
   queue.length = 0;
   queue.push({ text: JSON.stringify({ intent: '', type_id: null, department_id: null, confidence_score: 0, updates: [], handler_id: null, reply: '' }) });
   const plain = await assistant.fill({ instructions: '指示', context: {}, lists, tools: [], runTool });

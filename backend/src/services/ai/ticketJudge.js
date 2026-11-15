@@ -5,6 +5,7 @@ import { departmentService } from '../departmentService.js';
 import { withAgentDeadline } from '../../utils/agentDeadline.js';
 import { logger, diagnoseError } from '../../utils/logger.js';
 import { removeFullStops } from '../../utils/punctuation.js';
+import { GEMINI_THINKING_CONFIG } from '../requestTypes/aiAssistant.js';
 
 const CONFIDENCE_THRESHOLD = 75;
 const BASIS_MAX_LENGTH = 200;
@@ -147,7 +148,7 @@ export function createJudgeRunner({ model, timeoutMs, departments, keyName, invo
 export function createTicketJudge({ getAI = getClient, departments = departmentService, model = env.geminiModel, timeoutMs = JUDGE_TIMEOUT_MS } = {}) {
   return createJudgeRunner({ model, timeoutMs, departments, keyName: 'GEMINI_API_KEY', invoke:
     /**
-     * 呼叫一次 Gemini 並解析 JSON；記錄耗時與用量中繼資料（不含內容）。
+     * 呼叫一次 Gemini 並解析 JSON（思考深度與自動生成相同，為 GEMINI_THINKING_CONFIG 的 LOW）；記錄耗時與用量中繼資料（不含內容）。
      * @param {{signal: AbortSignal, ticket: object, candidates: object[], setStage: Function}} call 呼叫參數。
      * @returns {Promise<unknown>} 解析後的模型輸出。
      * @throws {HttpError} 未設定金鑰或輸出不是 JSON。
@@ -157,13 +158,13 @@ export function createTicketJudge({ getAI = getClient, departments = departmentS
       setStage('gemini.generate');
       const inferenceStarted = Date.now();
       logger('info', 'gemini.generate.started', { model, departmentCount: candidates.length, purpose: 'ticket.judge' });
-      logger('debug', 'gemini.generate.config', { temperature: 0.2, outputLimit: JUDGE_OUTPUT_LIMIT, timeoutMs, responseMimeType: 'application/json' });
+      logger('debug', 'gemini.generate.config', { temperature: 0.2, outputLimit: JUDGE_OUTPUT_LIMIT, thinkingLevel: GEMINI_THINKING_CONFIG.thinkingLevel, timeoutMs, responseMimeType: 'application/json' });
       const response = await ai.models.generateContent({
         model,
         contents: JSON.stringify({ ticket: { subject: ticket.subject, content: ticket.content }, departments: candidates }),
         config: {
           systemInstruction: JUDGE_INSTRUCTION, responseMimeType: 'application/json', responseSchema: ticketJudgeSchema,
-          temperature: 0.2, maxOutputTokens: JUDGE_OUTPUT_LIMIT, httpOptions: { timeout: timeoutMs }, abortSignal: signal,
+          temperature: 0.2, maxOutputTokens: JUDGE_OUTPUT_LIMIT, thinkingConfig: GEMINI_THINKING_CONFIG, httpOptions: { timeout: timeoutMs }, abortSignal: signal,
         },
       });
       signal.throwIfAborted();

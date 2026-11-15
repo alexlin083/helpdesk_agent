@@ -9,7 +9,7 @@ const { createMemoryLimitStore } = await import('../src/services/storage/limitSt
 const { createTaskTracker } = await import('../src/services/taskTracker.js');
 const { createRateLimiters, createBoundedRateStore } = await import('../src/middleware/rateLimiter.js');
 
-/** 驗證唯讀快照正確處理每日額度、過期視窗、跨午夜租約與私密欄位白名單。@returns {Promise<void>} 驗證完成。 */
+/** 驗證唯讀快照正確處理每日額度（AI 判斷部門與自動生成分開計算）、過期視窗、跨午夜租約與私密欄位白名單。@returns {Promise<void>} 驗證完成。 */
 async function projectedMetrics() {
   let now = Date.parse('2026-10-28T15:59:59Z');
   /** 提供台北午夜前後的可控制時間。@returns {number} epoch 毫秒。 */
@@ -18,7 +18,8 @@ async function projectedMetrics() {
   /** 種入有效與過期資料，加入不可被輸出的欄位。@param {object} state 快照。@returns {void} */
   function seed(state) {
     Object.assign(state, { day: '2026-10-28', total: 3, users: { 'user-a.b': 3 }, cooldowns: { 'user-a.b': now + 5000 },
-      leases: { 'user-a.b': { id: 'private-lease-id', until: now + 10000 }, expired: { id: 'expired-lease', until: now - 1 } },
+      draft: { total: 7, users: { 'user-a.b': 5 } },
+      leases: { 'user-a.b': { id: 'private-lease-id', until: now + 10000 }, 'draft:user-a.b': { id: 'private-draft-lease', until: now + 90000 }, expired: { id: 'expired-lease', until: now - 1 } },
       login: { 'ip:private-ip-hash': { count: 100, resetAt: now + 60000 }, 'account:private-account-hash:a.b': { count: 5, resetAt: now + 60000 }, 'ip:expired': { count: 7, resetAt: now - 1 } },
       secret: 'never-output-this-secret',
     });
@@ -41,7 +42,9 @@ async function projectedMetrics() {
   assert.equal(current.runtime.storage, 'memory', 'runtime.storage 仍描述限流計數');
   assert.equal(current.ai.used, 3);
   assert.equal(current.ai.remaining, 97);
-  assert.equal(current.ai.active, 1);
+  assert.equal(current.ai.active, 2, '有效租約含判斷部門與自動生成');
+  assert.deepEqual(current.draft, { used: 7, remaining: env.draftGlobalDailyLimit - 7, dailyLimit: env.draftGlobalDailyLimit, userDailyLimit: env.draftUserDailyLimit, active: 1 });
+  assert.deepEqual(current.users[0].draft, { used: 5, remaining: env.draftUserDailyLimit - 5, dailyLimit: env.draftUserDailyLimit, inProgress: true });
   assert.equal(current.users.length, 1);
   assert.equal(current.users[0].remaining, 27);
   assert.equal(current.users[0].cooldownSeconds, 5);
@@ -49,18 +52,27 @@ async function projectedMetrics() {
   assert.equal(current.login.ip.activeKeys, 1);
   assert.equal(current.login.ip.failures, 100);
   assert.equal(current.login.account.atLimitKeys, 1);
-  for (const value of ['private-lease-id', 'private-ip-hash', 'private-account-hash', 'never-output-this-secret', 'private-subject', 'private-content', 'TK-metrics']) assert.ok(!JSON.stringify(current).includes(value));
+  for (const value of ['private-lease-id', 'private-draft-lease', 'private-ip-hash', 'private-account-hash', 'never-output-this-secret', 'private-subject', 'private-content', 'TK-metrics']) assert.ok(!JSON.stringify(current).includes(value));
   assert.deepEqual(await store.read(), before);
   now += 2000;
   const midnight = await get();
   assert.equal(midnight.ai.day, '2026-10-29');
   assert.equal(midnight.ai.used, 0);
+  assert.equal(midnight.draft.used, 0, '跨午夜自動生成用量歸零');
+  assert.equal(midnight.users[0].draft.used, 0);
   assert.equal(midnight.users[0].remaining, 30);
-  assert.equal(midnight.ai.active, 1);
+  assert.equal(midnight.ai.active, 2);
+  assert.equal(midnight.draft.active, 1, '跨午夜的有效自動生成租約仍保留');
   assert.equal(midnight.users[0].cooldownSeconds, 3);
   now += 70000;
   const expired = await get();
-  assert.equal(expired.ai.active, 0);
+  assert.equal(expired.ai.active, 1, '判斷部門租約到期，自動生成的 90 秒租約仍有效');
+  assert.equal(expired.draft.active, 1);
+  now += 20000;
+  const allExpired = await get();
+  assert.equal(allExpired.ai.active, 0);
+  assert.equal(allExpired.draft.active, 0);
+  assert.equal(allExpired.users[0].draft.inProgress, false);
   assert.equal(expired.login.ip.activeKeys, 0);
   assert.deepEqual(await store.read(), before, '投影過期與跨日狀態不修改儲存');
   await store.reset();

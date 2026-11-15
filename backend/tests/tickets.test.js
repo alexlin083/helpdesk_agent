@@ -222,7 +222,7 @@ function judgeDecision() {
 test('需求單判斷的 75 分分流、預設部門與輸出驗證', judgeDecision);
 
 /**
- * 驗證判斷器只呼叫一次 Gemini、不送處理人、設定正確，並將上游錯誤轉成安全的 429／500。
+ * 驗證判斷器只呼叫一次 Gemini、不送處理人、設定正確（含思考深度 LOW），並將上游錯誤轉成安全的 429／500。
  * @returns {Promise<void>}
  */
 async function judgePipeline() {
@@ -244,6 +244,7 @@ async function judgePipeline() {
   assert.equal(requests[0].config.responseMimeType, 'application/json');
   assert.equal(requests[0].config.maxOutputTokens, 2048, '思考用掉的 token 也算在上限內');
   assert.equal(requests[0].config.httpOptions.timeout, 15000);
+  assert.deepEqual(requests[0].config.thinkingConfig, { thinkingLevel: 'LOW' }, '部門判斷也限制思考深度');
   for (const text of ['', 'not json', '{}']) {
     const broken = createTicketJudge({ getAI: () => ({ models: { generateContent: async () => ({ text }) } }), departments });
     await assert.rejects(broken({ subject: 'a', content: 'b' }), { status: 500, code: 'SERVER_ERROR', message: 'AI 回應格式異常，請稍後再試' });

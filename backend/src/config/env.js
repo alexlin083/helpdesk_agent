@@ -3,9 +3,9 @@ import proxyaddr from 'proxy-addr';
 import { fileURLToPath } from 'node:url';
 
 const defaultEnvFile = fileURLToPath(new URL('../../.env', import.meta.url));
-// 支援的 AI 供應商：金鑰的環境參數名稱與未設定模型時的預設模型。
+// 支援的 AI 供應商：金鑰的環境參數名稱與未設定模型時的預設模型；Gemini 預設 flash-lite（2026-11-07 實測 flash 單次請求 3～59 秒且常回 503／504，flash-lite 約 1～2 秒）。
 export const AI_PROVIDERS = Object.freeze({
-  gemini: Object.freeze({ keyName: 'GEMINI_API_KEY', defaultModel: 'gemini-3.5-flash' }),
+  gemini: Object.freeze({ keyName: 'GEMINI_API_KEY', defaultModel: 'gemini-3.5-flash-lite' }),
   anthropic: Object.freeze({ keyName: 'ANTHROPIC_API_KEY', defaultModel: 'claude-sonnet-5-5' }),
 });
 const TRUST_PROXY_ERROR = 'TRUST_PROXY 格式無效：請填信任的代理跳數整數、loopback／linklocal／uniquelocal，或以逗號分隔的 IP／CIDR；未設定時不信任代理';
@@ -36,7 +36,7 @@ function parseTrustProxy(raw) {
  * @param {object} [options.environment=process.env] 環境變數來源。
  * @param {string} [options.envFile] 本機 .env 的絕對路徑。
  * AI 設定：AI_PROVIDER 是主要供應商，gemini（預設）或 anthropic；aiApiKey、aiModel、aiKeyName 是主要供應商的金鑰、模型與金鑰參數名稱
- * （Gemini 預設模型 gemini-3.5-flash，Claude 預設 claude-sonnet-5-5，可用 GEMINI_MODEL、ANTHROPIC_MODEL 覆寫）；
+ * （Gemini 預設模型 gemini-3.5-flash-lite，Claude 預設 claude-sonnet-5-5，可用 GEMINI_MODEL、ANTHROPIC_MODEL 覆寫）；
  * aiFallbackProvider 是另一家有設定金鑰時的備援供應商（沒有金鑰時為 null）；兩家的原始設定也一併保留。production 只要求主要供應商的金鑰。
  * @returns {Readonly<object>} 包含 AI 供應商與模型、日誌、HTTP 頻率（含自動生成 httpDraftLimit）、自動生成每日額度（draftUserDailyLimit、draftGlobalDailyLimit）、登入失敗視窗、獨立管理密碼、來源驗證、關機緩衝、記憶體限制儲存、需求單 SQLite 檔（databaseFile）與舊版 JSON 匯入來源（ticketsFile）路徑的設定。
  * @throws {Error} 模式不是 local／production、AI_PROVIDER 不是 gemini／anthropic、必要密碼缺少或共用、正式環境缺少主要供應商的金鑰或其他必要設定、限制無效、TRUST_PROXY 格式無效（含 true／false）或關機緩衝不足 70 秒。

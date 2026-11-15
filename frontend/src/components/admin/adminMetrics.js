@@ -1,4 +1,4 @@
-const HTTP_NAMES = { api: '一般 API 入口', login: '登入總請求', ticket: '提單／簽核／轉單／取消', departments: '部門名單', query: '工作單查詢' };
+const HTTP_NAMES = { api: '一般 API 入口', login: '登入總請求', ticket: '提單／簽核／轉單／取消', departments: '部門名單', query: '工作單查詢', draft: '自動生成對話' };
 
 /**
  * 以台北時區顯示取樣、重置與程序啟動時間，不依使用者電腦時區。
@@ -47,6 +47,9 @@ export function metricsBytes(bytes) {
  * 表格數值表示目前有效視窗的合計，不當作每秒流量或啟動以來的累計。
  * 程序啟動時間使用台北時區，運行秒數轉成自動進位的可讀時長。
  * 需求單資料庫只顯示各狀態筆數與檔案大小；資料庫不可用時以「無法讀取」標示，不顯示為 0。
+ * AI 用量分兩種顯示：主要的「自動生成」（提出需求單頁的 AI 對話，data.draft 與 users[].draft）作為卡片與進度條，
+ * 「AI 判斷部門」（data.ai 與 users[].used，只有 API 送單未指定部門時使用，提出需求單頁不會用到）另列一張卡片與帳號表欄位，
+ * 避免把幾乎不會變動的判斷部門計數誤認為整體 AI 用量。
  * @param {Document} doc 頁面文件，可注入測試替身。
  * @param {object} data 經 adminService 驗證的快照。
  * @returns {void} 更新指標、設定、需求單資料庫、帳號與 HTTP／登入摘要。
@@ -58,13 +61,14 @@ export function renderAdminMetrics(doc, data) {
   function write(id, value) { doc.querySelector(`#${id}`).textContent = String(value); }
   /** 加入一列文字表格。@param {HTMLElement} parent tbody。@param {Array<unknown>} values 儲存格值。@returns {void} */
   function row(parent, values) { const tr = doc.createElement('tr'); for (const value of values) tr.append(node('td', value)); parent.append(tr); }
-  const { ai, runtime, monitoring, ticketStore: tickets } = data;
+  const { ai, draft, runtime, monitoring, ticketStore: tickets } = data;
   const cards = doc.querySelector('#metrics-cards');
   cards.replaceChildren();
   for (const [label, value, description] of [
-    ['今日 AI 已用', `${ai.used} / ${ai.dailyLimit}`, '獲准即扣額，失敗也計入'],
-    ['今日 AI 剩餘', `${ai.remaining} 次`, `每帳號上限 ${ai.userDailyLimit} 次`],
-    ['AI 處理中', `${ai.active} / ${ai.concurrencyLimit}`, `每帳號同時最多 ${ai.userConcurrencyLimit} 筆`],
+    ['今日自動生成已用', `${draft.used} / ${draft.dailyLimit}`, '提出需求單頁的 AI 對話，每回合扣一次，失敗也計入'],
+    ['今日自動生成剩餘', `${draft.remaining} 次`, `每帳號上限 ${draft.userDailyLimit} 次`],
+    ['AI 處理中', `${ai.active} / ${ai.concurrencyLimit}`, `其中自動生成 ${draft.active} 筆；全站共用並行上限`],
+    ['今日 AI 判斷部門', `${ai.used} / ${ai.dailyLimit}`, `僅 API 送單未指定部門時使用；每帳號上限 ${ai.userDailyLimit} 次`],
     ['服務狀態', runtime.stopping ? '關機中' : runtime.maintaining ? '維護中' : '運作中', `目前業務工作 ${runtime.pending} 筆`],
     ['待簽核需求單', tickets.available ? `${tickets.pending} 筆` : '無法讀取', tickets.available ? `資料庫共 ${tickets.total} 筆` : '需求單資料庫暫時無法使用'],
   ]) {
@@ -74,8 +78,8 @@ export function renderAdminMetrics(doc, data) {
     cards.append(card);
   }
   const progress = doc.querySelector('#metrics-quota-progress');
-  progress.max = Math.max(1, ai.dailyLimit);
-  progress.value = Math.min(ai.used, ai.dailyLimit);
+  progress.max = Math.max(1, draft.dailyLimit);
+  progress.value = Math.min(draft.used, draft.dailyLimit);
   write('metrics-updated', `最後成功取樣：${metricsTime(data.observedAt)}（台北時間）`);
   write('metrics-runtime', `${runtime.environment} · 限流計數存於單程序記憶體 · 啟動於 ${metricsTime(runtime.startedAt)} · 已運行 ${metricsUptime(runtime.uptimeSeconds)}`);
   const ticketRows = doc.querySelector('#metrics-tickets');
@@ -86,11 +90,15 @@ export function renderAdminMetrics(doc, data) {
   } else {
     write('metrics-ticket-store', 'SQLite · 無法讀取需求單資料庫，請查看後端 tickets.store.unavailable 日誌');
   }
-  write('metrics-policy', `每日 ${ai.day}（台北）· 下次額度重置 ${metricsTime(ai.resetAt)} · AI 冷卻 ${ai.cooldownSeconds} 秒 · 每 ${data.pollSeconds} 秒輪詢`);
+  write('metrics-policy', `每日 ${ai.day}（台北）· 下次額度重置 ${metricsTime(ai.resetAt)} · 自動生成沒有冷卻 · AI 判斷部門冷卻 ${ai.cooldownSeconds} 秒 · 每 ${data.pollSeconds} 秒輪詢`);
   write('metrics-monitor-policy', `監測獨立保護：每 ${monitoring.windowSeconds} 秒，每管理員 ${monitoring.userLimit} 次、每來源 ${monitoring.ipLimit} 次；不消耗一般額度。`);
   const accounts = doc.querySelector('#metrics-users');
   accounts.replaceChildren();
-  for (const user of data.users) row(accounts, [user.username, user.department.name, `${user.used} / ${user.dailyLimit}`, user.remaining, user.inProgress ? '處理中' : '閒置', `${user.cooldownSeconds} 秒`]);
+  for (const user of data.users) {
+    const state = user.draft.inProgress ? '自動生成中' : user.inProgress ? '判斷部門中' : '閒置';
+    row(accounts, [user.username, user.department.name, `${user.draft.used} / ${user.draft.dailyLimit}`, user.draft.remaining,
+      `${user.used} / ${user.dailyLimit}`, state, `${user.cooldownSeconds} 秒`]);
+  }
   const http = doc.querySelector('#metrics-http');
   http.replaceChildren();
   for (const entry of data.http) row(http, [HTTP_NAMES[entry.scope] ?? entry.scope,

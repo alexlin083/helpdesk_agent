@@ -26,8 +26,10 @@ async function ticketStoreSummary(tickets) {
 }
 
 /**
- * 建立管理員唯讀監測服務；讀取實際設定、記憶體快照與需求單資料庫的彙總計數，不查工作單原文、不呼叫 Gemini。
+ * 建立管理員唯讀監測服務；讀取實際設定、記憶體快照與需求單資料庫的彙總計數，不查工作單原文、不呼叫 AI。
  * 日期與到期狀態在輸出時投影，不寫回儲存；各儲存依序取樣，非跨儲存交易快照。
+ * 兩種 AI 額度分開回報：ai 與 users[].used 是需求單 AI 判斷部門（API 送單未指定部門時才使用），
+ * draft 與 users[].draft 是提出需求單頁「自動生成」對話的每日回合數（2026-11-14 新增）。
  * @param {object} [options={}] 可替換依賴。
  * @param {object} [options.store=limitStore] 支援 read 的配額儲存。
  * @param {object} [options.accounts=accountService] 支援 list 的後端帳號設定。
@@ -36,15 +38,15 @@ async function ticketStoreSummary(tickets) {
  * @param {Function} [options.rates=snapshotHttpLimits] 取得一般 HTTP 視窗彙整。
  * @param {object} [options.config=env] 啟動時驗證的限制設定，不將整份設定輸出。
  * @param {Function} [options.clock=Date.now] epoch 毫秒時間來源。
- * @returns {Function} 取得限制設定、AI 用量、帳號狀態、需求單資料庫與匿名登入／HTTP 摘要的非同步函式。
+ * @returns {Function} 取得限制設定、AI 判斷部門與自動生成用量、帳號狀態、需求單資料庫與匿名登入／HTTP 摘要的非同步函式。
  */
 export function createAdminMetrics({ store = limitStore, accounts = accountService, tasks = taskTracker, tickets = dataStore, rates = snapshotHttpLimits, config = env, clock = Date.now } = {}) {
   const startedAt = clock();
   /**
    * 取得目前程序的監測快照，只回傳明確白名單欄位；不輸出秘密、IP、雜湊、token、租約 ID 或需求單內容。
    * 跨台北午夜忽略舊日配額，跨午夜的有效冷卻與租約仍保留。runtime.storage 描述限流計數的儲存（記憶體），
-   * 需求單資料庫另以回應欄位 ticketStore 回報。
-   * @returns {Promise<object>} observedAt、pollSeconds、runtime、ticketStore、ai、users、login 與 http。
+   * 需求單資料庫另以回應欄位 ticketStore 回報。自動生成的租約鍵為 `draft:<userID>`，ai.active 含這類租約，draft.active 只計這類租約。
+   * @returns {Promise<object>} observedAt、pollSeconds、runtime、ticketStore、ai、draft、users（含 draft）、login 與 http。
    */
   return async function metrics() {
     const ticketSummary = await ticketStoreSummary(tickets);
@@ -53,16 +55,25 @@ export function createAdminMetrics({ store = limitStore, accounts = accountServi
     const { day, resetAt } = taipeiDay(now);
     const current = state.day === day;
     let active = 0;
-    for (const lease of Object.values(state.leases ?? {})) if (lease.until > now) active += 1;
+    let draftActive = 0;
+    for (const [key, lease] of Object.entries(state.leases ?? {})) {
+      if (lease.until <= now) continue;
+      active += 1;
+      draftActive += Number(key.startsWith('draft:'));
+    }
     const users = [];
     for (const account of accounts.list()) {
       if (account.role !== 'USER') continue;
       const used = current ? state.users?.[account.userID] ?? 0 : 0;
       const lease = state.leases?.[account.userID];
+      const draftUsed = current ? state.draft?.users?.[account.userID] ?? 0 : 0;
+      const draftLease = state.leases?.[`draft:${account.userID}`];
       users.push({ username: account.username, userID: account.userID, department: account.department,
         used, remaining: Math.max(0, config.userDailyLimit - used), dailyLimit: config.userDailyLimit,
         cooldownSeconds: Math.max(0, Math.ceil(((state.cooldowns?.[account.userID] ?? 0) - now) / 1000)),
-        inProgress: Boolean(lease && lease.until > now) });
+        inProgress: Boolean(lease && lease.until > now),
+        draft: { used: draftUsed, remaining: Math.max(0, config.draftUserDailyLimit - draftUsed), dailyLimit: config.draftUserDailyLimit,
+          inProgress: Boolean(draftLease && draftLease.until > now) } });
     }
     const login = {
       ip: { limit: config.loginFailureLimit, windowSeconds: config.loginWindowSeconds, activeKeys: 0, atLimitKeys: 0, failures: 0 },
@@ -78,6 +89,7 @@ export function createAdminMetrics({ store = limitStore, accounts = accountServi
       bucket.atLimitKeys += Number(entry.count >= bucket.limit);
     }
     const used = current ? state.total ?? 0 : 0;
+    const draftUsed = current ? state.draft?.total ?? 0 : 0;
     const status = tasks.status();
     return {
       observedAt: new Date(now).toISOString(), pollSeconds: MONITOR_POLICY.pollSeconds,
@@ -87,6 +99,8 @@ export function createAdminMetrics({ store = limitStore, accounts = accountServi
       ai: { day, resetAt: new Date(resetAt).toISOString(), used, remaining: Math.max(0, config.globalDailyLimit - used),
         dailyLimit: config.globalDailyLimit, userDailyLimit: config.userDailyLimit, active, concurrencyLimit: config.globalConcurrency,
         userConcurrencyLimit: 1, cooldownSeconds: config.chatCooldownSeconds },
+      draft: { used: draftUsed, remaining: Math.max(0, config.draftGlobalDailyLimit - draftUsed), dailyLimit: config.draftGlobalDailyLimit,
+        userDailyLimit: config.draftUserDailyLimit, active: draftActive },
       users, login, http: rates(now), monitoring: MONITOR_POLICY,
     };
   };

@@ -246,7 +246,7 @@ function fakeAssistant(name, outcomes, time, elapsed = 10) {
 
 /**
  * 驗證自動生成的備援切換：
- * 1. 有備援時主要供應商期限 10 秒、備援 15 秒；沒有備援時主要供應商使用 60 秒；
+ * 1. 有備援時主要供應商期限 30 秒、備援 15 秒（合計在前端 70 秒等待上限內）；沒有備援時主要供應商使用 60 秒；
  * 2. Gemini 這回合不論是限流、上游錯誤（含 503 過載、404）、回應格式異常或逾時，同一個請求都改由 Claude 處理，使用者拿到 Claude 的結果；
  * 3. 切換後 60 秒內的分類與填寫直接交給 Claude，冷卻結束後重新先試 Gemini；
  * 4. 不是 AI 的錯誤（例如資料庫無法讀取，沒有 draftReason）不切換、原樣拋出；Claude 也失敗時拋出 Claude 的錯誤。
@@ -270,6 +270,7 @@ async function draftFallback() {
     assert.equal((await assistant.fill({})).model, 'claude', `${failure.draftReason} ${failure.upstreamStatus ?? ''} 時改用 Claude`);
   }
   assert.deepEqual(built.slice(0, 2), [['gemini', PRIMARY_DRAFT_TIMEOUT_MS], ['anthropic', FALLBACK_DRAFT_TIMEOUT_MS]]);
+  assert.deepEqual([PRIMARY_DRAFT_TIMEOUT_MS, FALLBACK_DRAFT_TIMEOUT_MS], [30000, 15000], '主要 30 秒（2026-11-14 放寬）、備援 15 秒');
   assert.equal(PRIMARY_DRAFT_TIMEOUT_MS + FALLBACK_DRAFT_TIMEOUT_MS < 70000, true, '兩段加起來在前端 70 秒等待上限內');
 
   const pair = { gemini: fakeAssistant('gemini', [{ draftReason: 'AI_INVALID_RESPONSE' }, 'ok'], time), claude: fakeAssistant('claude', [], time) };
