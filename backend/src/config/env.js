@@ -97,6 +97,12 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
   const ticketsFile = environment.TICKETS_FILE?.trim() || fileURLToPath(new URL('../../storage/tickets.json', import.meta.url));
   const demoPassword = environment.DEMO_PASSWORD;
   if (typeof demoPassword !== 'string' || !demoPassword.trim()) throw new Error('缺少必要環境參數：DEMO_PASSWORD');
+  // 外部服務連接（Google 行事曆）的公開網址：使用者瀏覽器看到的前端根網址（例如 https://example.com/helpdesk），Google 授權完成後回到這裡；
+  // 選填，留空時依網站來源推導，規則與前端 src/config.js 相同：前端開發伺服器 http://localhost:5173（CORS_ORIGIN 沒填時也是它）直接用來源，
+  // 其他來源一律加 /helpdesk（Caddy 的子路徑；Docker 本機測試 http://localhost:8080 與正式網域都是）；不接受結尾斜線以外的路徑參數與查詢字串
+  const siteOrigin = (corsOrigin || 'http://localhost:5173').replace(/\/+$/, '');
+  const publicAppUrl = (environment.PUBLIC_APP_URL?.trim() || (/^https?:\/\/localhost:5173$/.test(siteOrigin) ? siteOrigin : `${siteOrigin}/helpdesk`)).replace(/\/+$/, '');
+  if (publicAppUrl && !/^https?:\/\/[^\s?#]+$/.test(publicAppUrl)) throw new Error('PUBLIC_APP_URL 必須是 http 或 https 網址，不含查詢字串');
 
   /**
    * 讀取正整數限制參數，拒絕無效值以防啟動後保護失效。
@@ -119,7 +125,7 @@ export function loadEnv({ environment = process.env, envFile = defaultEnvFile } 
 
   return Object.freeze({
     authSecret, originVerifySecret, limitStore, adminPassword, shutdownTimeoutMs,
-    demoPassword, databaseFile, ticketsFile,
+    demoPassword, databaseFile, ticketsFile, publicAppUrl,
     authTtlSeconds: positive('AUTH_TTL_SECONDS', 7200),
     chatCooldownSeconds: positive('CHAT_COOLDOWN_SECONDS', 10),
     userDailyLimit: positive('USER_DAILY_LIMIT', 30),

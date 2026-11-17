@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "connectors": [
+    {
+      "id": "google_calendar",
+      "name": "Google 行事曆",
+      "provider": "google",
+      "status": "available",
+      "description": "讓助理在你同意的範圍內查你的 Google 行事曆，幫你找空檔、避開忙碌時間",
+      "never": ["不會新增、修改或刪除行程", "不會讀參加者、附件與行程說明"],
+      "connect_hint": "按下連接後會開啟 Google 的同意畫面；若看到「這個應用程式未經 Google 驗證」，請按「進階」再按「前往」繼續",
+      "account_page": "Google 帳戶的「第三方存取權」頁面",
+      "levels": [
+        {
+          "id": "basic",
+          "name": "基本",
+          "summary": "只看忙碌時段",
+          "scopes": ["openid", "email", "https://www.googleapis.com/auth/calendar.freebusy"],
+          "reads": ["你在查詢期間的忙碌時段（只有開始與結束時間）"],
+          "tools": ["calendar_busy"]
+        },
+        {
+          "id": "advanced",
+          "name": "進階",
+          "summary": "再加行程標題",
+          "scopes": ["openid", "email", "https://www.googleapis.com/auth/calendar.freebusy", "https://www.googleapis.com/auth/calendar.events.readonly"],
+          "reads": ["你在查詢期間的忙碌時段", "行程標題（只用來判斷哪場會議比較重要）"],
+          "tools": ["calendar_busy", "calendar_events"]
+        }
+      ]
+    },
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "provider": "google",
+      "status": "planned",
+      "description": "規劃中：之後讓助理查與請假期間相關的信件主旨"
+    },
+    {
+      "id": "microsoft_365",
+      "name": "Microsoft 365",
+      "provider": "microsoft",
+      "status": "planned",
+      "description": "規劃中：之後支援 Outlook 行事曆與 Teams 會議"
+    }
+  ]
+}

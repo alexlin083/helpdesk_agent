@@ -3,6 +3,9 @@ import { DEFAULT_TIMEZONE_OFFSET, localToday } from '../../utils/dates.js';
 import { approvalFailure, evaluateForm, labelsOf, parseFormInput, renderContent } from './evaluator.js';
 import { isPlainObject } from './fieldTypes.js';
 
+// 核准時的模擬通知：歷程事件名稱與記錄者（系統身分，帳號格式一定有「.」，不會和任何帳號相同）
+export const NOTIFIED_EVENT = 'NOTIFIED';
+const SYSTEM_ACTOR = 'system';
 const DEFAULT_SELF_APPROVAL = '不能簽核自己提出的需求單';
 
 /**
@@ -123,6 +126,24 @@ export function storedForm(type, evaluation) {
  */
 export function ticketTypeId(ticket) {
   return ticket.form?.id ?? ticket.request_type?.id ?? null;
+}
+
+/**
+ * 核准時依需求類型的 workflow.notify 組出一筆模擬通知的歷程（不呼叫外部系統，只代表「已通知」，不寫金額或扣薪結論）：
+ * 有設定 when 時只在欄位值符合時寫；歷程已有通知時不再寫（每張單最多一筆）；記錄者是系統，不冒用核准人
+ * @param {object} options 參數
+ * @param {object} options.types 需求類型目錄
+ * @param {object} options.ticket 需求單複本（已套用核准）
+ * @param {string} options.now 時間 ISO 字串
+ * @returns {object|null} 要加進歷程的一筆；不用通知時 null
+ */
+export function approvalNotice({ types, ticket, now }) {
+  const typeId = ticketTypeId(ticket);
+  const notify = typeId ? types.find(typeId)?.workflow.notify : null;
+  if (!notify) return null;
+  if (ticket.history.some(/** 已有通知 @param {{event?: string}} item 歷程 @returns {boolean} 是時 true */ (item) => item?.event === NOTIFIED_EVENT)) return null;
+  if (notify.when && !notify.when.values.includes(ticket.form?.fields?.[notify.when.field])) return null;
+  return { at: now, event: NOTIFIED_EVENT, by_user_id: SYSTEM_ACTOR, by_username: SYSTEM_ACTOR, target: notify.target, comment: `已通知${notify.target}（模擬）`, simulated: true };
 }
 
 /**

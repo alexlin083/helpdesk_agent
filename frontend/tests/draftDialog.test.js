@@ -7,21 +7,19 @@ import { TicketServiceError } from '../src/services/ticketService.js';
 import { leaveResponse, completeLeaveResponse, generalResponse, equipmentResponse, deferred, tick, GREETING, PROMPT, RENDERED, HR, IT, GA, FILLED_LEAVE_VALUES, LEAVE_SUMMARY, LEAVE_TYPE } from './helpers/draftFixtures.js';
 
 /**
- * 建立「自動生成」視窗與草稿服務替身。responder 依請求回傳後端 JSON（或 Promise），替身會經過真實的 normalizeDraftResponse 整理。
+ * 建立助理對話區與草稿服務替身。responder 依請求回傳後端 JSON（或 Promise），替身會經過真實的 normalizeDraftResponse 整理。
  * @param {object} [options={}] 設定。
  * @param {Function} [options.responder] (input, callIndex) => 回應 JSON、Promise 或拋出錯誤。
- * @param {string} [options.subject='我要請假'] 頁面主題。
+ * @param {string} [options.subject='我要請假'] 使用者對助理說的第一句話（會當成主題）。
  * @param {string} [options.content=''] 頁面需求內容。
  * @param {() => number} [options.now=Date.now] 日期時間選擇器使用的目前時間。
- * @returns {object} doc、win、nodes、page（主題、內容、套用紀錄）、calls（請求紀錄）與 dialog 控制器。
+ * @returns {object} doc、win、nodes、page（第一句話、內容、套用紀錄）、calls（請求紀錄）、dialog 控制器與 begin（送出第一句話）。
  */
 function mount({ responder = defaultResponder, subject = '我要請假', content = '', now = Date.now } = {}) {
   const doc = createFakeDocument();
   globalThis.document = doc;
   const win = createFakeWindow();
   const { draftNodes: nodes } = buildDraftDialogDom(doc, doc.body);
-  const trigger = doc.createElement('button');
-  doc.body.append(trigger);
   const page = { subject, content, applied: [], logins: 0 };
   const calls = [];
   /**
@@ -33,17 +31,20 @@ function mount({ responder = defaultResponder, subject = '我要請假', content
     calls.push(structuredClone(input));
     return normalizeDraftResponse(await responder(input, calls.length - 1));
   }
-  /** 取得頁面主題。@returns {string} 主題。 */
-  function getSubject() { return page.subject; }
   /** 取得頁面需求內容。@returns {string} 需求內容。 */
   function getContent() { return page.content; }
   /** 記錄套用結果。@param {object} applied 套用結果。@returns {void} */
   function onApply(applied) { page.applied.push(applied); page.content = applied.content; }
   /** 記錄需要重新登入。@returns {void} */
   function onLoginRequired() { page.logins += 1; }
-  const dialog = createDraftDialog({ ...nodes, trigger }, { user: { username: 'tina.test' }, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs: 0, now });
-  return { doc, win, nodes, trigger, page, calls, dialog };
+  const dialog = createDraftDialog(nodes, { user: { username: 'tina.test' }, requestDraft, getContent, onApply, onLoginRequired, win, debounceMs: 0, now });
+  /** 把 page.subject 當第一句話送出 @returns {Promise<boolean>} 是否取得判斷結果 */
+  const begin = () => dialog.start(page.subject);
+  return { doc, win, nodes, page, calls, dialog, begin };
 }
+
+// 前端問候（頁面一打開就有，不呼叫後端）
+const LOCAL_GREETING = DRAFT_TEXT.greeting.replace('{username}', 'tina.test');
 
 /**
  * 預設的後端替身：第一次呼叫回問候，之後回目前面板的驗證結果（沿用送出的欄位值）。
@@ -68,11 +69,18 @@ async function flush(dialog) {
 }
 
 /**
+ * 取出對話區從後端第一次回覆開始的泡泡（略過前端問候與使用者的第一句話，這兩則由「開始」的測試另外檢查）。
+ * @param {object} nodes 對話框節點。
+ * @returns {Array<[string, string]>} [角色, 文字]。
+ */
+function bubbles(nodes) { return allBubbles(nodes).slice(2); }
+
+/**
  * 取出對話區每則泡泡的角色類別與文字。
  * @param {object} nodes 對話框節點。
  * @returns {Array<[string, string]>} [角色, 文字]。
  */
-function bubbles(nodes) {
+function allBubbles(nodes) {
   /**
    * 整理一則泡泡。
    * @param {object} bubble 泡泡元素。
@@ -201,19 +209,23 @@ function cleanup() { delete globalThis.document; }
 test.afterEach(cleanup);
 
 /**
- * 驗證開啟時立即只帶主題請助理判斷：等待中顯示「整理中…」並停用送出；回來後問候語是第一則助理訊息、接著是待補清單，
- * 面板依類型定義顯示欄位（self 唯讀）與帳號候選（不可選的停用並附原因）；部門由類型固定時不顯示處理部門欄位；不顯示判斷結果、預覽與指定處理人，Apply 停用。
+ * 驗證一開始只有前端問候、不呼叫後端，送出鈕可以按；第一句話當主題請助理判斷：等待中顯示「整理中…」並停用送出；回來後問候語接在第一句話之後、再來是待補清單，
+ * 第一句話與問候都進對話紀錄；面板依類型定義顯示欄位（self 唯讀）與帳號候選（不可選的停用並附原因）；部門由類型固定時不顯示處理部門欄位；
+ * 不顯示判斷結果、預覽與指定處理人，套用按鈕停用。
  * @returns {Promise<void>}
  */
 async function openGreets() {
   const gate = deferred();
   /** 第一次呼叫等待測試放行。@returns {Promise<object>} 回應。 */
   function responder() { return gate.promise; }
-  const { doc, nodes, calls, dialog } = mount({ responder });
+  const { nodes, calls, dialog, begin } = mount({ responder });
+  assert.deepEqual(allBubbles(nodes), [['assistant', LOCAL_GREETING]], '一開始只有前端問候');
+  assert.deepEqual(calls, [], '還沒說話前不呼叫後端');
+  assert.equal(nodes.send.disabled, false, '第一句話可以直接送出');
+  assert.equal(nodes.empty.hidden, false, '面板先顯示還沒開始的說明');
   assert.equal(nodes.departmentField.hidden, true, '判斷中不顯示處理部門');
-  const opening = dialog.open();
-  assert.equal(nodes.dialog.open, true);
-  assert.equal(doc.activeElement, nodes.message, '開啟後焦點在訊息輸入框');
+  const opening = begin();
+  assert.deepEqual(allBubbles(nodes), [['assistant', LOCAL_GREETING], ['user', '我要請假']]);
   assert.deepEqual(calls, [{ subject: '我要請假' }]);
   assert.equal(nodes.typing.hidden, false);
   assert.equal(nodes.typing.textContent, '整理中…');
@@ -224,7 +236,10 @@ async function openGreets() {
   await flush(dialog);
   assert.equal(nodes.typing.hidden, true);
   assert.equal(nodes.send.disabled, false);
+  assert.equal(calls.length, 1, '常見需求按鈕（start）只判斷類型，不另外請 AI 回答這句話');
   assert.deepEqual(bubbles(nodes), [['assistant', GREETING], ['checklist', PROMPT]]);
+  assert.deepEqual(dialog.state.history, [{ role: 'user', text: '我要請假' }, { role: 'assistant', text: GREETING }], '第一句話與問候都進對話紀錄');
+  assert.equal(nodes.empty.hidden, true, '有需求類型後收起還沒開始的說明');
   assert.equal(nodes.departmentField.hidden, true, '部門由類型固定時不顯示處理部門欄位');
   assert.equal(dialog.state.departmentId, HR.id, '送達部門仍依類型記錄');
   assert.deepEqual(nodes.fieldList.children.map(dataKeyOf), ['applicant', 'leave_type', 'start_at', 'end_at', 'agent', 'note']);
@@ -254,10 +269,110 @@ async function openGreets() {
   assert.equal(nodes.summaries.hidden, true);
   assert.equal(nodes.apply.disabled, true);
 }
-test('開啟時只帶主題取得問候、待補清單與類型欄位', openGreets);
+test('先問候；第一句話當主題取得問候、待補清單與類型欄位', openGreets);
+
+// 打字送出的第一句話與 AI 對它的回答（測試用虛構文字）
+const FIRST_QUESTION = '我這週有適合請假的時段?';
+const FIRST_ANSWER = '這週三下午與週五上午你的行事曆沒有安排，可以考慮這兩段';
+const FIRST_PROMPT = '還需要：假別、代理人';
 
 /**
- * 驗證對話送出：本文帶訊息、先前的對話紀錄與面板狀態（type_id）；AI 填好的欄位標示 AI；完成後以通用清單顯示後端的計算結果與摘要、整理好的內容，Apply 套用並關閉視窗。
+ * 驗證打字送出的第一句話：判斷完類型後不顯示問候語，接著把同一句話當第一則對話送出（不帶先前的紀錄，帶判斷後的面板狀態），由 AI 直接回答；
+ * 兩次請求之間一直顯示「整理中…」並停用送出；回答後列出這次結果的待補清單，對話紀錄是第一句話與回答，之後的對話接著帶這兩則
+ * @returns {Promise<void>}
+ */
+async function typedFirstAnswered() {
+  const answer = deferred();
+  /** 判斷類型時回問候，對話等待測試放行 @param {object} input 請求 @returns {object|Promise<object>} 回應 */
+  function responder(input) { return input.state ? answer.promise : leaveResponse(); }
+  const { nodes, calls, dialog } = mount({ responder });
+  const sending = say(nodes, FIRST_QUESTION);
+  await tick();
+  assert.deepEqual(calls, [{ subject: FIRST_QUESTION }, {
+    subject: FIRST_QUESTION, message: FIRST_QUESTION, history: [],
+    state: { type_id: 'leave', department_id: HR.id, handler_id: null, intent: '請假申請', fields: { leave_type: '', start_at: '', end_at: '', agent: '', note: '' }, locked: [] },
+  }], '判斷完類型後接著把同一句話當第一則對話送出');
+  assert.deepEqual(bubbles(nodes), [], '等 AI 回答時不顯示固定問候語');
+  assert.equal(nodes.typing.hidden, false);
+  assert.equal(nodes.send.disabled, true, '兩次請求之間不能再送訊息');
+  answer.resolve(leaveResponse({ reply: FIRST_ANSWER, prompt: FIRST_PROMPT }));
+  await sending;
+  await flush(dialog);
+  assert.equal(nodes.typing.hidden, true);
+  assert.equal(nodes.send.disabled, false);
+  assert.deepEqual(bubbles(nodes), [['assistant', FIRST_ANSWER], ['checklist', FIRST_PROMPT]], '直接回答第一句話，再列這次的待補清單');
+  assert.deepEqual(dialog.state.history, [{ role: 'user', text: FIRST_QUESTION }, { role: 'assistant', text: FIRST_ANSWER }]);
+  assert.equal(calls.length, 2);
+  await say(nodes, '週三下午好了');
+  assert.deepEqual(calls[2].history, [{ role: 'user', text: FIRST_QUESTION }, { role: 'assistant', text: FIRST_ANSWER }], '之後的對話帶第一句話與回答');
+}
+test('打字送出的第一句話：判斷類型後直接由 AI 回答，不再顯示固定問候語', typedFirstAnswered);
+
+/**
+ * 驗證打字送出的第一句話在 AI 回答不了時：
+ * - 對話請求失敗：補上問候語與判斷時的待補清單，再顯示錯誤；第一句話不標未送達、不回到還沒開始；
+ * - 對話回覆 AI 無法使用：先補問候語，再顯示後端的說明與這次的待補清單；
+ * - 判斷類型時 AI 就無法使用：照原本顯示問候語與說明，不再送第一則對話；
+ * - 等回答時重新開始：回來的結果不採用
+ * @returns {Promise<void>}
+ */
+async function typedFirstFallbacks() {
+  /** 對話一律失敗 @param {object} input 請求 @returns {object} 回應 @throws {TicketServiceError} 對話時拋出 */
+  function failing(input) {
+    if (input.state) throw new TicketServiceError('系統暫時忙碌，請稍後再試', { status: 503, code: 'AI_UNAVAILABLE' });
+    return leaveResponse();
+  }
+  let mounted = mount({ responder: failing });
+  await say(mounted.nodes, FIRST_QUESTION);
+  await flush(mounted.dialog);
+  assert.deepEqual(bubbles(mounted.nodes), [['assistant', GREETING], ['checklist', PROMPT], ['system', `系統暫時忙碌，請稍後再試\n${DRAFT_TEXT.manualHint}`]]);
+  assert.equal(mounted.nodes.log.children[1].classList.contains('is-undelivered'), false, '類型已判斷，第一句話不算未送達');
+  assert.equal(mounted.dialog.state.started, true);
+  assert.equal(mounted.nodes.message.value, '');
+  assert.deepEqual(mounted.dialog.state.history, [{ role: 'user', text: FIRST_QUESTION }, { role: 'assistant', text: GREETING }]);
+  cleanup();
+
+  const timeout = '這次 AI 回應逾時（測試），請直接填寫右側欄位';
+  /** 對話回 AI 無法使用 @param {object} input 請求 @returns {object} 回應 */
+  function unavailableChat(input) {
+    if (!input.state) return leaveResponse();
+    return leaveResponse({ ai_available: false, ai_error: { code: 'AI_TIMEOUT', message: timeout }, reply: timeout, prompt: FIRST_PROMPT });
+  }
+  mounted = mount({ responder: unavailableChat });
+  await say(mounted.nodes, FIRST_QUESTION);
+  await flush(mounted.dialog);
+  assert.deepEqual(bubbles(mounted.nodes), [['assistant', GREETING], ['assistant', timeout], ['checklist', FIRST_PROMPT]]);
+  cleanup();
+
+  const notice = '目前 AI 助手尚未啟用，請直接在右側欄位填寫或選擇';
+  /** 判斷類型時 AI 就無法使用 @returns {object} 回應 */
+  function unavailableClassify() { return leaveResponse({ ai_available: false, ai_error: { code: 'AI_UNAVAILABLE', message: notice }, reply: `${GREETING}\n${notice}` }); }
+  mounted = mount({ responder: unavailableClassify });
+  await say(mounted.nodes, FIRST_QUESTION);
+  await flush(mounted.dialog);
+  assert.equal(mounted.calls.length, 1, 'AI 無法使用時不再送第一則對話');
+  assert.deepEqual(bubbles(mounted.nodes), [['assistant', `${GREETING}\n${notice}`], ['checklist', PROMPT]]);
+  cleanup();
+
+  const late = deferred();
+  /** 對話等待測試放行 @param {object} input 請求 @returns {object|Promise<object>} 回應 */
+  function slowChat(input) { return input.state ? late.promise : leaveResponse(); }
+  mounted = mount({ responder: slowChat });
+  const sending = say(mounted.nodes, FIRST_QUESTION);
+  await tick();
+  mounted.dialog.reset();
+  late.resolve(leaveResponse({ reply: FIRST_ANSWER }));
+  await sending;
+  await flush(mounted.dialog);
+  assert.deepEqual(allBubbles(mounted.nodes), [['assistant', LOCAL_GREETING]], '重新開始後不採用回來的回答');
+  assert.equal(mounted.nodes.typing.hidden, true);
+  assert.equal(mounted.nodes.send.disabled, false);
+}
+test('打字送出的第一句話 AI 回答不了時補上問候語', typedFirstFallbacks);
+
+/**
+ * 驗證對話送出：本文帶訊息、先前的對話紀錄（含第一句話）與面板狀態（type_id）；AI 填好的欄位標示 AI；完成後以通用清單顯示後端的計算結果與摘要、整理好的內容，
+ * 套用時把 AI 整理的需求摘要（intent）當主題一起交給頁面，不是第一句話，對話可以繼續
  * @returns {Promise<void>}
  */
 async function chatCompletes() {
@@ -266,13 +381,13 @@ async function chatCompletes() {
    * @param {object} input 請求。
    * @returns {object} 後端 JSON。
    */
-  function responder(input) { return input.message ? completeLeaveResponse() : leaveResponse(); }
-  const { doc, nodes, trigger, page, calls, dialog } = mount({ responder });
-  await dialog.open();
+  function responder(input) { return input.message ? completeLeaveResponse({ intent: '12/1 請事假一天' }) : leaveResponse(); }
+  const { nodes, page, calls, dialog, begin } = mount({ responder });
+  await begin();
   await say(nodes, ' 12/1 九點半到五點半請事假，代理人 kevin.test ');
   await flush(dialog);
   assert.deepEqual(calls[1], {
-    subject: '我要請假', message: '12/1 九點半到五點半請事假，代理人 kevin.test', history: [{ role: 'assistant', text: GREETING }],
+    subject: '我要請假', message: '12/1 九點半到五點半請事假，代理人 kevin.test', history: [{ role: 'user', text: '我要請假' }, { role: 'assistant', text: GREETING }],
     state: { type_id: 'leave', department_id: HR.id, handler_id: null, intent: '請假申請', fields: { leave_type: '', start_at: '', end_at: '', agent: '', note: '' }, locked: [] },
   });
   assert.equal(nodes.message.value, '');
@@ -288,15 +403,62 @@ async function chatCompletes() {
   assert.equal(nodes.apply.disabled, false);
   await nodes.apply.click();
   assert.deepEqual(page.applied, [{ content: RENDERED, draft: {
+    subject: '12/1 請事假一天',
     form: { id: 'leave', version: 2, fields: { leave_type: '事假', start_at: '2026-12-01T09:30', end_at: '2026-12-01T17:30', agent: 'kevin.test', note: '' } },
     formName: '請假申請', department: HR, departmentFixed: true, handler: null, rendered: RENDERED,
   } }]);
-  assert.equal(nodes.dialog.open, false);
-  assert.equal(doc.activeElement, trigger, '關閉後焦點回到「自動生成」');
   await say(nodes, '再問一次');
-  assert.deepEqual(calls[2].history.map(roleOf), ['assistant', 'user', 'assistant'], '對話紀錄依序累積');
+  assert.deepEqual(calls[2].history.map(roleOf), ['user', 'assistant', 'user', 'assistant'], '對話紀錄依序累積，套用後仍可以繼續對話');
 }
 test('對話送出後由 AI 整理欄位並套用', chatCompletes);
+
+/**
+ * 驗證主題只用 AI 寫的摘要：AI 一直無法使用時，後端的 intent 是類型名稱，主題改用第一句話；
+ * AI 寫過摘要後，之後的回合 AI 無法使用，主題仍是那次的摘要；重新開始後不沿用上一段對話的摘要
+ * @returns {Promise<void>}
+ */
+async function subjectNeedsAi() {
+  const unavailable = { ai_available: false, ai_error: { code: 'AI_UNAVAILABLE', message: 'AI 暫時無法使用（測試）' }, intent: '請假申請' };
+  /**
+   * 一律回 AI 無法使用；聊天回合回完成的請假內容
+   * @param {object} input 請求
+   * @returns {object} 後端 JSON
+   */
+  function offline(input) { return input.message ? completeLeaveResponse({ ...unavailable, reply: '' }) : leaveResponse({ ...unavailable, reply: GREETING }); }
+  const first = mount({ responder: offline });
+  await first.begin();
+  await say(first.nodes, '12/1 九點半到五點半請事假');
+  await flush(first.dialog);
+  await first.nodes.apply.click();
+  assert.equal(first.page.applied[0].draft.subject, '我要請假', 'AI 無法使用時主題是第一句話，不是類型名稱');
+  /**
+   * 第一次聊天由 AI 寫摘要，之後（含重新開始後的新對話）AI 都無法使用
+   * @param {object} input 請求
+   * @param {number} index 第幾次呼叫（0 起算）
+   * @returns {object} 後端 JSON
+   */
+  function laterOffline(input, index) {
+    if (!input.state) return index === 0 ? leaveResponse() : leaveResponse({ ...unavailable, reply: GREETING });
+    return index === 1 ? completeLeaveResponse({ intent: '12/1 請事假一天' }) : completeLeaveResponse({ ...unavailable, reply: '' });
+  }
+  const second = mount({ responder: laterOffline });
+  await second.begin();
+  await say(second.nodes, '12/1 九點半到五點半請事假');
+  await flush(second.dialog);
+  await say(second.nodes, '代理人改 kevin.test');
+  await flush(second.dialog);
+  await second.nodes.apply.click();
+  assert.equal(second.page.applied[0].draft.subject, '12/1 請事假一天', 'AI 寫過的摘要不被之後 AI 無法使用的回合換成類型名稱');
+  second.dialog.reset();
+  await second.dialog.start('改請 12/5 病假');
+  await flush(second.dialog);
+  await say(second.nodes, '12/5 全天');
+  await flush(second.dialog);
+  await second.nodes.apply.click();
+  await second.nodes.replace.click();
+  assert.equal(second.page.applied[1].draft.subject, '改請 12/5 病假', '重新開始後不沿用上一段對話的 AI 摘要');
+}
+test('主題只用 AI 寫的摘要，AI 沒寫過時用第一句話', subjectNeedsAi);
 
 /**
  * 驗證手動修改欄位：標示手動並鎖定、約 400 毫秒（測試為 0）後只送面板狀態驗證（不帶訊息）；日期時間只保留到分鐘；之後 AI 不會覆寫鎖定的欄位。
@@ -313,8 +475,8 @@ async function manualEditLocks() {
     if (input.message) return leaveResponse({ values: { applicant: 'tina.test', ...input.state.fields, agent: 'lisa.test', leave_type: '病假' }, sources: { agent: 'ai', leave_type: 'ai' }, reply: '已更新' });
     return leaveResponse({ values: { applicant: 'tina.test', ...input.state.fields }, sources: { agent: 'user', start_at: 'user' }, missing: ['leave_type', 'end_at'], reply: '' });
   }
-  const { nodes, calls, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder });
+  await begin();
   await edit(nodes, 'agent', 'kevin.test');
   assert.equal(field(nodes, 'agent').status.textContent, DRAFT_TEXT.status.checking);
   assert.equal(field(nodes, 'agent').source.textContent, '手動');
@@ -355,8 +517,8 @@ async function staleResults() {
     gates.push({ input, gate });
     return gate.promise;
   }
-  const { nodes, calls, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder });
+  await begin();
   await edit(nodes, 'leave_type', '事假');
   await tick();
   assert.equal(gates.length, 1);
@@ -393,6 +555,7 @@ test('過期的驗證與較晚回來的 AI 回覆', staleResults);
 /**
  * 驗證沒有固定部門的類型（模擬一般需求）：只有「需求說明」欄位、處理部門欄位顯示且由使用者從下拉選單選擇（沒有部門時提示），改部門後驗證；
  * 送出的 handler_id 一律為 null；完成後套用時帶類型表單、departmentFixed 為 false、部門，處理人為 null。
+ * 主題是第一次 AI 回應寫的摘要；之後驗證回應的 intent 是類型名稱，不改主題
  * @returns {Promise<void>}
  */
 async function generalRequest() {
@@ -402,7 +565,7 @@ async function generalRequest() {
    * @returns {object} 後端 JSON。
    */
   function responder(input) {
-    if (!input.state) return generalResponse();
+    if (!input.state) return generalResponse({ intent: '筆電開機很慢' });
     const department = input.state.department_id === IT.id ? IT : null;
     const description = input.state.fields.description ?? '';
     const complete = Boolean(department && description);
@@ -410,8 +573,8 @@ async function generalRequest() {
       missing: [...(description ? [] : ['description']), ...(department ? [] : ['department_id'])], complete, reply: '',
       rendered_content: complete ? `[需求說明]: ${description}\n[處理部門]: ${department.name}` : null });
   }
-  const { nodes, page, calls, dialog } = mount({ responder, subject: '電腦很慢' });
-  await dialog.open();
+  const { nodes, page, calls, dialog, begin } = mount({ responder, subject: '電腦很慢' });
+  await begin();
   await flush(dialog);
   assert.equal(nodes.departmentField.hidden, false, '沒有固定部門時顯示處理部門欄位');
   assert.deepEqual(nodes.departmentSelect.children.map(textOf), ['請選擇處理部門', '測試人資部', '測試資訊部', '測試總務組']);
@@ -431,9 +594,8 @@ async function generalRequest() {
     locked: ['description', 'department_id'] }, '手動選過的部門一併鎖定，AI 不得改寫；不送指定處理人');
   assert.equal(nodes.apply.disabled, false);
   await nodes.apply.click();
-  assert.deepEqual(page.applied[0].draft, { form: { id: 'general', version: 1, fields: { description: '筆電開機要五分鐘' } }, formName: '一般需求', department: IT, departmentFixed: false, handler: null,
-    rendered: '[需求說明]: 筆電開機要五分鐘\n[處理部門]: 測試資訊部' });
-  dialog.open();
+  assert.deepEqual(page.applied[0].draft, { subject: '筆電開機很慢', form: { id: 'general', version: 1, fields: { description: '筆電開機要五分鐘' } }, formName: '一般需求', department: IT, departmentFixed: false, handler: null,
+    rendered: '[需求說明]: 筆電開機要五分鐘\n[處理部門]: 測試資訊部' }, '主題用 AI 寫的摘要，驗證回應的類型名稱不改主題');
   nodes.departmentSelect.value = HR.id;
   await nodes.departmentSelect.dispatch('change');
   assert.equal(dialog.state.departmentId, HR.id);
@@ -454,8 +616,8 @@ async function aiUnavailable() {
   function responder(input) {
     return leaveResponse({ ai_available: false, ai_error: { code: 'DAILY_QUOTA_EXCEEDED', message: '今日額度已用完（測試）' }, reply: input.message ? '已收到，請直接填寫右側欄位' : GREETING });
   }
-  const { nodes, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, dialog, begin } = mount({ responder });
+  await begin();
   await say(nodes, '請假');
   await flush(dialog);
   const roles = bubbles(nodes).map(firstOf);
@@ -471,7 +633,7 @@ async function aiUnavailable() {
 test('AI 無法使用時說明一次並保留手動填寫', aiUnavailable);
 
 /**
- * 驗證請求失敗：第一次呼叫 503 顯示訊息與重試提示、重新開啟時重試；聊天 429 限流開始倒數並把訊息標為未送達、放回輸入框且不列入對話紀錄；
+ * 驗證請求失敗：第一次呼叫 503 顯示訊息與重試提示，第一句話標為未送達並放回輸入框，重送時重試；聊天 429 限流開始倒數並把訊息標為未送達、放回輸入框且不列入對話紀錄；
  * 額度用盡不倒數；驗證失敗顯示在面板下方；401 交給頁面回登入頁；非預期錯誤只寫入主控台並顯示通用提示。
  * 倒數使用 node:test 的模擬計時器（只模擬 Date 與 setInterval，驗證用的 setTimeout 維持真實）。
  * @param {import('node:test').TestContext} context 測試情境，提供模擬計時器。
@@ -491,14 +653,17 @@ async function failures(context) {
     if (error) throw error;
     return defaultResponder(input);
   }
-  const { nodes, page, calls, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, page, calls, dialog, begin } = mount({ responder });
+  await begin();
   assert.deepEqual(bubbles(nodes), [['system', `系統暫時忙碌，請稍後再試\n${DRAFT_TEXT.retryHint}`]]);
   assert.equal(nodes.send.disabled, false, '失敗後仍可輸入訊息重試');
   assert.equal(nodes.departmentField.hidden, true, '還沒有結果時不顯示處理部門');
-  dialog.close();
-  await dialog.open();
-  assert.equal(calls.length, 2, '重新開啟時重試第一次呼叫');
+  assert.equal(nodes.message.value, '我要請假', '第一句話放回輸入框，可以直接重送');
+  assert.equal(nodes.log.children[1].classList.contains('is-undelivered'), true);
+  assert.equal(dialog.state.started, false, '回到還沒開始的狀態');
+  assert.deepEqual(dialog.state.history, []);
+  await begin();
+  assert.equal(calls.length, 2, '重送第一句話時重試第一次呼叫');
   assert.equal(calls[1].state, undefined);
   errors.push(new TicketServiceError('請求太頻繁', { status: 429, code: 'RATE_LIMITED', retryAfter: 5 }));
   await say(nodes, '明天請假');
@@ -509,7 +674,7 @@ async function failures(context) {
   assert.equal(failed.classList.contains('is-undelivered'), true);
   assert.ok(failed.textContent.includes(DRAFT_TEXT.undelivered));
   assert.equal(bubbles(nodes).at(-1)[1], `請求太頻繁\n${DRAFT_TEXT.manualHint}`);
-  assert.equal(dialog.state.history.map(roleOf).includes('user'), false, '未送達的訊息不列入對話紀錄');
+  assert.equal(dialog.state.history.some(/** 是失敗的那則 @param {{text: string}} turn 對話 @returns {boolean} 是時 true */ (turn) => turn.text === '明天請假'), false, '未送達的訊息不列入對話紀錄');
   context.mock.timers.tick(5000);
   assert.equal(nodes.send.disabled, false, '倒數結束後恢復送出');
   assert.equal(nodes.send.textContent, DRAFT_TEXT.send);
@@ -537,46 +702,49 @@ async function failures(context) {
 test('草稿請求失敗的處理', failures);
 
 /**
- * 驗證 Esc 與重新開啟：沒有輸入時直接關閉；有輸入時先詢問，取消則保留視窗；以相同主題重新開啟時接續、不再呼叫；
- * 主題變更時詢問重新開始，同意則清空對話並重新取得問候，不同意則沿用對話並在之後使用新主題。
+ * 驗證開始前後：常見需求按鈕只在送出第一句話前顯示（第一句話失敗時重新出現）；prefill 只放進輸入框、不送出；
+ * 之後的訊息都沿用第一句話當主題；重新開始後只剩問候；第一句話超過主題上限時取前段當主題，對話紀錄保留完整句子。
  * @returns {Promise<void>}
  */
-async function escapeAndReopen() {
-  const { win, nodes, page, calls, dialog } = mount();
-  await dialog.open();
-  await nodes.dialog.dispatch('cancel');
-  assert.equal(nodes.dialog.open, false);
-  assert.deepEqual(win.confirms, []);
-  await dialog.open();
-  assert.equal(calls.length, 1, '相同主題重新開啟時接續');
-  nodes.message.value = '還沒送出的訊息';
-  win.confirmAnswer = false;
-  await nodes.dialog.dispatch('cancel');
-  assert.equal(nodes.dialog.open, true);
-  assert.deepEqual(win.confirms, [DRAFT_TEXT.closeConfirm]);
-  win.confirmAnswer = true;
-  await nodes.dialog.dispatch('cancel');
-  assert.equal(nodes.dialog.open, false);
-  assert.equal(nodes.message.value, '還沒送出的訊息', '關閉後保留內容');
-  await nodes.cancel.click();
-  page.subject = '我要請特休';
-  win.confirmAnswer = false;
-  await dialog.open();
-  assert.equal(win.confirms.at(-1), DRAFT_TEXT.restartConfirm);
-  assert.equal(calls.length, 1);
+async function startersAndRestart() {
+  const errors = [new TicketServiceError('系統暫時忙碌，請稍後再試', { status: 503, code: 'AI_UNAVAILABLE' })];
+  /**
+   * 有排定的錯誤時拋出，否則回問候或驗證結果。
+   * @param {object} input 請求。
+   * @returns {object} 後端 JSON。
+   * @throws {TicketServiceError} 排定的錯誤。
+   */
+  function responder(input) {
+    const error = errors.shift();
+    if (error) throw error;
+    return defaultResponder(input);
+  }
+  const { nodes, calls, dialog, begin } = mount({ responder });
+  assert.equal(nodes.starters.hidden, false, '還沒開始時顯示常見需求');
+  dialog.prefill('補登打卡');
+  assert.equal(nodes.message.value, '補登打卡');
+  assert.equal(nodes.messageCount.textContent, '4 / 300');
+  assert.deepEqual(calls, [], '預先帶入不送出');
+  await begin();
+  assert.equal(nodes.starters.hidden, false, '第一句話失敗時常見需求重新出現');
+  await begin();
+  await flush(dialog);
+  assert.equal(nodes.starters.hidden, true, '開始後收起常見需求');
   await say(nodes, '下週一');
   await flush(dialog);
-  assert.equal(calls.at(-1).subject, '我要請特休', '沿用對話但使用新主題');
-  await nodes.close.click();
-  page.subject = '我要請病假';
-  win.confirmAnswer = true;
-  await dialog.open();
+  assert.equal(calls.at(-1).subject, '我要請假', '之後的訊息沿用第一句話當主題');
+  dialog.reset();
+  assert.deepEqual(allBubbles(nodes), [['assistant', LOCAL_GREETING]], '重新開始後只剩問候');
+  assert.equal(nodes.starters.hidden, false);
+  assert.deepEqual(dialog.state.history, []);
+  assert.equal(nodes.empty.hidden, false);
+  const long = '我'.repeat(150);
+  await dialog.start(long);
   await flush(dialog);
-  assert.deepEqual(calls.at(-1), { subject: '我要請病假' }, '重新開始時重新取得問候');
-  assert.deepEqual(bubbles(nodes), [['assistant', GREETING], ['checklist', PROMPT]]);
-  assert.equal(nodes.message.value, '');
+  assert.deepEqual(calls.at(-1), { subject: '我'.repeat(100) }, '第一句話超過主題上限時取前 100 字當主題');
+  assert.equal(dialog.state.history[0].text, long, '對話紀錄保留完整的第一句話');
 }
-test('Esc 關閉確認與重新開啟', escapeAndReopen);
+test('常見需求、預先帶入、重新開始與過長的第一句話', startersAndRestart);
 
 /**
  * 驗證 Apply：需求內容已有文字時詢問取代或附加在後，返回時焦點回到 Apply；附加後超過 2000 字時提示且不套用。
@@ -588,8 +756,8 @@ async function applyChoices() {
    * @returns {object} 後端 JSON。
    */
   function responder() { return completeLeaveResponse(); }
-  const { doc, nodes, page, dialog } = mount({ responder, content: '原本的說明' });
-  await dialog.open();
+  const { doc, nodes, page, dialog, begin } = mount({ responder, content: '原本的說明' });
+  await begin();
   await nodes.apply.click();
   assert.equal(nodes.applyChoice.hidden, false);
   assert.equal(doc.activeElement, nodes.replace);
@@ -601,17 +769,15 @@ async function applyChoices() {
   await nodes.append.click();
   assert.equal(page.applied[0].content, `原本的說明\n\n${RENDERED}`);
   page.content = '舊內容';
-  await dialog.open();
   await nodes.apply.click();
   await nodes.replace.click();
-  assert.equal(page.applied[1].content, RENDERED);
+  assert.equal(page.applied[1].content, RENDERED, '套用後面板仍在，可以再套用一次');
   page.content = 'x'.repeat(1990);
-  await dialog.open();
   await nodes.apply.click();
   await nodes.append.click();
   assert.equal(page.applied.length, 2);
   assert.equal(nodes.error.textContent, describeOverLimit(1990 + 2 + Array.from(RENDERED).length));
-  assert.equal(nodes.dialog.open, true);
+  assert.equal(nodes.applyChoice.hidden, false, '超過上限時選項留著，可以改選取代');
 }
 test('Apply 的取代、附加與字數上限', applyChoices);
 
@@ -620,8 +786,8 @@ test('Apply 的取代、附加與字數上限', applyChoices);
  * @returns {Promise<void>}
  */
 async function messageInput() {
-  const { nodes, calls, dialog } = mount();
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount();
+  await begin();
   nodes.message.value = '  ';
   await nodes.chatForm.dispatch('submit');
   assert.equal(nodes.error.textContent, DRAFT_TEXT.emptyMessage);
@@ -652,8 +818,8 @@ async function checkFailures() {
   function responder() {
     return completeLeaveResponse({ invalid: [{ key: 'leave_type', message: '假別剩餘時數不足' }], summaries: ['事假剩餘時數：1 小時 → -6 小時'] });
   }
-  const { nodes, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, dialog, begin } = mount({ responder });
+  await begin();
   await flush(dialog);
   assert.deepEqual(nodes.summaries.children.map(textOf), ['事假剩餘時數：1 小時 → -6 小時']);
   assert.equal(field(nodes, 'leave_type').status.textContent, `${DRAFT_TEXT.status.invalid}：假別剩餘時數不足`);
@@ -677,7 +843,7 @@ async function equipmentType() {
    * @returns {object} 後端 JSON。
    */
   function responder(input) {
-    if (!input.state) return equipmentResponse();
+    if (!input.state) return equipmentResponse({ intent: '申請螢幕設備' });
     const values = { applicant: 'tina.test', ...input.state.fields };
     const invalid = Number(values.quantity) > 50 ? [{ key: 'quantity', message: '數量最多 50' }] : [];
     /**
@@ -690,8 +856,8 @@ async function equipmentType() {
     const complete = !invalid.length && !missing.length;
     return equipmentResponse({ values, invalid, missing, complete, rendered_content: complete ? rendered : null, reply: '' });
   }
-  const { nodes, page, calls, dialog } = mount({ responder, subject: '申請螢幕' });
-  await dialog.open();
+  const { nodes, page, calls, dialog, begin } = mount({ responder, subject: '申請螢幕' });
+  await begin();
   await flush(dialog);
   assert.deepEqual(nodes.fieldList.children.map(dataKeyOf), ['applicant', 'item', 'quantity', 'purpose', 'needed_by', 'location']);
   assert.equal(nodes.departmentField.hidden, true);
@@ -717,7 +883,7 @@ async function equipmentType() {
   await flush(dialog);
   assert.equal(nodes.apply.disabled, false);
   await nodes.apply.click();
-  assert.deepEqual(page.applied[0].draft, { form: { id: 'equipment', version: 1, fields: { item: filled.item, quantity: '2', purpose: filled.purpose, needed_by: filled.needed_by, location: filled.location } },
+  assert.deepEqual(page.applied[0].draft, { subject: '申請螢幕設備', form: { id: 'equipment', version: 1, fields: { item: filled.item, quantity: '2', purpose: filled.purpose, needed_by: filled.needed_by, location: filled.location } },
     formName: '設備申請', department: GA, departmentFixed: true, handler: null, rendered });
 }
 test('固定部門類型依定義繪製數字與日期欄位並套用', equipmentType);
@@ -749,8 +915,8 @@ async function futureType() {
       computed: [{ key: 'days', label: '使用天數', value: 30, text: '30 天' }], summaries: ['本月剩餘名額：3 → 2'], reply: '請填寫車牌', prompt: '', ai_available: true, complete: false,
     };
   }
-  const { nodes, calls, dialog } = mount({ responder, subject: '申請停車證' });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder, subject: '申請停車證' });
+  await begin();
   await flush(dialog);
   assert.deepEqual(nodes.fieldList.children.map(dataKeyOf), ['plate', 'owner', 'backup', 'host', 'color']);
   assert.equal(field(nodes, 'plate').control.tagName, 'INPUT');
@@ -781,16 +947,16 @@ async function resetDiscards() {
   const gate = deferred();
   /** 第一次呼叫等待測試放行。@returns {Promise<object>} 回應。 */
   function responder() { return gate.promise; }
-  const { nodes, dialog } = mount({ responder });
-  const opening = dialog.open();
+  const { nodes, dialog, begin } = mount({ responder });
+  const opening = begin();
   dialog.reset();
   gate.resolve(leaveResponse());
   await opening;
   await flush(dialog);
-  assert.deepEqual(bubbles(nodes), []);
+  assert.deepEqual(allBubbles(nodes), [['assistant', LOCAL_GREETING]], '舊的回覆不採用，只剩問候');
   assert.equal(nodes.fieldList.children.length, 0);
   assert.equal(dialog.state.started, false);
-  assert.equal(nodes.send.disabled, true);
+  assert.equal(nodes.send.disabled, false, '重新開始後可以再說第一句話');
   assert.equal(nodes.typing.hidden, true);
 }
 test('重新開始後捨棄舊的結果', resetDiscards);
@@ -816,8 +982,8 @@ async function backendIntegration() {
     return leaveResponse({ ...unavailable, reply: input.message ? notice : '', values: { applicant: 'tina.test', ...input.state.fields },
       missing: ['leave_type', 'agent'], computed: [{ key: 'minutes', label: '請假時數', value: 420, text: '7 小時 0 分鐘' }], summaries: [], preview_content: preview });
   }
-  const { nodes, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, dialog, begin } = mount({ responder });
+  await begin();
   await flush(dialog);
   assert.deepEqual(bubbles(nodes).map(firstOf), ['assistant', 'checklist'], '回覆已含 AI 無法使用的說明時不另加系統提示');
   await edit(nodes, 'start_at', '2026-12-01T09:30');
@@ -852,8 +1018,8 @@ async function routingLocks() {
     const departmentId = input.state?.department_id ?? null;
     return generalResponse({ department: departmentId === IT.id ? IT : null, values: { description: input.state?.fields.description ?? '' } });
   }
-  const { nodes, calls, dialog } = mount({ responder, subject: '電腦很慢' });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder, subject: '電腦很慢' });
+  await begin();
   await flush(dialog);
   nodes.departmentSelect.value = IT.id;
   await nodes.departmentSelect.dispatch('change');
@@ -880,8 +1046,8 @@ async function aiBusyCountdown() {
   function responder(input) {
     return leaveResponse({ ai_available: false, ai_error: { code: 'SERVICE_BUSY', message: 'AI 忙碌（測試）', retry_after: 8 }, reply: input.state ? '' : GREETING });
   }
-  const { nodes, calls, dialog } = mount({ responder });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder });
+  await begin();
   await flush(dialog);
   assert.equal(nodes.send.disabled, true);
   assert.match(nodes.send.textContent, /^請等 \d+ 秒$/);
@@ -919,8 +1085,8 @@ async function periodPicker() {
     const invalid = input.state.fields.end_at.endsWith('T12:30') ? [{ key: 'end_at', message: '請假截止時間不在上班時段（測試）' }] : [];
     return leaveResponse({ type, values: { applicant: 'tina.test', ...input.state.fields }, invalid, missing: ['leave_type', 'agent'], reply: '' });
   }
-  const { nodes, calls, dialog } = mount({ responder, now: /** 固定的目前時間。@returns {number} 毫秒。 */ () => PERIOD_NOW });
-  await dialog.open();
+  const { nodes, calls, dialog, begin } = mount({ responder, now: /** 固定的目前時間。@returns {number} 毫秒。 */ () => PERIOD_NOW });
+  await begin();
   await flush(dialog);
   assert.deepEqual(nodes.fieldList.children.map(dataKeyOf), ['applicant', 'leave_type', 'start_at end_at', 'agent', 'note']);
   const period = field(nodes, 'start_at').wrapper;

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta name="description" content="企業智慧服務台的隱私權政策：連接 Google 行事曆後會讀哪些資料、怎麼使用、存在哪裡、怎麼收回">
+    <title>隱私權政策 · 企業智慧服務台</title>
+    <link rel="stylesheet" href="../../styles/base.css">
+    <link rel="stylesheet" href="../../styles/layout.css">
+    <link rel="stylesheet" href="./privacy.css">
+  </head>
+  <body class="privacy-page">
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 14.5l1.8 1.8 3.4-3.6"/></svg>
+        </span>
+        <div><p class="brand-name">企業智慧服務台</p><p class="brand-sub">需求單提案</p></div>
+      </div>
+    </header>
+
+    <main class="privacy-layout">
+      <h1>隱私權政策</h1>
+      <p class="privacy-updated">最後更新：2026-11-16</p>
+      <p>企業智慧服務台是期末專題的示範網站；這頁只談你連接 Google 行事曆之後的資料</p>
+
+      <h2>什麼時候會讀</h2>
+      <ul>
+        <li>你在「連接帳號」頁選好權限等級，並在 Google 的同意畫面按同意之後才會讀</li>
+        <li>只在你用「自動生成」填會用到行事曆的需求單時，才查你本人的行事曆；助理查不到別人的行事曆</li>
+      </ul>
+
+      <h2>會讀哪些資料</h2>
+      <ul>
+        <li>基本權限：查詢期間的忙碌時段，只有開始與結束時間</li>
+        <li>進階權限：再加行程標題，最多 60 字，看不到的控制字元會先清掉</li>
+        <li>兩種權限都會取得你的 Google 帳號 email，用來在連接帳號頁顯示你連的是哪個帳號，重新連接時判斷是不是同一個帳號</li>
+      </ul>
+      <p>網站不讀參加者、附件與行程說明，也不會新增、修改或刪除你的行程</p>
+
+      <h2>怎麼使用</h2>
+      <ul>
+        <li>查到的時段或標題會交給網站設定的 AI 服務（Google Gemini 或 Anthropic Claude），由它整理方案給你選</li>
+        <li>網站不把這些資料用在廣告，也不賣給別人</li>
+      </ul>
+
+      <h2>存在哪裡、存多久</h2>
+      <ul>
+        <li>網站的資料庫存這幾項：Google 給的長效授權（用 AES-256-GCM 加密）、你的 Google 帳號 email、權限等級與授權範圍、連接狀態、連接與更新的時間</li>
+        <li>短效的存取權杖只放在伺服器的記憶體，不寫進資料庫</li>
+        <li>查到的忙碌時段與行程標題不另外存檔，系統日誌只記查到幾筆</li>
+        <li>你採用方案、送出需求單之後，單上的內容會跟著需求單保存</li>
+        <li>連接記錄保存到你中斷連接為止</li>
+      </ul>
+
+      <h2>怎麼收回</h2>
+      <ul>
+        <li>在「連接帳號」頁按「中斷連接」：網站會向 Google 撤銷授權，並刪除這筆連接記錄</li>
+        <li>也可以到 Google 帳戶的<a href="https://myaccount.google.com/connections" rel="noopener noreferrer">第三方存取權</a>頁面收回；這樣收回時，網站資料庫裡的連接記錄要等你在連接帳號頁按「中斷連接」才會刪除</li>
+      </ul>
+
+      <h2>有問題時</h2>
+      <p>對這些資料有疑問，請聯絡發帳號給你的管理員</p>
+    </main>
+  </body>
+</html>

@@ -14,6 +14,7 @@ function hostedPaths() {
     login: 'https://example.github.io/classroom/helpdesk_agent/index.html',
     propose: 'https://example.github.io/classroom/helpdesk_agent/pages/propose/propose.html',
     tickets: 'https://example.github.io/classroom/helpdesk_agent/pages/tickets/tickets.html',
+    connections: 'https://example.github.io/classroom/helpdesk_agent/pages/connections/connections.html',
     admin: 'https://example.github.io/classroom/helpdesk_agent/pages/admin/admin.html',
   });
 }
@@ -21,7 +22,7 @@ test('頁面網址支援本機與多層託管子路徑', hostedPaths);
 
 /** 驗證搬移後 HTML 的本機樣式、腳本與導覽連結都指向存在的檔案。@returns {void} */
 function htmlResources() {
-  for (const path of ['index.html', 'pages/propose/propose.html', 'pages/admin/admin.html', 'pages/tickets/tickets.html']) {
+  for (const path of ['index.html', 'pages/propose/propose.html', 'pages/admin/admin.html', 'pages/tickets/tickets.html', 'pages/connections/connections.html', 'pages/privacy/privacy.html']) {
     const url = new URL(`../${path}`, import.meta.url);
     const html = readFileSync(url, 'utf8');
     for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {

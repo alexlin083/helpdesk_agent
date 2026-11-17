@@ -1,0 +1,12 @@
+/* 隱私權政策頁：公開頁面，不用登入、沒有腳本；頂欄沿用 layout.css，色彩沿用 base.css 的變數 */
+.privacy-layout { max-width: 760px; margin: 0 auto; padding: 48px 40px 72px; }
+.privacy-layout h1 { margin: 0 0 4px; }
+.privacy-updated { margin: 0 0 20px; color: var(--muted); font-size: 0.9rem; }
+.privacy-layout h2 { margin: 28px 0 8px; font-size: 1.15rem; }
+.privacy-layout p { margin: 0 0 10px; color: var(--ink-soft); }
+.privacy-layout ul { margin: 0 0 10px; padding-left: 1.2em; list-style: disc; color: var(--ink-soft); }
+.privacy-layout li + li { margin-top: 4px; }
+.privacy-layout a { color: var(--brown-deep); }
+@media (max-width: 760px) {
+  .privacy-layout { padding: 28px 16px 48px; }
+}

@@ -8,7 +8,7 @@ import { usageService } from '../services/usageService.js';
 import { taskTracker } from '../services/taskTracker.js';
 import { logger } from '../utils/logger.js';
 import { getRequestTypes } from '../services/requestTypes/registry.js';
-import { assertApproval, assertTransfer, parseFormSubmission, storedForm, submissionDepartment, submissionGuard, submissionHandler } from '../services/requestTypes/workflow.js';
+import { approvalNotice, assertApproval, assertTransfer, parseFormSubmission, storedForm, submissionDepartment, submissionGuard, submissionHandler } from '../services/requestTypes/workflow.js';
 
 // 自動生成對話確認部門的需求單，保存與回應使用的固定判斷依據。
 export const DRAFT_BASIS = '依 AI 對話確認送達';
@@ -433,6 +433,9 @@ export function createDecisionHandler(store = dataStore, types) {
       ticket.updated_at = now;
       ticket.decision = { by_user_id: user.userID, by_username: user.username, at: now, comment };
       ticket.history.push({ at: now, event: DECISIONS[action], by_user_id: user.userID, by_username: user.username, ...(comment ? { comment } : {}) });
+      // 核准時依需求類型的 workflow.notify 寫一筆模擬通知，和核准同一筆交易
+      const notice = action === 'APPROVE' ? approvalNotice({ types: types ?? getRequestTypes(), ticket, now }) : null;
+      if (notice) ticket.history.push(notice);
       return ticket;
     }
     const ticket = await store.update(String(req.params.id), apply);

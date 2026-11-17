@@ -121,30 +121,29 @@ export function fakeRequestDraft(responder = completeGeneralResponse, calls = []
 }
 
 /**
- * 在提出需求單頁按「自動生成」、等待草稿整理完成後按 Apply，模擬使用者套用整理好的內容。
- * 主題必須已透過 input 事件填入（「自動生成」按鈕才會啟用）；需求內容原本有文字時 Apply 只會顯示取代／附加選擇，需由呼叫端再點選。
- * @param {object} nodes buildProposeDom 回傳的頁面節點（需含 draftButton 與 draftNodes）。
- * @param {object} page initProposePage 回傳的頁面控制器（需含 draftDialog）。
- * @returns {Promise<void>} 點下 Apply 並處理完成。
+ * 在提出需求單頁對助理說第一句話（還沒開始時才送）、等草稿整理完成後按「套用到需求單」，模擬使用者套用整理好的內容
+ * 需求內容原本有文字時套用只會顯示取代／附加選擇，需由呼叫端再點選
+ * @param {object} nodes buildProposeDom 回傳的頁面節點（需含 draftNodes）
+ * @param {object} page initProposePage 回傳的頁面控制器（需含 draftDialog）
+ * @param {string} [text='我要申請'] 第一句話；主題欄空白時套用會帶入這句話
+ * @returns {Promise<void>} 點下套用並處理完成
  */
-export async function openAndApply(nodes, page) {
-  await nodes.draftButton.click();
+export async function openAndApply(nodes, page, text = '我要申請') {
+  if (!page.draftDialog.state.started) await page.draftDialog.start(text);
   await tick();
   await page.draftDialog.settled();
   await nodes.draftNodes.apply.click();
 }
 
 /**
- * 在提出需求單頁填入主題（觸發 input 事件以啟用「自動生成」按鈕），再按「自動生成」並套用，完成送出前必要的步驟。
- * @param {object} nodes buildProposeDom 回傳的頁面節點。
- * @param {object} page initProposePage 回傳的頁面控制器。
- * @param {string} subject 要填入的主題。
- * @returns {Promise<void>} 套用完成。
+ * 把主題當第一句話對助理說、等整理完成後套用；主題欄空白時會帶入這句話（去掉前後空白），完成送出前必要的步驟
+ * @param {object} nodes buildProposeDom 回傳的頁面節點
+ * @param {object} page initProposePage 回傳的頁面控制器
+ * @param {string} subject 第一句話
+ * @returns {Promise<void>} 套用完成
  */
 export async function fillAndApply(nodes, page, subject) {
-  nodes.subject.value = subject;
-  await nodes.subject.dispatch('input');
-  await openAndApply(nodes, page);
+  await openAndApply(nodes, page, subject);
 }
 
 /**

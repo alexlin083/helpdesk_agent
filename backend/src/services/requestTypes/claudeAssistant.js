@@ -40,11 +40,12 @@ export function claudeClassifySchema({ typeIds, departmentIds }) {
 }
 
 /**
- * 之後各回合（填寫）的 Claude 結構化輸出 schema：另含欄位更新與指定處理人；updates.key 限定為需求類型定義的欄位 key。
+ * 之後各回合（填寫）的 Claude 結構化輸出 schema：另含欄位更新、指定處理人、方案 proposals 與建議選項 suggestions（與 Gemini 版相同）；updates.key 限定為需求類型定義的欄位 key
  * @param {{typeIds: string[], departmentIds: string[], keys: string[]}} lists 允許的 id 與欄位 key。
  * @returns {object} JSON Schema。
  */
 export function claudeFillSchema({ typeIds, departmentIds, keys }) {
+  const update = { type: 'object', properties: { key: { type: 'string', ...(keys.length ? { enum: keys } : {}) }, value: { type: 'string' } }, required: ['key', 'value'], additionalProperties: false };
   return {
     type: 'object',
     properties: {
@@ -63,8 +64,10 @@ export function claudeFillSchema({ typeIds, departmentIds, keys }) {
       },
       handler_id: nullableString([]),
       reply: { type: 'string' },
+      proposals: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, summary: { type: 'string' }, reasons: { type: 'array', items: { type: 'string' } }, updates: { type: 'array', items: update }, basis: { type: 'array', items: { type: 'string' } } }, required: ['title', 'summary', 'reasons', 'updates', 'basis'], additionalProperties: false } },
+      suggestions: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, updates: { type: 'array', items: update } }, required: ['label', 'updates'], additionalProperties: false } },
     },
-    required: ['intent', 'type_id', 'department_id', 'confidence_score', 'updates', 'handler_id', 'reply'],
+    required: ['intent', 'type_id', 'department_id', 'confidence_score', 'updates', 'handler_id', 'reply', 'proposals', 'suggestions'],
     additionalProperties: false,
   };
 }
@@ -177,10 +180,12 @@ export function createClaudeAssistant({ getAI = getClient, model = env.anthropic
      * @param {{typeIds: string[], departmentIds: string[], keys: string[]}} request.lists 允許的 id 與欄位 key。
      * @param {object[]} request.tools 允許的目錄工具。
      * @param {(id: string, args: unknown) => Promise<object>} request.runTool 伺服器端工具執行函式，回傳 { result } 或 { error }。
-     * @returns {Promise<object>} buildFill 的結果，另含 toolsUsed（依呼叫順序列出交給 runTool 處理的工具 id）與 model。
+     * @param {number} [request.maxToolCalls] 這一回合最多執行的工具次數（目錄 assistant.max_tool_calls）；省略時用建立助手時的上限
+     * @returns {Promise<object>} buildFill 的結果，另含 toolsUsed（依呼叫順序列出交給 runTool 處理的工具 id）、toolsSucceeded（其中成功回傳的工具 id）與 model
      * @throws {HttpError} 帶 draftReason 的錯誤；runTool 拋出的非 AI 錯誤（例如 503）原樣拋出。
      */
-    fill({ instructions, context, lists, tools, runTool }) {
+    fill({ instructions, context, lists, tools, runTool, maxToolCalls: limit }) {
+      const cap = Number.isInteger(limit) && limit > 0 ? limit : maxToolCalls;
       return guarded('ticket.draft.fill', /** 執行填寫。@param {AbortSignal} signal 取消訊號。@param {Function} track 階段記錄。@returns {Promise<object>} 結果。 */ async (signal, track) => {
         const ai = getAI();
         const toolsUsed = [];
@@ -188,7 +193,7 @@ export function createClaudeAssistant({ getAI = getClient, model = env.anthropic
         if (tools.length) {
           const messages = [{ role: 'user', content: JSON.stringify(context) }];
           const definitions = tools.map(claudeTool);
-          while (toolsUsed.length < maxToolCalls) {
+          while (toolsUsed.length < cap) {
             track('claude.tools');
             const response = await create(ai, { max_tokens: TOOLS_MAX_TOKENS, system: `${instructions}\n現在是工具階段：只在需要資料時呼叫工具；不需要時直接回覆 OK。`,
               tools: definitions, output_config: { effort }, messages }, signal, 'ticket.draft.tools');
@@ -198,8 +203,8 @@ export function createClaudeAssistant({ getAI = getClient, model = env.anthropic
             const answers = [];
             for (const call of calls) {
               let output;
-              if (toolsUsed.length >= maxToolCalls) {
-                output = { error: `本回合最多呼叫 ${maxToolCalls} 次工具` };
+              if (toolsUsed.length >= cap) {
+                output = { error: `本回合最多呼叫 ${cap} 次工具` };
               } else {
                 track('tool.execute');
                 output = await runTool(call.name, call.input);
@@ -218,7 +223,7 @@ export function createClaudeAssistant({ getAI = getClient, model = env.anthropic
           output_config: { effort, format: { type: 'json_schema', schema: claudeFillSchema(lists) } },
           messages: [{ role: 'user', content: JSON.stringify({ ...context, tool_results: results }) }] }, signal, 'ticket.draft.fill');
         track('response.validate');
-        return { ...buildFill(parseJson(textOf(response)), lists), toolsUsed };
+        return { ...buildFill(parseJson(textOf(response)), lists), toolsUsed, toolsSucceeded: results.filter(/** 成功回傳 @param {{error?: string}} item 工具結果 @returns {boolean} 沒有錯誤時 true */ (item) => !item.error).map(/** 取工具 id @param {{tool: string}} item 工具結果 @returns {string} id */ (item) => item.tool) };
       });
     },
   };

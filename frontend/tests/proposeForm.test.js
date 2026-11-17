@@ -43,9 +43,9 @@ test('字數以 Unicode code points 計算', counting);
  */
 function attachedDescription() {
   assert.equal(describeAttached('測試人資部'), PROPOSE_TEXT.attached.replace('{department}', '測試人資部'));
-  assert.equal(describeAttached('測試人資部'), '已由自動生成確認，將送達「測試人資部」');
+  assert.equal(describeAttached('測試人資部'), '已由服務台助理確認，將送達「測試人資部」');
   assert.equal(describeAttached('測試人資部', ''), describeAttached('測試人資部'), '空字串代表不指定處理人');
   assert.equal(describeAttached('測試資訊部', 'ivan.test'), PROPOSE_TEXT.attachedHandler.replace('{department}', '測試資訊部').replace('{handler}', 'ivan.test'));
-  assert.equal(describeAttached('測試資訊部', 'ivan.test'), '已由自動生成確認，將送達「測試資訊部」的 ivan.test');
+  assert.equal(describeAttached('測試資訊部', 'ivan.test'), '已由服務台助理確認，將送達「測試資訊部」的 ivan.test');
 }
 test('套用提示依是否指定處理人組出文字', attachedDescription);

@@ -1,5 +1,5 @@
 import { HttpError } from '../../middleware/errorHandler.js';
-import { balanceOutcome, COMPUTATION_CAPABILITIES, formatLedgerAmount, ledgerPeriod, listColleagues } from './capabilities.js';
+import { balanceOutcome, COMPUTATION_CAPABILITIES, formatLedgerAmount, ledgerPeriod, listColleagues, workdaysBefore } from './capabilities.js';
 import { fieldError, isPlainObject, isValidDateLike, normalizeFieldValue, rawValueMax, yearOf } from './fieldTypes.js';
 import { FILTERS, renderSegments } from './renderer.js';
 
@@ -88,7 +88,7 @@ function periodOf(type, [startKey, endKey], values, invalidKeys) {
  * 2. 必填欄位空白列入 missing；有值的欄位依型別與規則檢查（fieldTypes.fieldError），帳號欄位的 not_busy_between 依期間查詢 ledger；
  * 3. 帳號與部門欄位依 options_tool 產生選項（不可選的帳號附原因）；
  * 4. 參數欄位都沒有錯誤時執行 computations，失敗的計算把訊息掛在對應欄位；
- * 5. 執行 phase 適用的 checks：ledger_balance 依類別與期間比較剩餘額度並產生摘要文字，ledger_overlap 檢查本人期間重疊；
+ * 5. 執行 phase 適用的 checks：ledger_balance 依類別與期間比較剩餘額度並產生摘要文字，ledger_overlap 檢查本人期間重疊，notice_workdays 檢查提前幾個工作日提出（豁免的類別不檢查）；
  * 6. 有 ledger 且數量、類別、期間都有效時產生要保存的 ledger 快照。
  * @param {object} options 參數。
  * @param {object} options.type 需求類型。
@@ -192,6 +192,15 @@ export function evaluateForm({ type, input, user, department, registry, accounts
         }
       }
     }
+  }
+  for (const check of type.checks) {
+    if (check.capability !== 'notice_workdays' || !check.on.includes(phase)) continue;
+    const start = values[check.args.start];
+    if (!start || errors.has(check.args.start)) continue;
+    const category = check.args.category ? values[check.args.category] : '';
+    if (check.args.category && (!category || errors.has(check.args.category) || check.notice.exempt.includes(category))) continue;
+    const enough = workdaysBefore(check.notice.calendar, today, start.slice(0, 10), check.notice.minWorkdays) >= check.notice.minWorkdays;
+    if (!enough) failures.push({ key: check.args.start, code: check.error.code, message: check.error.message });
   }
   return { values, missing, invalid, fieldOptions, computed, computedMap, failures, summaries, ledger };
 }

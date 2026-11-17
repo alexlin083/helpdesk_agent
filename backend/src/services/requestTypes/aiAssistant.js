@@ -12,6 +12,16 @@ export const DRAFT_REPLY_MAX = 400;
 export const INTENT_MAX = 80;
 export const UPDATE_VALUE_MAX = 2000;
 const UPDATES_MAX = 20;
+// 方案（proposals）的數量與長度上限：最多 3 個方案，標題 40 字、摘要 200 字、理由最多 3 條各 120 字、依據最多 5 個工具 id
+export const PROPOSALS_MAX = 3;
+const PROPOSAL_TITLE_MAX = 40;
+const PROPOSAL_SUMMARY_MAX = 200;
+const PROPOSAL_REASONS_MAX = 3;
+const PROPOSAL_REASON_MAX = 120;
+const PROPOSAL_BASIS_MAX = 5;
+// 建議選項（suggestions）的上限：每次最多 3 個，文字 20 字；使用者點了就等於回覆這句話
+export const SUGGESTIONS_MAX = 3;
+const SUGGESTION_LABEL_MAX = 20;
 // Gemini 每次呼叫的輸出上限（與 Claude 助手相同）。Gemini 3.x 預設會先思考，思考用掉的 token 也算在上限內，上限太小時 JSON 會在中途被截斷。
 export const GEMINI_OUTPUT_LIMITS = Object.freeze({ classify: 4096, tools: 2048, fill: 4096 });
 // 所有 Gemini 呼叫（自動生成的分類、工具與整理階段，以及需求單的部門判斷）共用的思考深度：分類與欄位擷取不需要深度思考，
@@ -74,11 +84,14 @@ export function classifySchema({ typeIds, departmentIds }) {
 }
 
 /**
- * 之後各回合（填寫）的結構化輸出 schema：另含欄位更新與指定處理人；updates.key 限定為需求類型定義的欄位 key。
+ * 之後各回合（填寫）的結構化輸出 schema：另含欄位更新、指定處理人與方案；updates.key 限定為需求類型定義的欄位 key。
+ * proposals 為 0～3 個方案（title、summary、reasons、updates、basis），使用者選了才套用，所以不直接寫進 updates；
+ * suggestions 為回覆下方讓使用者直接點的選項（label、updates）
  * @param {{typeIds: string[], departmentIds: string[], keys: string[]}} lists 允許的 id 與欄位 key。
  * @returns {object} Gemini responseSchema。
  */
 export function fillSchema({ typeIds, departmentIds, keys }) {
+  const update = { type: Type.OBJECT, properties: { key: { type: Type.STRING, ...(keys.length ? { enum: keys } : {}) }, value: { type: Type.STRING } }, required: ['key', 'value'] };
   return {
     type: Type.OBJECT,
     properties: {
@@ -86,11 +99,13 @@ export function fillSchema({ typeIds, departmentIds, keys }) {
       type_id: nullableEnum(typeIds),
       department_id: nullableEnum(departmentIds),
       confidence_score: { type: Type.INTEGER, minimum: 0, maximum: 100 },
-      updates: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { key: { type: Type.STRING, ...(keys.length ? { enum: keys } : {}) }, value: { type: Type.STRING } }, required: ['key', 'value'] } },
+      updates: { type: Type.ARRAY, items: update },
       handler_id: { type: Type.STRING, nullable: true },
       reply: { type: Type.STRING },
+      proposals: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, summary: { type: Type.STRING }, reasons: { type: Type.ARRAY, items: { type: Type.STRING } }, updates: { type: Type.ARRAY, items: update }, basis: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ['title', 'summary', 'reasons', 'updates', 'basis'] } },
+      suggestions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { label: { type: Type.STRING }, updates: { type: Type.ARRAY, items: update } }, required: ['label', 'updates'] } },
     },
-    required: ['intent', 'type_id', 'department_id', 'confidence_score', 'updates', 'handler_id', 'reply'],
+    required: ['intent', 'type_id', 'department_id', 'confidence_score', 'updates', 'handler_id', 'reply', 'proposals', 'suggestions'],
   };
 }
 
@@ -133,24 +148,48 @@ export function buildClassification(result, { typeIds, departmentIds }) {
  * - 結構必須是物件、updates 是陣列、reply 是字串，否則視為格式異常；
  * - updates 只保留 key 在清單且 value 為字串的項目（去除首尾空白、依共用標點規範處理「。」、最多 2000 字），同一 key 以最後一筆為準，最多 20 筆；
  * - handler_id 為去除首尾空白的字串（最多 100 字）或 null，是否可指定由後端判斷；
+ * - proposals 最多 3 個，沒有標題的略過；標題、摘要、理由依共用標點規範整理並截斷，updates 與上面同樣的規則，basis 只留字串（是否真的呼叫過由引擎比對）；缺少時當成空陣列；
+ * - suggestions 最多 3 個，沒有文字或文字重複的略過；文字依共用標點規範整理並截到 20 字，updates 與上面同樣的規則；缺少時當成空陣列；
  * - 其他規則同 buildClassification。
  * @param {unknown} result 模型解析後的 JSON。
  * @param {{typeIds: string[], departmentIds: string[], keys: string[]}} lists 允許的 id 與欄位 key。
- * @returns {{intent: string, typeId: string|null, departmentId: string|null, confidence: number, updates: Array<{key: string, value: string}>, handlerId: string|null, reply: string|null}} 整理後的結果。
+ * @returns {{intent: string, typeId: string|null, departmentId: string|null, confidence: number, updates: Array<{key: string, value: string}>, handlerId: string|null, reply: string|null, proposals: object[], suggestions: Array<{label: string, updates: Array<{key: string, value: string}>}>}} 整理後的結果
  * @throws {HttpError} 500 AI_INVALID_RESPONSE：結構不符。
  */
 export function buildFill(result, lists) {
   if (!result || typeof result !== 'object' || !Array.isArray(result.updates)) throw invalidOutput();
   const base = buildClassification(result, lists);
-  const byKey = new Map();
-  for (const update of result.updates.slice(0, UPDATES_MAX)) {
-    if (!update || typeof update !== 'object' || !lists.keys.includes(update.key) || typeof update.value !== 'string') continue;
-    byKey.set(update.key, tidy(update.value, UPDATE_VALUE_MAX));
+  /**
+   * 整理一組欄位更新：只留 key 在清單、value 為字串的項目，同一 key 以最後一筆為準，最多 20 筆
+   * @param {unknown} list 模型輸出的更新
+   * @returns {Array<{key: string, value: string}>} 更新
+   */
+  function updatesOf(list) {
+    const byKey = new Map();
+    for (const update of Array.isArray(list) ? list.slice(0, UPDATES_MAX) : []) {
+      if (!update || typeof update !== 'object' || !lists.keys.includes(update.key) || typeof update.value !== 'string') continue;
+      byKey.set(update.key, tidy(update.value, UPDATE_VALUE_MAX));
+    }
+    return [...byKey].map(/** 轉回陣列形狀。@param {[string, string]} entry [key, value]。@returns {{key: string, value: string}} 更新。 */ ([key, value]) => ({ key, value }));
+  }
+  /** 整理字串陣列 @param {unknown} list 陣列 @param {number} count 最多幾筆 @param {number} max 每筆上限 @returns {string[]} 字串 */
+  const strings = (list, count, max) => (Array.isArray(list) ? list.filter(/** 非空字串 @param {unknown} item 項目 @returns {boolean} 是時 true */ (item) => typeof item === 'string' && item.trim()).slice(0, count).map(/** 整理 @param {string} item 字串 @returns {string} 字串 */ (item) => tidy(item, max)) : []);
+  const proposals = (Array.isArray(result.proposals) ? result.proposals : []).filter(/** 有標題的方案 @param {unknown} item 方案 @returns {boolean} 是時 true */ (item) => item && typeof item === 'object' && typeof item.title === 'string' && item.title.trim()).slice(0, PROPOSALS_MAX)
+    .map(/** 整理一個方案 @param {object} item 方案 @returns {object} 方案 */ (item) => ({ title: tidy(item.title, PROPOSAL_TITLE_MAX), summary: typeof item.summary === 'string' ? tidy(item.summary, PROPOSAL_SUMMARY_MAX) : '',
+      reasons: strings(item.reasons, PROPOSAL_REASONS_MAX, PROPOSAL_REASON_MAX), updates: updatesOf(item.updates), basis: strings(item.basis, PROPOSAL_BASIS_MAX, 60) }));
+  const suggestions = [];
+  for (const item of Array.isArray(result.suggestions) ? result.suggestions : []) {
+    if (suggestions.length >= SUGGESTIONS_MAX || !item || typeof item !== 'object' || typeof item.label !== 'string') continue;
+    const label = tidy(item.label, SUGGESTION_LABEL_MAX);
+    if (!label || suggestions.some(/** 文字重複 @param {{label: string}} other 已收的選項 @returns {boolean} 相同時 true */ (other) => other.label === label)) continue;
+    suggestions.push({ label, updates: updatesOf(item.updates) });
   }
   return {
     ...base,
-    updates: [...byKey].map(/** 轉回陣列形狀。@param {[string, string]} entry [key, value]。@returns {{key: string, value: string}} 更新。 */ ([key, value]) => ({ key, value })),
+    updates: updatesOf(result.updates),
     handlerId: typeof result.handler_id === 'string' && result.handler_id.trim() ? clip(result.handler_id.trim(), HANDLER_ID_MAX) : null,
+    proposals,
+    suggestions,
   };
 }
 
@@ -291,10 +330,12 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
      * @param {{typeIds: string[], departmentIds: string[], keys: string[]}} request.lists 允許的 id 與欄位 key。
      * @param {object[]} request.tools 允許的目錄工具。
      * @param {(id: string, args: unknown) => Promise<object>} request.runTool 伺服器端工具執行函式，回傳 { result } 或 { error }。
-     * @returns {Promise<object>} buildFill 的結果，另含 toolsUsed（依呼叫順序列出交給 runTool 處理的工具 id，含回 { error } 的呼叫）與 model。
+     * @param {number} [request.maxToolCalls] 這一回合最多執行的工具次數（目錄 assistant.max_tool_calls）；省略時用建立助手時的上限
+     * @returns {Promise<object>} buildFill 的結果，另含 toolsUsed（依呼叫順序列出交給 runTool 處理的工具 id，含回 { error } 的呼叫）、toolsSucceeded（其中成功回傳的工具 id，方案的依據只採信這些）與 model
      * @throws {HttpError} 帶 draftReason 的錯誤；runTool 拋出的非 AI 錯誤（例如 503）原樣拋出。
      */
-    fill({ instructions, context, lists, tools, runTool }) {
+    fill({ instructions, context, lists, tools, runTool, maxToolCalls: limit }) {
+      const cap = Number.isInteger(limit) && limit > 0 ? limit : maxToolCalls;
       return guarded('ticket.draft.fill', /** 執行填寫。@param {AbortSignal} signal 取消訊號。@param {Function} track 階段記錄。@returns {Promise<object>} 結果。 */ async (signal, track) => {
         const ai = getAI();
         const toolsUsed = [];
@@ -302,7 +343,7 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
         if (tools.length) {
           const contents = [{ role: 'user', parts: [{ text: JSON.stringify(context) }] }];
           const declarations = tools.map(toolDeclaration);
-          while (toolsUsed.length < maxToolCalls) {
+          while (toolsUsed.length < cap) {
             track('gemini.tools');
             const response = await generate(ai, { contents, config: { systemInstruction: `${instructions}\n現在是工具階段：只在需要資料時呼叫工具；不需要時直接回覆 OK。`,
               tools: [{ functionDeclarations: declarations }], temperature: 0.2, maxOutputTokens: GEMINI_OUTPUT_LIMITS.tools } }, signal, 'ticket.draft.tools');
@@ -311,8 +352,8 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
             const answers = [];
             for (const call of calls) {
               let output;
-              if (toolsUsed.length >= maxToolCalls) {
-                output = { error: `本回合最多呼叫 ${maxToolCalls} 次工具` };
+              if (toolsUsed.length >= cap) {
+                output = { error: `本回合最多呼叫 ${cap} 次工具` };
               } else {
                 track('tool.execute');
                 output = await runTool(call.name, call.args);
@@ -330,7 +371,7 @@ export function createGeminiAssistant({ getAI = getClient, model = env.geminiMod
         const response = await generate(ai, { contents: JSON.stringify({ ...context, tool_results: results }),
           config: { systemInstruction: instructions, responseMimeType: 'application/json', responseSchema: fillSchema(lists), temperature: 0.2, maxOutputTokens: GEMINI_OUTPUT_LIMITS.fill } }, signal, 'ticket.draft.fill');
         track('response.validate');
-        return { ...buildFill(parseJson(response.text), lists), toolsUsed };
+        return { ...buildFill(parseJson(response.text), lists), toolsUsed, toolsSucceeded: results.filter(/** 成功回傳 @param {{error?: string}} item 工具結果 @returns {boolean} 沒有錯誤時 true */ (item) => !item.error).map(/** 取工具 id @param {{tool: string}} item 工具結果 @returns {string} id */ (item) => item.tool) };
       });
     },
   };

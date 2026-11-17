@@ -7,6 +7,7 @@ import { ACTIVE_STATUSES, computeLedgerBalances, formPath } from './ledger.js';
 import { normalizePersonnelSeed, seedPersonnelIfEmpty, syncAccountDepartmentNames } from '../personnel/personnel.js';
 import { departmentService } from '../departmentService.js';
 import { demoPersonnelSeed } from '../personnel/demoPersonnel.js';
+import { isConnectorKey } from '../connectors/metaRecords.js';
 
 export const TICKET_STATUSES = Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']);
 
@@ -153,6 +154,11 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
             AND COALESCE(json_extract(document, '$.form.ledger.start'), json_extract(document, ?)) < ?
             AND COALESCE(json_extract(document, '$.form.ledger.end'), json_extract(document, ?)) > ?
             AND ticket_id <> ?`),
+        // 外部服務連接與管理員設定存在既有的 meta 表，不新增資料表、不升結構版本，舊版程式照樣能開同一個資料庫；名稱組法與值的格式見 connectors/metaRecords.js
+        // 一律以完整名稱讀寫單筆，不做前綴或 LIKE 掃描；舊版程式只以固定名稱讀 meta，不會讀到這些項目
+        metaGet: opened.prepare('SELECT value FROM meta WHERE name = ?'),
+        metaPut: opened.prepare('INSERT INTO meta (name, value) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET value = excluded.value'),
+        metaDelete: opened.prepare('DELETE FROM meta WHERE name = ?'),
       };
       seeded = seedPersonnelIfEmpty(opened, seed ? normalizePersonnelSeed(seed) : null);
       const synced = opened.transaction(/** 依部門設定檔同步帳號的部門名稱。@returns {number} 更新筆數。 */ () => syncAccountDepartmentNames(opened, departments)).immediate();
@@ -183,6 +189,16 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
    */
   function helpersOf() {
     return transactionHelpers(statements, statement, ledgerTables);
+  }
+
+  /**
+   * 擋下不是外部服務連接用的 meta 名稱，避免這組方法讀寫到本機登入金鑰等其他項目
+   * @param {unknown} name meta 名稱
+   * @returns {void}
+   * @throws {Error} code CONNECTOR_KEY_INVALID
+   */
+  function requireConnectorKey(name) {
+    if (!isConnectorKey(name)) throw Object.assign(new Error('只能讀寫外部服務連接用的 meta 項目'), { code: 'CONNECTOR_KEY_INVALID' });
   }
 
   /**
@@ -435,6 +451,60 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
     async prepare({ legacyFile }) {
       const { db: database } = openConnection();
       return { ...importLegacyTickets(database, { legacyFile }), seeded: { ...seeded } };
+    },
+    /**
+     * 讀取一筆外部服務連接用的 meta 項目；只接受完整名稱（由 connectors/metaRecords.js 組出），不做前綴或 LIKE 掃描，值的格式也由該模組驗證
+     * @param {string} name meta 名稱，必須以 connector_user: 或 connector_setting: 開頭
+     * @returns {string|null} 原始值，沒有時 null
+     * @throws {Error} code CONNECTOR_KEY_INVALID：不是連接器用的名稱；HttpError 503 TICKET_STORE_UNAVAILABLE：資料庫無法讀取
+     */
+    readConnectorRecord(name) {
+      requireConnectorKey(name);
+      const { statements: prepared } = connection();
+      return guarded('load', /** 讀取一筆 @returns {string|null} 值 */ () => prepared.metaGet.get(name)?.value ?? null);
+    },
+    /**
+     * 新增或覆寫一筆外部服務連接用的 meta 項目
+     * @param {string} name meta 名稱，必須以 connector_user: 或 connector_setting: 開頭
+     * @param {string} value 要保存的 JSON 字串（授權與 client secret 必須是加密後的文字）
+     * @returns {void}
+     * @throws {Error} code CONNECTOR_KEY_INVALID；HttpError 503 TICKET_STORE_UNAVAILABLE：資料庫無法寫入
+     */
+    writeConnectorRecord(name, value) {
+      requireConnectorKey(name);
+      const { statements: prepared } = connection();
+      guarded('persist', /** 寫入一筆 @returns {void} */ () => { prepared.metaPut.run(name, value); });
+    },
+    /**
+     * 在同一筆交易內讀出、修改並寫回一筆外部服務連接用的 meta 項目；項目不存在或 change 回傳非字串時不寫入
+     * @param {string} name meta 名稱，必須以 connector_user: 或 connector_setting: 開頭
+     * @param {(raw: string) => string|null} change 收到原始值、回傳新值的同步函式
+     * @returns {boolean} 有寫入時 true
+     * @throws {Error} code CONNECTOR_KEY_INVALID；HttpError 503 TICKET_STORE_UNAVAILABLE：資料庫無法寫入
+     */
+    updateConnectorRecord(name, change) {
+      requireConnectorKey(name);
+      const { db: database, statements: prepared } = connection();
+      /** 讀出後修改再寫回 @returns {boolean} 有寫入時 true */
+      function update() {
+        const row = prepared.metaGet.get(name);
+        const next = row ? change(row.value) : null;
+        if (typeof next !== 'string') return false;
+        prepared.metaPut.run(name, next);
+        return true;
+      }
+      return guarded('persist', database.transaction(update).immediate);
+    },
+    /**
+     * 刪除一筆外部服務連接用的 meta 項目（中斷連接）；資料庫開啟 secure_delete，刪除時覆寫頁面內容
+     * @param {string} name meta 名稱，必須以 connector_user: 或 connector_setting: 開頭
+     * @returns {boolean} 有刪除時 true
+     * @throws {Error} code CONNECTOR_KEY_INVALID；HttpError 503 TICKET_STORE_UNAVAILABLE：資料庫無法寫入
+     */
+    deleteConnectorRecord(name) {
+      requireConnectorKey(name);
+      const { statements: prepared } = connection();
+      return guarded('persist', /** 刪除一筆 @returns {boolean} 有刪除時 true */ () => prepared.metaDelete.run(name).changes > 0);
     },
     /**
      * 取得本機登入簽章金鑰：讀取 meta 表的 local_auth_secret，沒有時產生 32 bytes 隨機值保存後回傳。

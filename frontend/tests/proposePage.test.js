@@ -1,6 +1,7 @@
 import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createFakeDocument, createFakeWindow, buildProposeDom, pageIds, fakeAuth, DRAFT_DIALOG_IDS } from './helpers/fakeDom.js';
 import { initProposePage, PROPOSE_TEXT } from '../src/pages/propose.js';
 import { DRAFT_KEY } from '../src/services/ticketService.js';
@@ -25,7 +26,7 @@ function mountPage(services = {}, win = createFakeWindow()) {
   globalThis.document = doc;
   /** 預設名單載入成功。@returns {Promise<object[]>} 部門。 */
   async function loadDepartments() { return departments; }
-  const page = initProposePage(doc, win, { auth, loadDepartments, requestDraft: fakeRequestDraft(), draftDebounceMs: 0, ...services });
+  const page = initProposePage(doc, win, { auth, loadDepartments, loadRequestTypes: /** 常見需求清單替身（空的，不連網路） @returns {Promise<object[]>} 需求類型 */ async () => [], requestDraft: fakeRequestDraft(), draftDebounceMs: 0, ...services });
   return { doc, win, nodes, auth, page };
 }
 /** 清除全域文件替身。@returns {void} */
@@ -33,21 +34,27 @@ function cleanup() { delete globalThis.document; }
 test.afterEach(cleanup);
 
 /**
- * 驗證 propose.html 具備頁面腳本依賴的所有節點 id（含需求內容下方的 #content-hint），
- * 並確認已移除的頁面層級指定處理人選單（#handler 系列）與「移除」按鈕（#form-remove）不再出現；處理人只在「自動生成」視窗內指定。
+ * 驗證 propose.html 具備頁面腳本依賴的所有節點 id（含需求內容下方的 #content-hint 與助理對話區），
+ * 並確認已移除的節點不再出現：頁面層級指定處理人選單（#handler 系列）、「移除」按鈕（#form-remove），以及改版前的「自動生成」按鈕與彈出視窗的關閉鈕；
+ * 助理對話區直接放在頁面上（不是 dialog），「確認並送出」表單一開始收起。
  * @returns {void}
  */
 function pageStructure() {
-  const ids = pageIds(new URL('../pages/propose/propose.html', import.meta.url));
-  const required = ['account-avatar', 'account-name', 'account-id', 'logout-button', 'list-notice', 'ticket-form', 'subject', 'subject-count', 'subject-error',
+  const file = new URL('../pages/propose/propose.html', import.meta.url);
+  const ids = pageIds(file);
+  const required = ['account-avatar', 'account-name', 'account-id', 'logout-button', 'list-notice', 'ticket-form', 'subject', 'subject-count', 'subject-hint', 'subject-error',
     'content', 'content-count', 'content-hint', 'content-error', 'reset-button', 'submit-button', 'submit-error', 'departments-button',
     'departments-dialog', 'departments-close', 'departments-list', 'result-dialog', 'result-subject', 'result-ticket', 'result-target', 'result-method',
-    'result-basis-row', 'result-basis', 'result-note', 'result-close', 'result-again',
-    'draft-button', 'draft-button-hint', 'form-chip', 'form-chip-text', 'form-notice', ...DRAFT_DIALOG_IDS];
+    'result-basis-row', 'result-basis', 'result-note', 'result-close', 'result-again', 'confirm-dialog', 'confirm-close', 'confirm-back',
+    'form-chip', 'form-chip-text', 'form-notice', ...DRAFT_DIALOG_IDS];
   for (const id of required) assert.ok(ids.has(id), `propose.html 缺少 #${id}`);
-  for (const id of ['handler', 'handler-picker', 'handler-search', 'handler-clear', 'handler-listbox', 'handler-hint', 'form-remove']) {
+  for (const id of ['handler', 'handler-picker', 'handler-search', 'handler-clear', 'handler-listbox', 'handler-hint', 'form-remove', 'draft-button', 'draft-button-hint', 'draft-close', 'draft-cancel']) {
     assert.equal(ids.has(id), false, `propose.html 不應再有 #${id}`);
   }
+  const html = readFileSync(file, 'utf8');
+  assert.match(html, /<section id="draft-dialog"/, '對話區直接放在頁面上');
+  assert.match(html, /<dialog id="confirm-dialog"[^>]*>\s*<form id="ticket-form"/, '確認並送出放在彈出視窗裡');
+  assert.ok(html.indexOf('<dialog id="confirm-dialog"') > html.indexOf('</main>'), '視窗不在頁面版面裡');
 }
 test('提出需求單頁具備腳本需要的節點', pageStructure);
 
@@ -145,9 +152,8 @@ async function formValidation() {
 test('送出前的欄位驗證與輸入時清除錯誤', formValidation);
 
 /**
- * 驗證尚未套用「自動生成」就送出：不呼叫送單，在送出區顯示 PROPOSE_TEXT.needDraft 並把焦點移到「自動生成」按鈕；
- * 主題有值但「自動生成」按鈕仍停用時（例如自動填入未觸發 input 事件）改把焦點放在主題；需求內容空白的錯誤不顯示；
- * 主題超過字數上限時照常顯示主題錯誤，且不同時顯示 needDraft；修改主題時清除送出區提示。
+ * 驗證尚未套用助理整理的內容就送出（例如重新提出帶回主題時）：不呼叫送單，在送出區顯示 PROPOSE_TEXT.needDraft 並把焦點移到對話輸入框；
+ * 需求內容空白的錯誤不顯示；主題超過字數上限時照常顯示主題錯誤，且不同時顯示 needDraft；修改主題時清除送出區提示。
  * @returns {Promise<void>}
  */
 async function needDraftBeforeSubmit() {
@@ -158,14 +164,14 @@ async function needDraftBeforeSubmit() {
   await page.ready;
   nodes.subject.value = '申請 VPN 帳號';
   await nodes.subject.dispatch('input');
-  assert.equal(nodes.draftButton.disabled, false);
+  nodes.subject.focus();
   await nodes.form.dispatch('submit');
   assert.equal(calls, 0, '未套用時不送出');
   assert.equal(nodes.submitError.textContent, PROPOSE_TEXT.needDraft);
   assert.equal(nodes.subjectError.textContent, '');
   assert.equal(nodes.contentError.textContent, '', '不標示需求內容空白');
   assert.equal(nodes.content.getAttribute('aria-invalid'), null);
-  assert.equal(doc.activeElement, nodes.draftButton);
+  assert.equal(doc.activeElement, nodes.draftNodes.message, '焦點移到對話輸入框');
   nodes.subject.value = '申請 VPN 帳號（修改）';
   await nodes.subject.dispatch('input');
   assert.equal(nodes.submitError.textContent, '', '修改主題時清除送出區提示');
@@ -176,17 +182,14 @@ async function needDraftBeforeSubmit() {
   assert.equal(nodes.submitError.textContent, '', '主題有錯時先顯示主題錯誤');
   assert.equal(doc.activeElement, nodes.subject);
   assert.equal(calls, 0);
-  cleanup();
-  const silent = mountPage({ submitTicket });
-  await silent.page.ready;
-  silent.nodes.subject.value = '申請 VPN 帳號';
-  assert.equal(silent.nodes.draftButton.disabled, true, '沒有 input 事件時按鈕仍停用');
-  await silent.nodes.form.dispatch('submit');
-  assert.equal(calls, 0);
-  assert.equal(silent.nodes.submitError.textContent, PROPOSE_TEXT.needDraft);
-  assert.equal(silent.doc.activeElement, silent.nodes.subject, '自動生成停用時焦點放在主題');
 }
-test('尚未套用自動生成時不送出並提示', needDraftBeforeSubmit);
+test('尚未套用助理整理的內容時不送出並提示', needDraftBeforeSubmit);
+
+/**
+ * 一般需求替身：intent 是 AI 寫的摘要
+ * @returns {object} 後端 JSON
+ */
+function slowLaptop() { return completeGeneralResponse({ intent: '筆電開機很慢' }); }
 
 /**
  * 驗證需求內容的唯讀狀態：初始唯讀、顯示 PROPOSE_TEXT.contentLocked 說明並加上 is-locked 樣式；按 Apply 套用後可編輯、移除樣式與說明；
@@ -197,12 +200,15 @@ async function contentLock() {
   const submission = deferred();
   /** 可控制完成時機的送單。@returns {Promise<object>} 結果。 */
   function submitTicket() { return submission.promise; }
-  const { nodes, page } = mountPage({ submitTicket });
+  const { nodes, page } = mountPage({ submitTicket, requestDraft: fakeRequestDraft(slowLaptop) });
   await page.ready;
   assert.equal(nodes.content.readOnly, true);
   assert.equal(nodes.content.placeholder, PROPOSE_TEXT.contentLocked);
   assert.equal(nodes.content.classList.contains('is-locked'), true);
+  assert.equal(nodes.confirmDialog.open, false, '還沒套用時確認並送出視窗關著');
   await fillAndApply(nodes, page, '電腦很慢');
+  assert.equal(nodes.confirmDialog.open, true, '套用後彈出確認並送出視窗');
+  assert.equal(nodes.subject.value, '筆電開機很慢', '主題帶入 AI 整理的需求摘要，不是第一句話');
   assert.equal(nodes.content.value, GENERAL_RENDERED);
   assert.equal(nodes.content.readOnly, false, '套用後可做最後編輯');
   assert.equal(nodes.content.placeholder, '');
@@ -214,22 +220,24 @@ async function contentLock() {
   submission.resolve({ ticket_id: 'TK-9', route: 'DEPARTMENT', department: IT.name });
   await pending;
   assert.equal(nodes.content.readOnly, false, '送出完成後恢復可編輯');
+  assert.deepEqual([nodes.confirmDialog.open, nodes.resultDialog.open], [false, true], '送出成功後關掉確認視窗，改開結果視窗');
   await nodes.resultClose.click();
   assert.equal(nodes.content.value, '');
   assert.equal(nodes.content.readOnly, true, '清空後回到唯讀');
   assert.equal(nodes.content.placeholder, PROPOSE_TEXT.contentLocked);
   assert.equal(nodes.content.classList.contains('is-locked'), true);
+  assert.equal(nodes.confirmDialog.open, false, '清空後確認並送出視窗關著');
 }
 test('需求內容在套用前與送出中唯讀', contentLock);
 
 /**
- * 以主題決定一般需求草稿是否帶處理人：主題含「Jira」時模擬舊版後端在回應帶了 amy.chen（視窗不採用），其他主題不帶處理人。
+ * 以主題決定一般需求草稿是否帶處理人：主題含「Jira」時模擬舊版後端在回應帶了 amy.chen（視窗不採用），其他主題不帶處理人；intent 是 AI 依主題寫的摘要
  * @param {{subject: string}} input 草稿請求本文。
  * @returns {object} 後端 JSON。
  */
 function handlerBySubject(input) {
-  if (!input.subject.includes('Jira')) return completeGeneralResponse();
-  return completeGeneralResponse({ handler: { id: 'h-2', name: 'amy.chen' }, handler_options: [{ id: 'h-1', name: 'racky.huang' }, { id: 'h-2', name: 'amy.chen' }] });
+  if (!input.subject.includes('Jira')) return completeGeneralResponse({ intent: '辦公電腦申請' });
+  return completeGeneralResponse({ intent: 'Jira 專案存取權限申請', handler: { id: 'h-2', name: 'amy.chen' }, handler_options: [{ id: 'h-1', name: 'racky.huang' }, { id: 'h-2', name: 'amy.chen' }] });
 }
 
 /**
@@ -246,8 +254,11 @@ async function successfulSubmit() {
   const { doc, nodes, page } = mountPage({ submitTicket, requestDraft: fakeRequestDraft(handlerBySubject) });
   await page.ready;
   await fillAndApply(nodes, page, ' 申請 Jira 專案存取權限 ');
+  assert.equal(nodes.subject.value, 'Jira 專案存取權限申請', '主題帶入 AI 整理的需求摘要');
+  nodes.subject.value = '申請 Jira 專案存取權限';
+  await nodes.subject.dispatch('input');
   assert.equal(nodes.formChip.hidden, false);
-  assert.equal(nodes.formChipText.textContent, `已由自動生成確認，將送達「${IT.name}」`, '不提供指定處理人');
+  assert.equal(nodes.formChipText.textContent, `已由服務台助理確認，將送達「${IT.name}」`, '不提供指定處理人');
   nodes.content.value = `${GENERAL_RENDERED}\n 需要編輯權限 `;
   await nodes.content.dispatch('input');
   const pending = nodes.form.dispatch('submit');
@@ -262,7 +273,7 @@ async function successfulSubmit() {
   assert.equal(received.length, 1, '送出中重複按下不會再送出');
   resolveSubmit({ ticket_id: 'TK-123', route: 'DEPARTMENT', department: IT.name, basis: '依 AI 對話確認送達' });
   await pending;
-  assert.deepEqual(received[0], { subject: ' 申請 Jira 專案存取權限 ', content: `${GENERAL_RENDERED}\n 需要編輯權限 `, handlerId: '',
+  assert.deepEqual(received[0], { subject: '申請 Jira 專案存取權限', content: `${GENERAL_RENDERED}\n 需要編輯權限 `, handlerId: '',
     form: { id: 'general', version: 1, fields: { description: GENERAL_DESCRIPTION } }, departmentId: IT.id });
   assert.equal(nodes.resultDialog.open, true);
   assert.equal(nodes.resultSubject.textContent, '申請 Jira 專案存取權限');
@@ -274,23 +285,24 @@ async function successfulSubmit() {
   assert.equal(nodes.submit.disabled, false);
   assert.equal(nodes.submit.textContent, PROPOSE_TEXT.submit);
   assert.equal(nodes.subject.readOnly, false);
-  assert.equal(nodes.subject.value, ' 申請 Jira 專案存取權限 ', '關閉視窗前保留內容');
+  assert.equal(nodes.subject.value, '申請 Jira 專案存取權限', '關閉視窗前保留內容');
   await nodes.resultAgain.click();
   assert.equal(nodes.resultDialog.open, false);
   assert.equal(nodes.subject.value, '');
   assert.equal(nodes.content.value, '');
   assert.equal(nodes.formChip.hidden, true);
   assert.equal(page.state.attached, null);
+  assert.equal(page.state.autoSubject, '', '清空表單時一併清掉上次自動帶入的主題');
   assert.equal(nodes.subjectCount.textContent, '0 / 100');
-  assert.equal(doc.activeElement, nodes.subject);
+  assert.equal(doc.activeElement, nodes.draftNodes.message, '焦點回到對話輸入框');
   await fillAndApply(nodes, page, '申請辦公電腦');
-  assert.equal(nodes.formChipText.textContent, `已由自動生成確認，將送達「${IT.name}」`);
+  assert.equal(nodes.formChipText.textContent, `已由服務台助理確認，將送達「${IT.name}」`);
   resolveSubmit = null;
   const second = nodes.form.dispatch('submit');
   await Promise.resolve();
   resolveSubmit({ ticket_id: 'TK-124', route: 'DEPARTMENT', department: IT.name, basis: '提到 ERP' });
   await second;
-  assert.deepEqual(received[1], { subject: '申請辦公電腦', content: GENERAL_RENDERED, handlerId: '',
+  assert.deepEqual(received[1], { subject: '辦公電腦申請', content: GENERAL_RENDERED, handlerId: '',
     form: { id: 'general', version: 1, fields: { description: GENERAL_DESCRIPTION } }, departmentId: IT.id });
   assert.equal(nodes.resultMethod.textContent, '依 AI 對話確認部門');
   assert.equal(nodes.resultBasisRow.hidden, true, '依自動生成送出不顯示判斷依據');
@@ -316,7 +328,7 @@ async function resetAndLogout() {
   assert.equal(nodes.content.value, '');
   assert.equal(nodes.subjectError.textContent, '');
   assert.equal(nodes.submitError.textContent, '');
-  assert.equal(doc.activeElement, nodes.subject);
+  assert.equal(doc.activeElement, nodes.draftNodes.message, '焦點回到對話輸入框');
   win.events.get('pageshow')();
   assert.deepEqual(win.redirects, []);
   auth.user = { username: 'brian.lin', userID: 'user-brian.lin', department: { id: 'dept-it-1', name: '資訊管理一部' } };
@@ -349,12 +361,15 @@ async function draftPrefill() {
   const doc = createFakeDocument();
   const nodes = buildProposeDom(doc);
   globalThis.document = doc;
-  const page = initProposePage(doc, win, { auth: fakeAuth({ username: 'amy.chen', userID: 'user-amy.chen', department: { id: 'dept-it-1', name: '資訊管理一部' } }), loadDepartments: async () => departments });
+  const page = initProposePage(doc, win, { auth: fakeAuth({ username: 'amy.chen', userID: 'user-amy.chen', department: { id: 'dept-it-1', name: '資訊管理一部' } }), loadDepartments: async () => departments, loadRequestTypes: /** 常見需求清單替身（空的，不連網路） @returns {Promise<object[]>} 需求類型 */ async () => [] });
   await page.ready;
   assert.equal(nodes.subject.value, '申請 VPN');
   assert.equal(nodes.content.value, '新人需要 VPN');
   assert.equal(nodes.subjectCount.textContent, '6 / 100');
   assert.equal(stored.has(DRAFT_KEY), false, '帶入後清除草稿');
+  assert.equal(nodes.draftNodes.message.value, '申請 VPN', '主題放進對話輸入框等使用者送出');
+  assert.equal(nodes.confirmDialog.open, true, '帶回的主題與內容先彈出視窗給使用者看');
+  assert.equal(nodes.formNotice.textContent, PROPOSE_TEXT.resubmit);
   cleanup();
   const broken = createFakeWindow();
   broken.sessionStorage = { /** 模擬儲存體不可用。@returns {never} @throws {Error} 失敗。 */ getItem() { throw new Error('blocked'); } };

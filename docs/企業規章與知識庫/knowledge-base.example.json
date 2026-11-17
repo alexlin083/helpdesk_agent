@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "知識庫範例（課堂模擬資料，尚未由後端載入）。每筆是一個可獨立回答的主題，內容取自 企業規章範例.md；欄位定義見同目錄 README.md。",
+  "description": "課堂模擬知識庫；後端讀 backend/src/services/knowledge/knowledge-base.json，docs/企業規章與知識庫/knowledge-base.example.json 是組員撰寫與審核用的範例，兩份內容保持相同；每筆是一個可獨立回答的主題，內容取自 docs/企業規章與知識庫/企業規章範例.md，欄位定義見同資料夾的 README.md",
   "entries": [
     {
       "id": "KB-HR-001",
@@ -60,6 +60,25 @@
       "data_status": "SIMULATED"
     },
     {
+      "id": "KB-HR-004",
+      "policy_id": "POL-HR-01",
+      "doc_name": "員工差勤管理規章",
+      "articles": ["第 11 條"],
+      "section_title": "請假要多早提出",
+      "content": "課堂模擬規章。事假、特休建議至少提早 1 個工作天提出（系統不檢查、不擋送出）；病假得於回到工作崗位後 3 個工作日內補提（系統尚未檢查；本條待組員確認）。",
+      "summary": "事假與特休建議至少提早 1 個工作天提出（不擋送出），病假可在回到工作崗位後 3 個工作日內補提",
+      "department_id": "dept-hr-1",
+      "request_types": ["leave"],
+      "keywords": ["提前申請", "多早申請", "提出時間", "事後補請", "補提"],
+      "enforcement": "INFO",
+      "related_fields": ["leave_type", "start_at"],
+      "sample_questions": ["事假要提前多久申請？", "病假可以回來後再補請嗎？"],
+      "version": "1.1",
+      "updated_at": "2026-11-16",
+      "source_url": null,
+      "data_status": "SIMULATED"
+    },
+    {
       "id": "KB-IT-001",
       "policy_id": "POL-IT-01",
       "doc_name": "資訊安全與遠端連線（VPN）規章",
@@ -103,7 +122,7 @@
       "doc_name": "設備申請與報修管理規章",
       "articles": ["第 3 條", "第 4 條", "第 5 條"],
       "section_title": "設備申請的數量、交期與轉採購",
-      "content": "課堂模擬規章。設備申請單次數量為 1～50 件，需要日期不得早於申請當日。庫存品項於核准後 5 個工作日內送達，無庫存時由總務與硬體組另行通知。數量超過 50 件，或單價新臺幣 30,000 元以上的品項，應改提採購申請，由採購部處理。",
+      "content": "課堂模擬規章。設備申請單次數量為 1～50 件，需要日期不得早於申請當日。庫存品項於核准後 5 個工作日內送達，無庫存時由總務與硬體組另行通知。數量超過 50 件，或單價新臺幣 30,000 元以上的品項，應改提採購申請，由採購部處理（系統尚未檢查）。",
       "summary": "設備申請 1～50 件、約 5 個工作日送達，大量或高單價改提採購申請。",
       "department_id": "dept-ga-1",
       "request_types": ["equipment", "purchase"],

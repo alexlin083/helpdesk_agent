@@ -279,7 +279,7 @@ async function draftWithoutAI() {
     assert.equal(first.status, 200);
     const body = first.body;
     assert.deepEqual(Object.keys(body), ['intent', 'type', 'department', 'department_options', 'handler', 'handler_options', 'values', 'sources', 'missing', 'invalid',
-      'field_options', 'computed', 'summaries', 'reply', 'prompt', 'ai_available', 'ai_error', 'complete', 'rendered_content', 'preview_content', 'tools_used']);
+      'field_options', 'computed', 'summaries', 'reply', 'prompt', 'ai_available', 'ai_error', 'complete', 'rendered_content', 'preview_content', 'tools_used', 'proposals', 'suggestions', 'connections']);
     assert.equal(body.intent, '請假申請');
     assert.deepEqual(Object.keys(body.type), ['id', 'version', 'name', 'department', 'fields', 'calendars']);
     assert.deepEqual(body.type.fields[3], { key: 'end_at', label: '請假截止時間', type: 'datetime', required: true, rules: { after: 'start_at' } }, '日期類欄位帶規則供選擇器使用');
@@ -296,7 +296,7 @@ async function draftWithoutAI() {
     assert.deepEqual(body.field_options, { agent: [{ id: 'two.it', name: 'two.it', available: true }, { id: 'three.it', name: 'three.it', available: true }] });
     assert.deepEqual(body.computed, []);
     assert.deepEqual(body.summaries, []);
-    assert.equal(body.reply, `one.it 你好，這邊已經收到你想要請假的需求，根據您的需求您的業務將會由人資部進行處理，由於請假程序需要您先提供一些基本的訊息，請告訴我你想請假的日期、時間、假別、代理人，我將會自動為您生成需求單給您送出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式或者代理人可以選擇誰等等\n${AI_NOTICES.AI_UNAVAILABLE}`);
+    assert.equal(body.reply, `one.it 你好，這邊已經收到你想要請假的需求，根據您的需求您的業務將會由人資部進行處理；你可以直接告訴我想達成的目標，例如「下週想請一天，不要影響手上的工作」，我會查你的假別額度、同事的請假狀況，以及你已連接的行事曆與公司規章，整理 1 到 3 個方案給你挑，你選了才會填進右側；也可以直接告訴我你想請假的日期、時間、假別、代理人，我將會自動為您生成需求單給您送出；事假與特休建議至少提早 1 個工作天提出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式或者代理人可以選擇誰等等\n${AI_NOTICES.AI_UNAVAILABLE}`);
     assert.equal(body.prompt, '這份需求單將送到「人力資源部」；還需要提供：假別、請假起始時間、請假截止時間、代理人');
     assertNoFullStop(body);
     assert.equal(body.ai_available, false);
@@ -430,7 +430,7 @@ async function draftWithAI() {
     assert.equal(fillCall.request.context.message, 'secret-message-abc 12/1 09:30 到 17:30，代理人 two.it');
     assert.deepEqual(fillCall.request.context.state.locked, ['leave_type']);
     assert.deepEqual(fillCall.request.context.history, [{ role: 'assistant', text: 'AI 的招呼語' }]);
-    assert.deepEqual(fillCall.request.tools.map(/** 取工具 id。@param {{id: string}} tool 工具。@returns {string} id。 */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'department_directory']);
+    assert.deepEqual(fillCall.request.tools.map(/** 取工具 id。@param {{id: string}} tool 工具。@returns {string} id。 */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup']);
     assert.ok(fillCall.request.lists.keys.includes('agent') && fillCall.request.lists.keys.includes('item') && !fillCall.request.lists.keys.includes('applicant'));
     setAI({ fill: filled({ typeId: 'equipment', departmentId: 'dept-ga-1', updates: [{ key: 'item', value: '筆電' }, { key: 'quantity', value: '1' }], reply: '改為設備申請' }) });
     const switched = (await call('POST', '/tickets/draft', 'one.it', { subject: '筆電', message: '其實我是要申請一台筆電', state: { type_id: 'general', fields: {} } })).body;
@@ -640,7 +640,7 @@ async function equipmentFlow() {
     assert.equal(submitted.status, 200);
     assert.equal(submitted.body.route, 'FORM');
     assert.equal(submitted.body.department, '總務與硬體組');
-    assert.deepEqual(submitted.body.form, { id: 'equipment', version: 1, name: '設備申請', computed: {} });
+    assert.deepEqual(submitted.body.form, { id: 'equipment', version: 2, name: '設備申請', computed: {} });
     const saved = await store.find(submitted.body.ticket_id);
     assert.deepEqual(saved.form.fields, { applicant: 'one.it', ...equipmentFields() });
     assert.equal(saved.form.ledger, undefined, '沒有 ledger 的類型不保存額度快照');
@@ -648,7 +648,7 @@ async function equipmentFlow() {
     const content = (await call('POST', '/tickets/draft', 'one.it', { subject: '設備', state: stateOf('equipment', equipmentFields()) })).body.rendered_content;
     for (const [fields, message] of [[equipmentFields({ quantity: '0' }), '數量不可小於 1'], [equipmentFields({ quantity: '1.5' }), '數量必須是整數'],
       [equipmentFields({ needed_by: '2026-10-01' }), '需要日期不可早於今天'], [equipmentFields({ location: '' }), '表單還缺少：送交地點']]) {
-      const bad = await call('POST', '/tickets', 'one.it', { subject: '設備', content, form: { id: 'equipment', version: 1, fields } });
+      const bad = await call('POST', '/tickets', 'one.it', { subject: '設備', content, form: { id: 'equipment', version: 2, fields } });
       assert.equal(bad.status, 400);
       assert.equal(bad.body.error.message, message);
     }
@@ -685,26 +685,26 @@ async function generalSubmission() {
     const draft = (await call('POST', '/tickets/draft', 'one.it', { subject: '報帳', state })).body;
     assert.equal(draft.complete, true);
     const viaForm = await call('POST', '/tickets', 'one.it', { subject: '報帳', content: draft.rendered_content, department_id: 'dept-fin-1', handler_id: 'fin.two',
-      form: { id: 'general', version: 1, fields: { description: '十一月差旅報帳' } } });
+      form: { id: 'general', version: 2, fields: { description: '十一月差旅報帳' } } });
     assert.equal(viaForm.status, 200);
     assert.deepEqual(Object.keys(viaForm.body), ['ticket_id', 'route', 'department', 'handler', 'basis', 'source', 'status']);
     assert.equal(viaForm.body.route, 'DEPARTMENT');
     assert.equal(viaForm.body.source, 'draft');
     const savedForm = await store.find(viaForm.body.ticket_id);
     assert.equal(savedForm.form, undefined, 'DEPARTMENT 流程不保存表單');
-    assert.deepEqual(savedForm.request_type, { id: 'general', version: 1 }, '保存需求類型供簽核與轉單規則查詢');
+    assert.deepEqual(savedForm.request_type, { id: 'general', version: 2 }, '保存需求類型供簽核與轉單規則查詢');
     assert.deepEqual(savedForm.judgement, { source: 'draft', ai_department_id: 'dept-fin-1', confidence_score: null, basis: DRAFT_BASIS, model: null });
     const ownState = { type_id: 'general', department_id: 'dept-it-1', fields: { description: 'VPN 連不上' }, locked: ['department_id', 'description'] };
     const ownDraft = (await call('POST', '/tickets/draft', 'one.it', { subject: 'VPN', state: ownState })).body;
     const own = await call('POST', '/tickets', 'one.it', { subject: 'VPN', content: ownDraft.rendered_content, department_id: 'dept-it-1',
-      form: { id: 'general', version: 1, fields: { description: 'VPN 連不上' } } });
+      form: { id: 'general', version: 2, fields: { description: 'VPN 連不上' } } });
     assert.equal(own.status, 200);
     const selfApproval = await call('POST', `/tickets/${own.body.ticket_id}/decision`, 'one.it', { action: 'REJECT' });
     assert.equal(selfApproval.status, 403, '一般需求依定義 not_requester 不能由提單人本人簽核或退回');
     assert.equal(selfApproval.body.error.message, '不能簽核自己提出的需求單');
     assert.equal((await call('POST', `/tickets/${own.body.ticket_id}/transfer`, 'two.it', { department_id: 'dept-fin-1' })).status, 200, '一般需求依定義 transfer 可以轉單');
     assert.equal((await call('POST', `/tickets/${viaForm.body.ticket_id}/decision`, 'fin.one', { action: 'APPROVE' })).status, 200, '送達部門的其他成員可以簽核');
-    const noDepartment = await call('POST', '/tickets', 'one.it', { subject: '報帳', content: draft.rendered_content, form: { id: 'general', version: 1, fields: { description: '十一月差旅報帳' } } });
+    const noDepartment = await call('POST', '/tickets', 'one.it', { subject: '報帳', content: draft.rendered_content, form: { id: 'general', version: 2, fields: { description: '十一月差旅報帳' } } });
     assert.equal(noDepartment.status, 400);
     assert.match(noDepartment.body.error.message, /需要指定處理部門/u);
     const result = await call('POST', '/tickets', 'one.it', { subject: '報帳', content: '[需求說明]: 報帳\n[處理部門]: 財務部\n[指定處理人]: fin.two', department_id: 'dept-fin-1', handler_id: 'fin.two' });

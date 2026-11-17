@@ -1,5 +1,6 @@
 /* 需求單頁：分頁、清單卡片、狀態標籤與簽核表單。 */
-.tickets-layout { max-width: 1120px; margin: 0 auto; padding: 48px 40px 72px; }
+/* 內容隨視窗寬度延展，左右留白和頂欄對齊 */
+.tickets-layout { padding: 48px 40px 72px; }
 .tickets-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .tickets-head h1 { font-size: clamp(32px, 3.4vw, 44px); }
 .tickets-head .intro { margin: 10px 0 0; }

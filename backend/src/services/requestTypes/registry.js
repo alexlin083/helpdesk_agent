@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { departmentService } from '../departmentService.js';
 import { LEDGER_TABLES } from '../storage/database.js';
-import { CHECK_CAPABILITIES, CHECK_PHASES, COMPUTATION_CAPABILITIES, TOOL_CAPABILITIES, ACCESS_RULES, describeCalendar, pickerCalendar } from './capabilities.js';
+import { CHECK_CAPABILITIES, CHECK_PHASES, COMPUTATION_CAPABILITIES, TOOL_CAPABILITIES, ACCESS_RULES, describeCalendar, normalizeCalendar, pickerCalendar } from './capabilities.js';
 import { clientField, definitionError, FIELD_KEY_PATTERN, isPlainObject, nonempty, normalizeFieldDefinition, RESERVED_KEYS } from './fieldTypes.js';
 import { compileTemplate, FILTERS } from './renderer.js';
 
@@ -15,6 +15,8 @@ const CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const PARAM_TYPES = Object.freeze(['string', 'integer', 'number', 'boolean']);
 const GREETING_MAX = 600;
 const SUMMARY_MAX = 300;
+const TOOL_LABEL_MAX = 20;
+const NOTIFY_TARGET_MAX = 20;
 // 定義檔允許的頂層鍵；計算參數引用的物件（例如工作日曆）另外允許。其他鍵視為拼字錯誤，啟動失敗。
 const DEFINITION_KEYS = Object.freeze(['id', 'version', 'name', 'department_id', 'department', 'handler', 'ai', 'fields', 'computations', 'ledger', 'checks', 'render', 'workflow']);
 const ROUTES = Object.freeze(['FORM', 'DEPARTMENT']);
@@ -38,8 +40,8 @@ function readJson(dir, file, read = readFileSync) {
 
 /**
  * 驗證需求類型目錄 _catalog.json 並整理成固定形狀。規則：version 為正整數；assistant.instructions 為非空字串陣列、
- * assistant.fallback_greeting 為最多 600 字的非空白字串；types 為非空陣列，每筆 id（小寫英數）與 file（*.json）唯一，name、summary（最多 300 字）非空白，
- * keywords 為字串陣列；default_type 必須是 types 之一；tools 每筆 id 唯一、description／returns 非空白、capability 為已知工具能力、
+ * assistant.fallback_greeting 為最多 600 字的非空白字串；assistant.max_tool_calls（選填，每回合最多呼叫幾次工具）為 1～5 的整數，省略時 3；types 為非空陣列，每筆 id（小寫英數）與 file（*.json）唯一，name、summary（最多 300 字）非空白，
+ * keywords 為字串陣列；default_type 必須是 types 之一；tools 每筆 id 唯一、description／returns 非空白、label 選填（1～20 字，畫面顯示用）、capability 為已知工具能力、
  * access 為已知存取規則且符合該能力要求、params 為 { 名稱: { type, description, required } }。
  * @param {unknown} raw 解析後的目錄。
  * @returns {object} version、assistant、types、defaultType、tools（Map）。
@@ -53,6 +55,8 @@ export function normalizeCatalog(raw) {
   if (!isPlainObject(assistant)) throw definitionError(`${file} assistant`, '必須是物件');
   if (!Array.isArray(assistant.instructions) || !assistant.instructions.length || !assistant.instructions.every(nonempty)) throw definitionError(`${file} assistant.instructions`, '必須是非空的字串陣列');
   if (!nonempty(assistant.fallback_greeting) || Array.from(assistant.fallback_greeting).length > GREETING_MAX) throw definitionError(`${file} assistant.fallback_greeting`, `必須是 1～${GREETING_MAX} 字的字串`);
+  const maxToolCalls = assistant.max_tool_calls ?? 3;
+  if (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 5) throw definitionError(`${file} assistant.max_tool_calls`, '必須是 1～5 的整數');
   if (!Array.isArray(raw.types) || !raw.types.length) throw definitionError(`${file} types`, '必須是非空陣列');
   const ids = new Set();
   const files = new Set();
@@ -79,6 +83,7 @@ export function normalizeCatalog(raw) {
     if (typeof tool.id !== 'string' || !FIELD_KEY_PATTERN.test(tool.id)) throw definitionError(`${where}.id`, '必須是小寫英數與底線');
     if (tools.has(tool.id)) throw definitionError(`${where}.id`, `重複（${tool.id}）`);
     for (const name of ['description', 'returns']) if (!nonempty(tool[name])) throw definitionError(`${where}.${name}`, '必須是非空白字串');
+    if (tool.label !== undefined && (!nonempty(tool.label) || Array.from(tool.label.trim()).length > TOOL_LABEL_MAX)) throw definitionError(`${where}.label`, `必須是 1～${TOOL_LABEL_MAX} 字的字串`);
     const capability = TOOL_CAPABILITIES[tool.capability];
     if (!capability) throw definitionError(`${where}.capability`, `未知的工具能力「${String(tool.capability)}」，只接受 ${Object.keys(TOOL_CAPABILITIES).join('、')}`);
     if (!ACCESS_RULES.includes(tool.access)) throw definitionError(`${where}.access`, `只接受 ${ACCESS_RULES.join('、')}`);
@@ -95,9 +100,9 @@ export function normalizeCatalog(raw) {
     const contract = Object.entries(capability.params).map(/** 合約轉文字。@param {[string, string]} entry [名稱, 型別]。@returns {string} 文字。 */ ([name, type]) => `${name}:${type}`).sort().join(',');
     const declared = Object.entries(params).map(/** 宣告轉文字。@param {[string, object]} entry [名稱, 規格]。@returns {string} 文字。 */ ([name, spec]) => `${name}:${spec.type}`).sort().join(',');
     if (contract !== declared) throw definitionError(`${where}.params`, `必須符合能力 ${tool.capability} 的參數合約（${contract || '沒有參數'}）`);
-    tools.set(tool.id, { id: tool.id, description: tool.description, capability: tool.capability, params, access: tool.access, returns: tool.returns });
+    tools.set(tool.id, { id: tool.id, label: tool.label?.trim() ?? null, description: tool.description, capability: tool.capability, params, access: tool.access, returns: tool.returns });
   }
-  return { version: raw.version, assistant: { instructions: [...assistant.instructions], fallbackGreeting: assistant.fallback_greeting }, types, defaultType: raw.default_type, tools };
+  return { version: raw.version, assistant: { instructions: [...assistant.instructions], fallbackGreeting: assistant.fallback_greeting, maxToolCalls }, types, defaultType: raw.default_type, tools };
 }
 
 /**
@@ -117,17 +122,67 @@ function optionsTool(tools, id, kind, where) {
 }
 
 /**
+ * 驗證 notice_workdays 檢查的專屬設定
+ * @param {object} item 檢查定義
+ * @param {object} context 驗證資料
+ * @param {object} context.raw 原始定義（取工作日曆物件）
+ * @param {Map<string, object>} context.fieldsByKey 欄位定義索引
+ * @param {string} context.where 錯誤訊息位置
+ * @param {string} context.file 檔名
+ * @returns {{minWorkdays: number, calendar: object, exempt: string[]}} 整理後的設定
+ * @throws {Error} REQUEST_TYPES_INVALID：設定不符
+ */
+function noticeOf(item, { raw, fieldsByKey, where, file }) {
+  if (!Number.isInteger(item.min_workdays) || item.min_workdays < 1 || item.min_workdays > 30) throw definitionError(`${where}.min_workdays`, '必須是 1～30 的整數');
+  const calendarKey = item.args?.calendar;
+  if (typeof calendarKey !== 'string' || !isPlainObject(raw[calendarKey]) || DEFINITION_KEYS.includes(calendarKey)) throw definitionError(`${where}.args.calendar`, '必須是這份定義中工作日曆物件的鍵');
+  const category = item.args.category === undefined ? null : fieldsByKey.get(item.args.category);
+  if (item.args.category !== undefined && category?.type !== 'enum') throw definitionError(`${where}.args.category`, '必須是 enum 欄位的 key');
+  const exempt = item.exempt ?? [];
+  if (!Array.isArray(exempt) || (exempt.length && !category) || !exempt.every(/** 是否為類別選項 @param {unknown} option 選項 @returns {boolean} 是時 true */ (option) => category.options.includes(option))) {
+    throw definitionError(`${where}.exempt`, '必須是 args.category 欄位的選項');
+  }
+  return { minWorkdays: item.min_workdays, calendar: normalizeCalendar(raw[calendarKey], `${file} ${calendarKey}`), exempt: [...new Set(exempt)] };
+}
+
+/**
+ * 驗證 workflow.notify（核准時在歷程寫一筆模擬通知，不呼叫外部系統）
+ * @param {unknown} notify 原始設定
+ * @param {object} context 驗證資料
+ * @param {Map<string, object>} context.fieldsByKey 欄位定義索引
+ * @param {string} context.route 流程
+ * @param {string} context.file 檔名
+ * @returns {{target: string, when: {field: string, values: string[]}|null}} 整理後的設定
+ * @throws {Error} REQUEST_TYPES_INVALID：設定不符
+ */
+function notifyOf(notify, { fieldsByKey, route, file }) {
+  const where = `${file} workflow.notify`;
+  if (!isPlainObject(notify) || !nonempty(notify.target) || Array.from(notify.target.trim()).length > NOTIFY_TARGET_MAX) throw definitionError(`${where}.target`, `必須是 1～${NOTIFY_TARGET_MAX} 字的字串`);
+  if (notify.when === undefined) return { target: notify.target.trim(), when: null };
+  if (route !== 'FORM') throw definitionError(`${where}.when`, '只適用 FORM 單（依欄位值判斷）');
+  const field = isPlainObject(notify.when) ? fieldsByKey.get(notify.when.field) : null;
+  if (field?.type !== 'enum') throw definitionError(`${where}.when.field`, '必須是 enum 欄位的 key');
+  const values = notify.when.values;
+  if (!Array.isArray(values) || !values.length || !values.every(/** 是否為欄位選項 @param {unknown} value 值 @returns {boolean} 是時 true */ (value) => field.options.includes(value))) {
+    throw definitionError(`${where}.when.values`, '必須是該欄位選項的非空子集');
+  }
+  return { target: notify.target.trim(), when: { field: field.key, values: [...new Set(values)] } };
+}
+
+/**
  * 驗證一份需求類型定義並整理成引擎使用的形狀。檢查內容：
  * - id 與目錄相同、version 為正整數、name 與目錄相同；只允許已知頂層鍵（以及計算參數引用的物件）；
  * - department_id 為存在的部門，或 null 並提供 department { options_tool, min_confidence（0～100）}；handler 選填 { options_tool, not_self }；
- * - ai：description 非空白、examples 字串陣列、greeting 選填（最多 600 字）、ask_order 為欄位 key、tools 為目錄中的工具 id；
+ * - ai：description 非空白、examples 字串陣列、greeting 選填（最多 600 字）、ask_order 為欄位 key、tools 為目錄中的工具 id、max_tool_calls 選填（1～5 的整數，省略時用目錄的 assistant.max_tool_calls）；
  * - fields：非空、key 不重複、最多一個 self 欄位；rules.after、filters.not_busy_between 參照存在的日期類欄位；options_tool 參照可提供選項的工具；
  * - computations：key 唯一且不與欄位相同、capability 為已知計算能力（參數由能力驗證）、display 為無參數的篩選器；
  * - ledger：category_field 為必填 enum 欄位、amount 為計算 key、period_from 為日期類欄位、entitlement_table 在允許清單內，類別必須是該表允許的類別；
- * - checks：capability 為已知檢查能力且需要 ledger、on 為 draft／submit／approve 子集、error { code（大寫英數）, message }、summary_label 與 args 參照有效；
+ * - checks：capability 為已知檢查能力（ledger_balance、ledger_overlap 需要 ledger）、on 為該能力可用階段的子集、error { code（大寫英數）, message }、summary_label 與 args 參照有效；
+ *   notice_workdays 另有 min_workdays（1～30 的整數）、args.calendar（工作日曆物件的鍵）、args.category（enum 欄位，選填）與 exempt（該欄位的選項）；
  * - render.lines：每行的佔位文字只能參照欄位、計算結果或保留名稱 department／handler，篩選器必須已知；
  * - workflow：route 為 FORM（需要固定部門）或 DEPARTMENT（需要 department_id 為 null）；approver、transfer、transfer_error、judgement 格式；
- *   approver.not_requester 省略時為 true（提單人不能簽核自己的單），transfer 省略時 FORM 為 false、DEPARTMENT 為 true。
+ *   approver.not_requester 省略時為 true（提單人不能簽核自己的單），transfer 省略時 FORM 為 false、DEPARTMENT 為 true；
+ *   notify 選填 { target（1～20 字）, when?: { field（enum 欄位）, values（該欄位的選項）} }，核准時在歷程寫一筆模擬通知，when 只適用 FORM 單
  * @param {unknown} raw 解析後的定義。
  * @param {object} context 驗證資料。
  * @param {object} context.entry 目錄中的這筆類型（id、file、name、summary、keywords）。
@@ -189,6 +244,8 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
   const aiTools = ai.tools ?? [];
   if (!Array.isArray(aiTools)) throw definitionError(`${file} ai.tools`, '必須是工具 id 陣列');
   for (const id of aiTools) if (!tools.has(id)) throw definitionError(`${file} ai.tools`, `參照的工具「${String(id)}」不在 _catalog.json tools 中`);
+  const toolLimit = ai.max_tool_calls ?? null;
+  if (toolLimit !== null && (!Number.isInteger(toolLimit) || toolLimit < 1 || toolLimit > 5)) throw definitionError(`${file} ai.max_tool_calls`, '必須是 1～5 的整數');
   // 計算
   const referenced = new Set();
   const computationsRaw = raw.computations ?? [];
@@ -209,9 +266,6 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
   });
   const computationKeys = new Set(computations.map(/** 取 key。@param {{key: string}} item 計算。@returns {string} key。 */ (item) => item.key));
   if (computationKeys.size !== computations.length) throw definitionError(`${file} computations`, 'key 不可重複');
-  for (const key of Object.keys(raw)) {
-    if (!DEFINITION_KEYS.includes(key) && !referenced.has(key)) throw definitionError(`${file} ${key}`, '是未知的鍵（只接受已知鍵與計算參數引用的物件）');
-  }
   // ledger
   let ledger = null;
   let ledgerSpec = null;
@@ -241,9 +295,9 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
     if (!isPlainObject(item)) throw definitionError(where, '必須是物件');
     const capability = CHECK_CAPABILITIES[item.capability];
     if (!capability) throw definitionError(`${where}.capability`, `未知的檢查能力「${String(item.capability)}」，只接受 ${Object.keys(CHECK_CAPABILITIES).join('、')}`);
-    if (!ledger) throw definitionError(`${where}.capability`, `${item.capability} 需要這份定義有 ledger`);
-    if (!Array.isArray(item.on) || !item.on.length || !item.on.every(/** 是否為已知階段。@param {unknown} phase 階段。@returns {boolean} 已知時 true。 */ (phase) => CHECK_PHASES.includes(phase))) {
-      throw definitionError(`${where}.on`, `必須是 ${CHECK_PHASES.join('、')} 的非空子集`);
+    if (capability.needsLedger && !ledger) throw definitionError(`${where}.capability`, `${item.capability} 需要這份定義有 ledger`);
+    if (!Array.isArray(item.on) || !item.on.length || !item.on.every(/** 是否為這個能力可用的階段 @param {unknown} phase 階段 @returns {boolean} 可用時 true */ (phase) => capability.phases.includes(phase))) {
+      throw definitionError(`${where}.on`, `必須是 ${capability.phases.join('、')} 的非空子集`);
     }
     if (!isPlainObject(item.error) || typeof item.error.code !== 'string' || !CODE_PATTERN.test(item.error.code) || !nonempty(item.error.message)) {
       throw definitionError(`${where}.error`, '必須是 { code（大寫英數與底線）, message }');
@@ -252,8 +306,13 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
     if (!isPlainObject(args)) throw definitionError(`${where}.args`, '必須是物件');
     for (const name of capability.needsArgs) if (!dateLike(args[name])) throw definitionError(`${where}.args.${name}`, '必須是日期類欄位 key');
     const summary = item.summary_label === undefined ? null : compileTemplate(item.summary_label, { names: fieldKeys, fieldKeys, where: `${where}.summary_label` });
-    return { capability: item.capability, on: [...new Set(item.on)], args: { ...args }, error: { code: item.error.code, message: item.error.message }, summary };
+    const notice = item.capability === 'notice_workdays' ? noticeOf(item, { raw, fieldsByKey, where, file }) : null;
+    if (notice) referenced.add(args.calendar);
+    return { capability: item.capability, on: [...new Set(item.on)], args: { ...args }, error: { code: item.error.code, message: item.error.message }, summary, ...(notice ? { notice } : {}) };
   });
+  for (const key of Object.keys(raw)) {
+    if (!DEFINITION_KEYS.includes(key) && !referenced.has(key)) throw definitionError(`${file} ${key}`, '是未知的鍵（只接受已知鍵與計算參數引用的物件）');
+  }
   // 渲染
   if (!isPlainObject(raw.render) || !Array.isArray(raw.render.lines) || !raw.render.lines.length) throw definitionError(`${file} render.lines`, '必須是非空陣列');
   const lines = raw.render.lines.map(/** 編譯一行範本。@param {unknown} line 範本。@param {number} index 索引。@returns {Array<object>} 片段。 */ (line, index) => compileTemplate(line, { names, fieldKeys, where: `${file} render.lines[${index}]` }));
@@ -273,11 +332,12 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
     throw definitionError(`${file} workflow.transfer_error`, '必須是 { code（大寫英數與底線）, message }');
   }
   if (workflow.judgement !== undefined && (!isPlainObject(workflow.judgement) || workflow.judgement.source !== 'draft')) throw definitionError(`${file} workflow.judgement`, '目前只支援 { source: "draft" }');
+  const notify = workflow.notify === undefined ? null : notifyOf(workflow.notify, { fieldsByKey, route: workflow.route, file });
   const calendars = computations.map(/** 取計算的日曆。@param {object} item 計算。@returns {object|undefined} 日曆。 */ (item) => item.resolved.calendar).filter(Boolean);
   return Object.freeze({
     id: raw.id, version: raw.version, name: raw.name, file, summary: entry.summary, keywords: entry.keywords,
     departmentId: raw.department_id, departmentChoice, handler,
-    ai: { description: ai.description, examples: [...ai.examples], greeting: ai.greeting ?? null, askOrder: [...askOrder], tools: [...new Set(aiTools)] },
+    ai: { description: ai.description, examples: [...ai.examples], greeting: ai.greeting ?? null, askOrder: [...askOrder], tools: [...new Set(aiTools)], maxToolCalls: toolLimit },
     fields, fieldsByKey, computations, ledger, ledgerSpec, checks, lines,
     workflow: {
       route: workflow.route,
@@ -285,6 +345,7 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
       transfer: workflow.transfer ?? workflow.route !== 'FORM',
       transferError: transferError ? { code: transferError.code, message: transferError.message } : null,
       judgement: workflow.judgement ? { source: workflow.judgement.source } : null,
+      notify,
     },
     timezoneOffset: calendars[0]?.timezoneOffset ?? null,
     references: Object.fromEntries(computations.filter(/** 有日曆的計算。@param {object} item 計算。@returns {boolean} 有日曆時 true。 */ (item) => item.resolved.calendar)

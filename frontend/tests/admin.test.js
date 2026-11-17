@@ -1,6 +1,7 @@
 import { PAGE_URLS } from '../src/pageUrls.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createFakeDocument, createFakeWindow, buildLoginDom, buildProposeDom, fakeAuth, pageIds } from './helpers/fakeDom.js';
 import { initAdminPage } from '../src/pages/admin.js';
 import { initLoginPage } from '../src/pages/login.js';
@@ -116,3 +117,17 @@ async function adminServiceContract() {
   } finally { globalThis.fetch = original; }
 }
 test('管理 service 與管理角色的工作階段保存', adminServiceContract);
+
+/** 驗證管理頁版面：頂欄帳號選單的節點都在，左側導覽每個連結都指到頁內的區塊，清除工作單排在最後 @returns {void} */
+function adminLayout() {
+  const file = new URL('../pages/admin/admin.html', import.meta.url);
+  const ids = pageIds(file);
+  for (const id of ['account-menu', 'account-avatar', 'account-name', 'account-id', 'account-department', 'logout-button']) assert.ok(ids.has(id), id);
+  const html = readFileSync(file, 'utf8');
+  const nav = html.match(/<nav class="admin-nav"[\s\S]*?<\/nav>/)[0];
+  const targets = [...nav.matchAll(/href="#([^"]+)"/g)].map(/** 取連結目標 @param {RegExpMatchArray} match 比對結果 @returns {string} 區塊 id */ (match) => match[1]);
+  const sections = [...html.matchAll(/<section id="([^"]+)"/g)].map(/** 取區塊 id @param {RegExpMatchArray} match 比對結果 @returns {string} 區塊 id */ (match) => match[1]);
+  assert.deepEqual(targets, sections, '導覽連結和區塊一一對應、順序相同');
+  assert.equal(targets.at(-1), 'admin-reset', '清除工作單排在最後');
+}
+test('管理頁版面：帳號選單節點齊全，左側導覽對應每個區塊', adminLayout);

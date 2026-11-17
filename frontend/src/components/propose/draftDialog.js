@@ -23,7 +23,7 @@ export const DRAFT_TEXT = {
   },
   unexpected: '發生未預期的錯誤，請稍後再試',
   validateFailed: '暫時無法檢查欄位：',
-  manualHint: '仍可在右側欄位手動填寫，填好後按 Apply 套用',
+  manualHint: '仍可在右側欄位手動填寫，填好後按「套用到需求單」',
   retryHint: '可稍後再輸入訊息重試，或直接在右側欄位填寫',
   undelivered: '（未送達）',
   status: { done: '✓ 已確認', missing: '• 待補', invalid: '! 格式不符', optional: '選填，可留空', checking: '檢查中…' },
@@ -35,9 +35,16 @@ export const DRAFT_TEXT = {
   departmentMissing: '請選擇處理部門',
   optionUnavailable: '目前無法選擇',
   noOptions: '目前沒有可選的項目，可以詢問助理',
-  closeConfirm: '要關閉視窗嗎？已輸入的內容會保留，重新開啟時可以繼續',
-  restartConfirm: '主題已變更，要依新主題重新開始嗎？選「取消」會沿用先前的對話與欄位',
-  roles: { assistant: '服務台助理', user: '你', system: '系統', checklist: '還需要確認' },
+  greeting: '{username} 你好，我是服務台助理；想申請什麼呢？直接告訴我就好，例如「下週三想請一天假」「筆電螢幕壞了要報修」，也可以點下面的常見需求開始',
+  roles: { assistant: '服務台助理', user: '你', system: '系統', checklist: '還需要確認', proposals: '可以選的方案' },
+  proposals: { choose: '用這個方案', chosen: '已選這個方案', stale: '已有新的方案', expired: '這個方案已過期，可以請助理重新整理', group: '有 {count} 個方案可以選',
+    valid: '✓ 可以送出', invalid: '! 還不能送出：', basis: '查過的資料：', picked: '我選擇方案「{title}」' },
+  suggestions: { group: '可以直接點的回覆' },
+  connections: {
+    NOT_CONNECTED: '還沒連接「{name}」：連接後，助理可以直接查你的資料幫你安排；不連接也可以，助理會改用問的',
+    NEEDS_RECONNECT: '「{name}」需要重新連接，這次助理查不到；重新連接後就能再用',
+    link: '前往「連接帳號」頁（另開分頁）',
+  },
 };
 
 /**
@@ -101,37 +108,46 @@ function findOption(options, id) {
 }
 
 /**
- * 建立「自動生成」對話框（ChatBox）：寬畫面左側是與服務台助理（AI）的對話、右側是需求內容面板（窄畫面改為上下排列）。
+ * 建立提出需求單頁的對話區（ChatBox）：寬畫面左側是與服務台助理（AI）的對話、右側是需求內容面板（窄畫面改為上下排列）；直接放在頁面上，不是彈出視窗。
  * 面板完全依後端回應的需求類型定義（type.fields）繪製，前端不認得任何特定類型、欄位代號或領域文字：
  * self 唯讀、enum 下拉、text 單行或多行（max_length 超過 100 或沒有上限時多行）、number 數字輸入、date 日期與 datetime 日期時間（以分鐘為單位）
  * 使用日期時間選擇器（rules.after 互相對應的起訖欄位合併成一個期間選擇器，見 dateTimeControl.js 的 layoutFields）、
  * account／department 下拉（候選來自後端 field_options，不可選的項目停用並附原因）；不認得的型別以單行文字輸入呈現。
  * 後端依定義檔計算的結果（computed）與檢查摘要（summaries）以通用清單顯示。
  * 處理流程：
- * 1. 開啟時立即以 { subject } 呼叫 POST /api/tickets/draft，由後端判斷需求類型與處理部門，並以問候語作為第一則助理訊息，接著列出待補清單；
+ * 0. 一開始（與每次重新開始後）先顯示前端的問候，問使用者想申請什麼，不呼叫後端；
+ * 1. 使用者送出的第一句話當作需求單主題（超過主題上限時取前段），以 { subject } 呼叫 POST /api/tickets/draft，由後端判斷需求類型與處理部門並回覆問候語，接著列出待補清單；
+ *    這句話同時放進對話紀錄，之後的對話會帶給 AI；第一次呼叫失敗時回到還沒開始的狀態，使用者可以改寫後再送；
+ *    第一句話是打字送出的（不是常見需求按鈕）而且 AI 可以使用時，判斷完類型後先不顯示問候語，接著把同一句話當第一則對話送出，由 AI 直接回答；
+ *    這一步失敗或 AI 無法使用時補上問候語
  * 2. 使用者在對話區輸入訊息後，帶 message、最近 6 則 history 與目前的面板 state 送出，AI 只更新使用者沒有手動修改過的欄位並回覆；
  * 3. 使用者也可以直接修改面板（欄位；類型沒有固定部門時另有處理部門），修改的欄位標記為手動並鎖定，約 400 毫秒後只做驗證（不帶 message，不呼叫 AI）；
  * 4. 後端回報完成（complete）後啟用 Apply，把後端整理好的 rendered_content 交給頁面。
+ * 5. AI 整理的方案（proposals）以卡片列在對話區，使用者按「用這個方案」才把方案的欄位填進面板（標記為手動並鎖定），並把「我選擇方案」當一則對話送給 AI，
+ *    由 AI 接著回覆（AI 整理中或倒數中時只驗證）；有新的方案時舊卡片停用；
+ *    AI 每次回覆下方另有最多 3 個建議選項（suggestions）按鈕，點了就把選項的欄位填進面板（標記為 AI、不鎖定，之後還能請 AI 改），並把選項文字當一則對話送給 AI；
+ *    有新的回覆、或選了方案或選項時，舊的按鈕都停用；
+ *    外部服務沒連接或需要重新連接時（connections），每種狀態只提示一次，附「連接帳號」頁的連結（另開分頁，不離開這頁）
  * 重要規則：所有文字以 textContent 放入；狀態（缺漏、格式錯誤、計算結果、摘要、完成與否）只採用與目前面板內容一致的回應，
- * 較早送出的驗證結果不會覆蓋較新的修改；AI 失敗時保留手動填寫；對話與欄位在關閉後保留，以相同主題重新開啟時接續，主題變更時詢問是否重新開始。
+ * 較早送出的驗證結果不會覆蓋較新的修改；AI 失敗時保留手動填寫；對話與欄位一直保留，直到頁面清除重填、送出成功或表單規則更新時重新開始。
  * 面板不顯示判斷結果、需求內容預覽與指定處理人（套用後的內容會出現在頁面的需求內容欄）；處理部門只在類型沒有固定部門時顯示，讓使用者選擇或確認。
- * @param {object} nodes 對話框節點：dialog、close、log、typing、chatForm、message、messageCount、send、departmentField、departmentSelect、
- *   departmentSource、departmentStatus、fieldList、computed、summaries、prompt、error、applyChoice、replace、append、choiceCancel、cancel、apply、
- *   trigger（頁面上的「自動生成」按鈕）。
+ * @param {object} nodes 對話區節點：log、typing、chatForm、message、messageCount、send、departmentField、departmentSelect、
+ *   departmentSource、departmentStatus、fieldList、computed、summaries、prompt、error、applyChoice、replace、append、choiceCancel、apply；
+ *   starters（選填，常見需求的按鈕區，送出第一句話後隱藏）、empty（選填，面板還沒有需求類型時顯示的說明）。
  * @param {object} options 設定與依賴。
- * @param {{username: string}} options.user 目前登入者（self 型別欄位沒有值時顯示這個帳號）。
+ * @param {{username: string}} options.user 目前登入者（self 型別欄位沒有值時顯示這個帳號，問候語也用這個帳號）。
  * @param {Function} options.requestDraft 草稿服務（draftService.requestDraft 或測試替身）。
- * @param {Function} options.getSubject 取得頁面主題的函式。
  * @param {Function} options.getContent 取得頁面需求內容的函式。
- * @param {Function} options.onApply 套用時呼叫，參數為 { content, draft }；draft 含 form（{ id, version, fields } 或 null）、formName、
+ * @param {Function} options.onApply 套用時呼叫，參數為 { content, draft }；draft 含 subject（AI 整理的需求摘要 intent，當成需求單主題；AI 沒寫過摘要時用第一句話）、form（{ id, version, fields } 或 null）、formName、
  *   department（{ id, name }）、departmentFixed（部門是否由類型固定）、handler（一律 null，不再提供指定處理人）與 rendered（後端整理的內容）。
  * @param {Function} options.onLoginRequired 憑證失效時呼叫（回登入頁）。
  * @param {Window} options.win 視窗物件，提供 setTimeout、setInterval 與 confirm。
  * @param {number} [options.debounceMs=400] 手動修改後送出驗證前的等待毫秒數。
  * @param {() => number} [options.now=Date.now] 日期時間選擇器判斷「今天」使用的目前時間（測試可替換）。
- * @returns {object} 控制器：open、close、reset、settled、state、handleChatSubmit、handleMessageKeydown。
+ * @param {string} [options.connectionsUrl=''] 「連接帳號」頁網址；空白時連接提示不附連結
+ * @returns {object} 控制器：start、prefill、focus、reset、settled、state、handleChatSubmit、handleMessageKeydown。
  */
-export function createDraftDialog(nodes, { user, requestDraft, getSubject, getContent, onApply, onLoginRequired, win, debounceMs = 400, now = Date.now }) {
+export function createDraftDialog(nodes, { user, requestDraft, getContent, onApply, onLoginRequired, win, debounceMs = 400, now = Date.now, connectionsUrl = '' }) {
   const state = { seq: 0, generation: 0, inflight: new Set(), controls: new Map() };
 
   /**
@@ -140,23 +156,17 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
    */
   function initialState() {
     Object.assign(state, {
-      started: false, initialDone: false, hasResult: false, subject: '', history: [], log: [],
+      started: false, hasResult: false, subject: '', history: [], log: [],
       type: null, fields: [], typeKey: '', values: {}, sources: {}, locked: new Set(), pendingKeys: new Set(),
       department: null, departmentId: null, departmentSource: '', departmentOptions: [], departmentEditVersion: -1, departmentLocked: false, departmentFixed: false,
       fieldOptions: {}, optionKeys: new Map(), departmentKey: '',
-      missing: [], invalid: [], computed: [], summaries: [], intent: '', prompt: '', complete: false, rendered: null,
+      missing: [], invalid: [], computed: [], summaries: [], intent: '', aiSubject: '', prompt: '', complete: false, rendered: null,
       version: 0, statusVersion: 0, appliedSeq: 0, pendingCount: 0, pendingAi: 0, aiNoticeShown: false,
       debounceTimer: null, waitUntil: 0, aiWaitUntil: 0, waitTimer: null,
+      proposalButtons: [], suggestionButtons: [], connectionNotices: new Set(), heldGreeting: null,
     });
     state.controls.clear();
   }
-
-  /**
-   * 詢問使用者確認；視窗沒有 confirm 時視為同意。
-   * @param {string} message 詢問文字。
-   * @returns {boolean} 是否同意。
-   */
-  function ask(message) { return typeof win.confirm === 'function' ? Boolean(win.confirm(message)) : true; }
 
   /**
    * 在對話區加入一則訊息泡泡並捲到最新一則；同時記錄在 state.log（不等於送給後端的 history）。
@@ -172,6 +182,195 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     nodes.log.append(bubble);
     nodes.log.scrollTop = nodes.log.scrollHeight;
     return bubble;
+  }
+
+  /**
+   * 把文字範本的 {名稱} 換成值；用函式當替換值，值裡的「$&」這類符號照原樣放進去，不會被展開
+   * @param {string} template 範本
+   * @param {string} name 名稱
+   * @param {string} value 值
+   * @returns {string} 文字
+   */
+  function fill(template, name, value) { return template.replace(`{${name}}`, /** 原樣代入 @returns {string} 值 */ () => value); }
+
+  /**
+   * 停用還能按的方案按鈕（有新的方案或已經選了一個）
+   * @param {string} [text] 按鈕改成的文字；省略時不改
+   * @returns {void}
+   */
+  function retireProposals(text) {
+    for (const button of state.proposalButtons) {
+      button.disabled = true;
+      if (text) button.textContent = text;
+    }
+    state.proposalButtons = [];
+  }
+
+  /**
+   * 停用還能按的建議選項（有新的回覆或已經點了一個）
+   * @returns {void}
+   */
+  function retireSuggestions() {
+    for (const button of state.suggestionButtons) button.disabled = true;
+    state.suggestionButtons = [];
+  }
+
+  /**
+   * 使用者選了一個方案：停用方案與建議選項、標示選了哪個方案，再照 pickChoice 填欄位並把「我選擇方案」送給 AI
+   * @param {object} proposal 方案（normalizeDraftResponse 的 proposals）
+   * @param {HTMLElement} card 方案卡片
+   * @param {HTMLElement} button 按下的按鈕
+   * @returns {Promise<void>}
+   */
+  async function chooseProposal(proposal, card, button) {
+    retireProposals();
+    retireSuggestions();
+    button.textContent = DRAFT_TEXT.proposals.chosen;
+    card.classList.add('is-chosen');
+    await pickChoice(proposal.updates, fill(DRAFT_TEXT.proposals.picked, 'title', proposal.title));
+  }
+
+  /**
+   * 使用者點了一個建議選項：停用方案與建議選項、標示點了哪一個，再照 pickChoice 填欄位（不鎖定，之後還能請 AI 改）並把選項文字當成使用者的回覆送給 AI
+   * @param {{label: string, updates: Array<{key: string, value: string}>}} suggestion 建議選項（normalizeDraftResponse 的 suggestions）
+   * @param {HTMLElement} button 按下的按鈕
+   * @returns {Promise<void>}
+   */
+  async function chooseSuggestion(suggestion, button) {
+    retireProposals();
+    retireSuggestions();
+    button.classList.add('is-chosen');
+    await pickChoice(suggestion.updates, suggestion.label, { lock: false });
+  }
+
+  /**
+   * 套用使用者選的方案或建議選項：把欄位填進面板（只填面板上的欄位，self 不填）；方案填的欄位標記為手動並鎖定（AI 不再改寫），
+   * 建議選項填的欄位標記為 AI、不鎖定（使用者之後在對話裡要改，AI 還能改）；
+   * 再把 text 當一則對話送給 AI，由 AI 接著回覆；送出鈕停用時（AI 整理中或倒數中）只記在對話區並立即驗證；
+   * 對話送出失敗時這則標示未送達、從對話紀錄移除，面板的值保留（失敗處理會再驗證）；
+   * 有填欄位時焦點移到第一個被填入的欄位，沒有時移到訊息輸入框（按鈕已停用，焦點不能留在按鈕上）
+   * @param {Array<{key: string, value: string}>} updates 要填的欄位
+   * @param {string} text 當成使用者回覆的文字
+   * @param {{lock?: boolean}} [options] lock 為 false 時不鎖定填入的欄位（預設鎖定）
+   * @returns {Promise<void>}
+   */
+  async function pickChoice(updates, text, { lock = true } = {}) {
+    const filled = [];
+    for (const update of updates) {
+      const field = state.fields.find(/** 比對欄位 @param {{key: string}} item 欄位 @returns {boolean} 相同時 true */ (item) => item.key === update.key);
+      if (!field || field.type === 'self') continue;
+      state.values[field.key] = normalizeControlValue(field, update.value);
+      if (lock) state.locked.add(field.key);
+      state.sources[field.key] = lock ? 'user' : 'ai';
+      state.pendingKeys.add(field.key);
+      filled.push(field.key);
+    }
+    const askAi = !nodes.send.disabled;
+    const previous = [...state.history];
+    const turn = { role: 'user', text };
+    const bubble = appendBubble('user', text);
+    state.history.push(turn);
+    state.version += 1;
+    nodes.error.textContent = '';
+    updateFields();
+    // updateFields 不改寫已鎖定欄位的控制項，方案或選項填的欄位剛鎖定，要在這裡把值寫進控制項
+    for (const key of filled) {
+      const entry = state.controls.get(key);
+      if (entry?.control) entry.control.value = state.values[key];
+    }
+    updateApply();
+    const target = filled.map(/** 欄位的控制項 @param {string} key 欄位代號 @returns {HTMLElement|undefined} 控制項 */ (key) => state.controls.get(key)?.control).find(Boolean);
+    if (target && typeof target.focus === 'function') target.focus();
+    else focus();
+    if (!askAi) { scheduleValidate(0); return; }
+    cancelValidate();
+    if (await run('chat', text, previous)) return;
+    const index = state.history.indexOf(turn);
+    if (index >= 0) state.history.splice(index, 1);
+    bubble?.classList.add('is-undelivered');
+    bubble?.append(element('span', 'draft-bubble-flag', DRAFT_TEXT.undelivered));
+  }
+
+  /**
+   * 在對話區列出方案卡片：標題、摘要、理由、查過的資料、能不能送（不能送時列出原因）與「用這個方案」按鈕；
+   * 先停用舊的方案：這次有新的方案時改成「已有新的方案」，沒有時改成「這個方案已過期」；整組以「有 N 個方案可以選」當名稱，報讀器不用整段重讀
+   * @param {Array<object>} proposals 方案
+   * @returns {void}
+   */
+  function renderProposals(proposals) {
+    retireProposals(proposals.length ? DRAFT_TEXT.proposals.stale : DRAFT_TEXT.proposals.expired);
+    if (!proposals.length) return;
+    const group = element('div', 'draft-bubble draft-bubble-proposals');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', fill(DRAFT_TEXT.proposals.group, 'count', String(proposals.length)));
+    group.append(element('span', 'draft-bubble-role', DRAFT_TEXT.roles.proposals));
+    for (const proposal of proposals) {
+      const card = element('section', 'draft-proposal');
+      card.append(element('h4', 'draft-proposal-title', proposal.title));
+      if (proposal.summary) card.append(element('p', 'draft-proposal-summary', proposal.summary));
+      if (proposal.reasons.length) {
+        const reasons = element('ul', 'draft-proposal-reasons');
+        for (const reason of proposal.reasons) reasons.append(element('li', '', reason));
+        card.append(reasons);
+      }
+      if (proposal.basisLabels.length) card.append(element('p', 'draft-proposal-basis', `${DRAFT_TEXT.proposals.basis}${proposal.basisLabels.join('、')}`));
+      const status = proposal.valid ? DRAFT_TEXT.proposals.valid : `${DRAFT_TEXT.proposals.invalid}${proposal.problems.map(/** 取說明 @param {{message: string}} item 問題 @returns {string} 說明 */ (item) => item.message).join('；')}`;
+      card.append(element('p', `draft-proposal-status is-${proposal.valid ? 'valid' : 'invalid'}`, status));
+      const button = element('button', 'button button-secondary draft-proposal-choose', DRAFT_TEXT.proposals.choose);
+      button.type = 'button';
+      button.setAttribute('aria-label', `${DRAFT_TEXT.proposals.choose}：${proposal.title}`);
+      button.addEventListener('click', /** 選這個方案 @returns {Promise<void>} */ () => chooseProposal(proposal, card, button));
+      card.append(button);
+      group.append(card);
+      state.proposalButtons.push(button);
+    }
+    state.log.push({ role: 'proposals', text: proposals.map(/** 取標題 @param {{title: string}} item 方案 @returns {string} 標題 */ (item) => item.title).join('、') });
+    nodes.log.append(group);
+    nodes.log.scrollTop = nodes.log.scrollHeight;
+  }
+
+  /**
+   * 在回覆下方列出建議選項按鈕（最多 3 個）：先停用上一次的選項；點了就照 chooseSuggestion 填欄位並把選項文字當成回覆送出
+   * @param {Array<{id: string, label: string, updates: Array<{key: string, value: string}>}>} suggestions 建議選項
+   * @returns {void}
+   */
+  function renderSuggestions(suggestions) {
+    retireSuggestions();
+    if (!suggestions.length) return;
+    const group = element('div', 'draft-suggestions');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', DRAFT_TEXT.suggestions.group);
+    for (const suggestion of suggestions) {
+      const button = element('button', 'draft-suggestion', suggestion.label);
+      button.type = 'button';
+      button.addEventListener('click', /** 點這個選項 @returns {Promise<void>} */ () => chooseSuggestion(suggestion, button));
+      group.append(button);
+      state.suggestionButtons.push(button);
+    }
+    state.log.push({ role: 'suggestions', text: suggestions.map(/** 取文字 @param {{label: string}} item 選項 @returns {string} 文字 */ (item) => item.label).join('、') });
+    nodes.log.append(group);
+    nodes.log.scrollTop = nodes.log.scrollHeight;
+  }
+
+  /**
+   * 外部服務沒連接或需要重新連接時提示一次（同一種狀態不重複），附「連接帳號」頁的連結（另開分頁）
+   * @param {Array<{id: string, name: string, status: string}>} connections 連接狀態
+   * @returns {void}
+   */
+  function renderConnections(connections) {
+    for (const connection of connections) {
+      const template = DRAFT_TEXT.connections[connection.status];
+      const key = `${connection.id}:${connection.status}`;
+      if (!template || state.connectionNotices.has(key)) continue;
+      state.connectionNotices.add(key);
+      const bubble = appendBubble('system', fill(template, 'name', connection.name));
+      if (!bubble || !connectionsUrl) continue;
+      const link = element('a', 'draft-bubble-link', DRAFT_TEXT.connections.link);
+      link.href = connectionsUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      bubble.append(link);
+    }
   }
 
   /**
@@ -193,7 +392,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   function updateSend() {
     const remaining = sendWait();
     const busy = state.pendingAi > 0;
-    nodes.send.disabled = busy || remaining > 0 || !state.started;
+    nodes.send.disabled = busy || remaining > 0;
     nodes.send.textContent = remaining > 0 ? `請等 ${remaining} 秒` : DRAFT_TEXT.send;
     nodes.typing.textContent = busy ? DRAFT_TEXT.sending : '';
     nodes.typing.hidden = !busy;
@@ -688,6 +887,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
    * @returns {void}
    */
   function renderPanel(rebuild = false) {
+    if (nodes.empty) nodes.empty.hidden = state.hasResult || Boolean(state.type);
     renderDepartment();
     if (rebuild) rebuildFields(); else updateFields();
     renderComputed();
@@ -749,14 +949,32 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   }
 
   /**
+   * 顯示第一次呼叫時收起的問候語（也放進對話紀錄）與連接提示，需要時再列出當時的待補清單
+   * @param {{reply: string, prompt: string, connections: Array<object>}} held 收起的問候語、待補清單與連接狀態
+   * @param {boolean} withChecklist 是否列出收起的待補清單
+   * @returns {void}
+   */
+  function showHeldGreeting(held, withChecklist) {
+    if (held.reply) {
+      appendBubble('assistant', held.reply);
+      state.history.push({ role: 'assistant', text: held.reply });
+    }
+    renderConnections(held.connections);
+    if (withChecklist && held.prompt) appendBubble('checklist', held.prompt);
+  }
+
+  /**
    * 套用後端的整理結果。
    * - 聊天與第一次呼叫（AI）：一律顯示回覆並採用 AI 對需求類型、部門與未鎖定欄位的更新；回應對應目前面板時同時採用狀態，
    *   否則（等待期間使用者又修改了面板）立即再驗證一次。AI 無法使用時，回覆已含 ai_error.message 就不另加系統提示；
    *   ai_error 附 retry_after（AI 忙碌、限流）時送出鈕開始倒數。
    * - 驗證：只有對應目前面板（期間沒有新的修改）且比已套用的結果新時才採用，否則捨棄。
    * 重新開始（generation 不同）後才回來的結果整個捨棄。
+   * - 打字送出的第一句話（ticket.hold）：AI 可以使用時先收起問候語、待補清單與連接提示，等同一句話的對話回覆；
+   *   那次回覆（ticket.held）AI 無法使用時先補上收起的問候語，待補清單改用這次的結果
    * @param {object} result normalizeDraftResponse 的結果。
-   * @param {{seq: number, generation: number, version: number}} ticket 送出時的請求序號、重設世代與面板版本。
+   * @param {{seq: number, generation: number, version: number, hold?: boolean, held?: object}} ticket 送出時的請求序號、重設世代與面板版本，
+   *   以及第一句話的收起（hold）與收起的問候語（held）
    * @param {'chat'|'validate'|'initial'} mode 請求種類。
    * @returns {void}
    */
@@ -764,7 +982,11 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     if (ticket.generation !== state.generation) return;
     const ai = mode !== 'validate';
     const fresh = ticket.version === state.version;
-    if (ai) {
+    if (ai && ticket.hold && result.aiAvailable) {
+      state.heldGreeting = { reply: result.reply, prompt: result.prompt, connections: result.connections };
+      state.aiNoticeShown = false;
+    } else if (ai) {
+      if (ticket.held && !result.aiAvailable) showHeldGreeting(ticket.held, false);
       if (result.reply) {
         appendBubble('assistant', result.reply);
         state.history.push({ role: 'assistant', text: result.reply });
@@ -777,7 +999,10 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
         // AI 忙碌或限流（ai_error 附 retry_after）時，送出鈕倒數到可再詢問 AI 為止；面板仍可手動填寫。
         if (result.aiError?.retryAfter) startWait(result.aiError.retryAfter, true);
       } else state.aiNoticeShown = false;
-      if (mode === 'initial' && result.prompt) appendBubble('checklist', result.prompt);
+      renderSuggestions(result.suggestions);
+      renderProposals(result.proposals);
+      renderConnections(result.connections);
+      if ((mode === 'initial' || ticket.held) && result.prompt) appendBubble('checklist', result.prompt);
     } else if (!fresh || ticket.seq < state.appliedSeq) return;
     state.appliedSeq = Math.max(state.appliedSeq, ticket.seq);
     state.hasResult = true;
@@ -794,6 +1019,8 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     if (adoptRouting(result, ticket.version)) changed = true;
     state.fieldOptions = result.fieldOptions;
     if (result.intent) state.intent = result.intent;
+    // 主題只用 AI 寫的摘要；AI 無法使用時後端的 intent 是類型名稱，不當主題
+    if (ai && result.aiAvailable && result.intent) state.aiSubject = result.intent;
     if (ai && changed) state.version += 1;
     if (fresh) {
       state.missing = result.missing;
@@ -813,14 +1040,16 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   /**
    * 處理草稿請求失敗：憑證失效回登入頁；429 非額度錯誤開始倒數；聊天與第一次呼叫的錯誤顯示在對話區，驗證錯誤顯示在面板下方。
    * 任何失敗都保留手動編輯，Apply 維持停用直到下一次驗證成功；倒數中的驗證會在倒數結束後自動重送。
+   * 第一句話的對話回覆失敗時（ticket.held），先補上收起的問候語與待補清單再顯示錯誤
    * @param {unknown} error 拋出的錯誤。
    * @param {'chat'|'validate'|'initial'} mode 請求種類。
-   * @param {{generation: number}} ticket 送出時的重設世代；已重新開始時不顯示錯誤。
+   * @param {{generation: number, held?: object}} ticket 送出時的重設世代（已重新開始時不顯示錯誤）與收起的問候語
    * @returns {void}
    */
   function handleError(error, mode, ticket) {
     if (error?.status === 401 || error?.code === 'LOGIN_REQUIRED') { onLoginRequired(); return; }
     if (ticket.generation !== state.generation) return;
+    if (ticket.held) showHeldGreeting(ticket.held, true);
     let message = DRAFT_TEXT.unexpected;
     let countdown = false;
     if (error instanceof TicketServiceError) {
@@ -842,11 +1071,12 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
    * @param {'chat'|'validate'|'initial'} mode 請求種類：第一次呼叫只帶主題；聊天帶訊息、對話紀錄與面板狀態；驗證只帶面板狀態。
    * @param {string} [message=''] 聊天訊息。
    * @param {Array<{role: string, text: string}>} [history=[]] 本次訊息之前的對話紀錄。
+   * @param {{hold?: boolean, held?: object}} [extra={}] 第一句話的收起（hold）與收起的問候語（held），見 applyResult
    * @returns {Promise<boolean>} 是否成功。
    */
-  function run(mode, message = '', history = []) {
+  function run(mode, message = '', history = [], extra = {}) {
     state.seq += 1;
-    const ticket = { seq: state.seq, generation: state.generation, version: state.version };
+    const ticket = { seq: state.seq, generation: state.generation, version: state.version, ...extra };
     const input = mode === 'initial' ? { subject: state.subject }
       : mode === 'chat' ? { subject: state.subject, message, history, state: currentState() }
         : { subject: state.subject, state: currentState() };
@@ -862,7 +1092,6 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
       try {
         const result = await requestDraft(input);
         applyResult(result, ticket, mode);
-        if (mode === 'initial' && ticket.generation === state.generation) state.initialDone = true;
         return true;
       } catch (error) {
         handleError(error, mode, ticket);
@@ -948,9 +1177,10 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
    * 對話區送出訊息：檢查不可空白與 300 字上限，先顯示自己的訊息，再帶最近的對話紀錄與面板狀態請 AI 整理；
    * 失敗時把這則訊息標示為未送達、從對話紀錄移除並放回輸入框。
    * @param {Event} [event] 表單提交或按鍵事件。
+   * @param {boolean} [answerFirst=true] 是第一句話時，判斷完類型後是否接著請 AI 回答這句話（常見需求按鈕為 false）
    * @returns {Promise<boolean>} 是否成功送出並取得結果。
    */
-  async function handleChatSubmit(event) {
+  async function handleChatSubmit(event, answerFirst = true) {
     event?.preventDefault?.();
     if (nodes.send.disabled) return false;
     const text = nodes.message.value.trim();
@@ -958,6 +1188,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     const count = countCodePoints(text);
     if (count > DRAFT_LIMITS.message) { nodes.error.textContent = `訊息最多 ${DRAFT_LIMITS.message} 字，目前 ${count} 字`; nodes.message.focus(); return false; }
     nodes.error.textContent = '';
+    if (!state.started) return startWith(text, answerFirst);
     const previous = [...state.history];
     const turn = { role: 'user', text };
     state.history.push(turn);
@@ -978,6 +1209,46 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   }
 
   /**
+   * 第一句話：當作主題（取前 TICKET_LIMITS.subject 字）請後端判斷需求類型並回覆問候，這句話也放進對話紀錄讓之後的 AI 看得到；
+   * 失敗時回到還沒開始的狀態：泡泡標示未送達、從對話紀錄移除並放回輸入框，常見需求按鈕重新出現。
+   * answerFirst 時，判斷成功而且 AI 可以使用就先收起問候語，接著把同一句話當第一則對話送出，由 AI 直接回答；
+   * 這則對話失敗不回到還沒開始的狀態（類型已判斷），改補上收起的問候語
+   * @param {string} text 去除首尾空白後的訊息。
+   * @param {boolean} answerFirst 判斷完類型後是否接著請 AI 回答這句話
+   * @returns {Promise<boolean>} 是否成功取得判斷結果。
+   */
+  async function startWith(text, answerFirst) {
+    state.started = true;
+    state.subject = Array.from(text).slice(0, TICKET_LIMITS.subject).join('').trim();
+    const turn = { role: 'user', text };
+    state.history.push(turn);
+    const bubble = appendBubble('user', text);
+    nodes.message.value = '';
+    updateMessageCount();
+    syncStarters();
+    const generation = state.generation;
+    const ok = await run('initial', '', [], { hold: answerFirst });
+    if (!ok && generation === state.generation) {
+      state.started = false;
+      state.subject = '';
+      const index = state.history.indexOf(turn);
+      if (index >= 0) state.history.splice(index, 1);
+      bubble?.classList.add('is-undelivered');
+      bubble?.append(element('span', 'draft-bubble-flag', DRAFT_TEXT.undelivered));
+      if (!nodes.message.value) { nodes.message.value = text; updateMessageCount(); }
+      syncStarters();
+    }
+    // held 只在這一輪的判斷結果套用時設定（applyResult 已比對 generation），並在這裡立刻取用
+    const held = state.heldGreeting;
+    state.heldGreeting = null;
+    if (held) await run('chat', text, [], { held });
+    return ok;
+  }
+
+  /** 常見需求按鈕只在還沒送出第一句話時顯示 @returns {void} */
+  function syncStarters() { if (nodes.starters) nodes.starters.hidden = state.started; }
+
+  /**
    * 訊息的鍵盤操作：Enter 送出、Shift+Enter 換行；輸入法組字中不送出。
    * @param {KeyboardEvent} event 鍵盤事件。
    * @returns {Promise<boolean>|undefined} 送出時回傳 handleChatSubmit 的結果。
@@ -995,17 +1266,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   function handleMessageInput() { updateMessageCount(); nodes.error.textContent = ''; }
 
   /**
-   * 是否已經輸入過任何內容（送出的訊息、手動修改的欄位或部門、未送出的訊息），用於 Esc 關閉前確認。
-   * @returns {boolean} 是否有輸入。
-   */
-  function hasInput() {
-    if (state.locked.size > 0 || nodes.message.value.trim() || state.departmentEditVersion >= 0) return true;
-    for (const turn of state.history) if (turn.role === 'user') return true;
-    return false;
-  }
-
-  /**
-   * 清空對話、面板與所有暫存狀態（主題變更重新開始、清除重填、送出成功或表單規則更新時使用）；進行中的請求結果會被捨棄。
+   * 清空對話、面板與所有暫存狀態（清除重填、送出成功或表單規則更新時使用），再顯示問候；進行中的請求結果會被捨棄。
    * @returns {void}
    */
   function reset() {
@@ -1023,61 +1284,36 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     nodes.message.value = '';
     updateMessageCount();
     renderPanel(false);
+    appendBubble('assistant', DRAFT_TEXT.greeting.replace('{username}', user.username));
+    syncStarters();
   }
 
   /**
-   * 開啟對話框：第一次開啟時立即以主題向助理取得問候與判斷；主題與上次不同時詢問是否重新開始；
-   * 以相同主題重新開啟時接續先前的對話與面板（先前第一次呼叫失敗且尚未對話時重試；有尚未驗證的修改時立即驗證）。焦點移到訊息輸入框。
-   * @returns {Promise<boolean>|null} 有送出請求時回傳請求結果，否則為 null。
+   * 把一段文字當成使用者的訊息送出（常見需求按鈕、測試使用）；還沒開始時就是第一句話，只判斷類型並顯示問候語，不另外請 AI 回答這句話
+   * @param {string} text 訊息
+   * @returns {Promise<boolean>} 是否成功送出並取得結果
    */
-  function open() {
-    const subject = String(getSubject() ?? '').trim();
-    if (state.started && subject !== state.subject) {
-      if (ask(DRAFT_TEXT.restartConfirm)) reset();
-      else state.subject = subject;
-    }
-    nodes.applyChoice.hidden = true;
-    if (!nodes.dialog.open) nodes.dialog.showModal();
-    nodes.message.focus();
-    if (!state.started) {
-      state.started = true;
-      state.subject = subject;
-      return run('initial');
-    }
-    if (!state.initialDone && !state.hasResult && state.pendingAi === 0 && !state.history.length) return run('initial');
-    if (state.hasResult && !isFresh()) scheduleValidate(0);
-    return null;
+  function start(text) {
+    nodes.message.value = String(text ?? '');
+    updateMessageCount();
+    return handleChatSubmit(undefined, false);
   }
 
   /**
-   * 關閉對話框（狀態保留）。
+   * 先把文字放進輸入框但不送出（狀態追蹤頁「重新提出」帶回的主題），讓使用者補充後自己送
+   * @param {string} text 文字
    * @returns {void}
    */
-  function close() { if (nodes.dialog.open) nodes.dialog.close(); }
-
-  /**
-   * Esc（dialog 的 cancel 事件）：一律攔下預設關閉，有輸入內容時先詢問，同意才關閉。
-   * @param {Event} event cancel 事件。
-   * @returns {void}
-   */
-  function handleCancelEvent(event) {
-    event.preventDefault();
-    if (hasInput() && !ask(DRAFT_TEXT.closeConfirm)) return;
-    close();
+  function prefill(text) {
+    nodes.message.value = String(text ?? '');
+    updateMessageCount();
   }
 
-  /**
-   * 對話框關閉後：取消等待中的驗證（重新開啟時再送）、收起套用選擇，焦點回到「自動生成」按鈕。
-   * @returns {void}
-   */
-  function handleClosed() {
-    cancelValidate();
-    nodes.applyChoice.hidden = true;
-    nodes.trigger?.focus();
-  }
+  /** 焦點移到訊息輸入框 @returns {void} */
+  function focus() { nodes.message.focus(); }
 
   /**
-   * 完成套用：檢查套用後的需求內容不超過 2000 字，通過後把內容與送單設定（需求類型 form、部門、部門是否固定、整理好的內容；處理人一律 null）交給頁面並關閉對話框。
+   * 完成套用：檢查套用後的需求內容不超過 2000 字，通過後把內容與送單設定（AI 整理的主題，AI 沒寫過時用第一句話、需求類型 form、部門、部門是否固定、整理好的內容；處理人一律 null）交給頁面
    * @param {string} content 套用後的完整需求內容。
    * @returns {boolean} 是否已套用。
    */
@@ -1086,6 +1322,7 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
     if (count > TICKET_LIMITS.content) { nodes.error.textContent = describeOverLimit(count); return false; }
     nodes.applyChoice.hidden = true;
     onApply({ content, draft: {
+      subject: state.aiSubject || state.subject,
       form: state.type ? { id: state.type.id, version: state.type.version, fields: currentFields() } : null,
       formName: state.type?.name ?? '',
       department: { id: state.department.id, name: state.department.name },
@@ -1093,7 +1330,6 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
       handler: null,
       rendered: state.rendered,
     } });
-    close();
     return true;
   }
 
@@ -1141,15 +1377,11 @@ export function createDraftDialog(nodes, { user, requestDraft, getSubject, getCo
   nodes.message.addEventListener('keydown', handleMessageKeydown);
   nodes.message.addEventListener('input', handleMessageInput);
   nodes.departmentSelect.addEventListener('change', handleDepartmentChange);
-  nodes.dialog.addEventListener('cancel', handleCancelEvent);
-  nodes.dialog.addEventListener('close', handleClosed);
-  nodes.close.addEventListener('click', close);
-  nodes.cancel.addEventListener('click', close);
   nodes.apply.addEventListener('click', handleApply);
   nodes.replace.addEventListener('click', handleReplace);
   nodes.append.addEventListener('click', handleAppend);
   nodes.choiceCancel.addEventListener('click', handleChoiceCancel);
   reset();
 
-  return { open, close, reset, settled, state, handleChatSubmit, handleMessageKeydown };
+  return { start, prefill, focus, reset, settled, state, handleChatSubmit, handleMessageKeydown };
 }

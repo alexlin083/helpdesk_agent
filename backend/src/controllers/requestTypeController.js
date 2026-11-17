@@ -3,6 +3,7 @@ import { HttpError } from '../middleware/errorHandler.js';
 import { accountService } from '../services/personnel/accountService.js';
 import { taskTracker } from '../services/taskTracker.js';
 import { departmentService } from '../services/departmentService.js';
+import { calendarTools, connectionService } from '../services/connectors/index.js';
 import { draftAssistant } from '../services/ai/providers.js';
 import { createDraftEngine, parseDraftRequest } from '../services/requestTypes/draftEngine.js';
 import { getRequestTypes } from '../services/requestTypes/registry.js';
@@ -43,17 +44,19 @@ export function createRequestTypesHandler(types) {
  * @param {{classify: Function, fill: Function}} [options.assistant=draftAssistant] AI 助手。
  * @param {object} [options.config=env] 設定（aiApiKey、aiFallbackProvider：主要供應商的金鑰與有金鑰的備援供應商，決定是否可用 AI）。
  * @param {Function} [options.clock=Date.now] 時間來源（台北今天）。
+ * @param {{call: Function}} [options.calendar=calendarTools] 行事曆服務（行事曆工具經 MCP 查本人的行事曆）
+ * @param {{statusOf: Function}} [options.connectors=connectionService] 連接服務（回應的 connections 只讀連接狀態）
  * @returns {Function} Express 非同步處理器。
  */
 export function createDraftHandler({ types, departments = departmentService, accounts = accountService, store = dataStore, usage = usageService, tasks = taskTracker,
-  assistant = draftAssistant, config = env, clock = Date.now } = {}) {
+  assistant = draftAssistant, config = env, clock = Date.now, calendar = calendarTools, connectors = connectionService } = {}) {
   let engine;
   /**
    * 取得（第一次使用時建立）引擎，讓預設目錄延後到第一次請求才取得。
    * @returns {{run: Function}} 引擎。
    */
   function engineOf() {
-    engine ??= createDraftEngine({ types: types ?? getRequestTypes(), departments, accounts, store, usage, assistant, config, clock });
+    engine ??= createDraftEngine({ types: types ?? getRequestTypes(), departments, accounts, store, usage, assistant, config, clock, calendar, connectors });
     return engine;
   }
   /**

@@ -39,13 +39,13 @@ backend/data/requestTypes/
 
 | id | 版本 | 名稱 | 送達部門 | 流程（`workflow.route`） | 可轉單 | 本人可簽核 | AI 可用工具 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `leave` | 2 | 請假申請 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「請假單不能轉出人資部」） | 否（「不能簽核自己提出的請假單」） | `colleagues`、`my_leave_balance`、`department_directory` |
-| `attendance` | 1 | 打卡補登 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「打卡補登由人力資源部處理，不能轉單」） | 否 | `department_directory` |
-| `vpn` | 1 | VPN 申請 | 資訊管理一部（`dept-it-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「VPN 申請由資訊管理一部處理，不能轉單」） | 否 | `department_directory` |
-| `repair` | 1 | 報修 | 總務與硬體組（`dept-ga-1`，固定） | `FORM` | 是 | 否 | `department_directory` |
-| `equipment` | 1 | 設備申請 | 總務與硬體組（`dept-ga-1`，固定） | `FORM` | 是 | 否 | `department_directory` |
-| `purchase` | 1 | 採購申請 | 採購部（`dept-pur-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「採購申請由採購部處理，不能轉單」） | 否 | `department_directory` |
-| `general` | 1 | 一般需求（`default_type`） | 由對話決定：AI 信心分數 ≥ 75 時採用，否則由使用者選擇 | `DEPARTMENT`（`judgement.source: 'draft'`，保存 `request_type`） | 是 | 否（「不能簽核自己提出的需求單」） | `department_directory` |
+| `leave` | 4 | 請假申請 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「請假單不能轉出人資部」） | 否（「不能簽核自己提出的請假單」） | `colleagues`、`my_leave_balance`、`department_directory`、`calendar_busy`、`calendar_events`、`policy_lookup` |
+| `attendance` | 2 | 打卡補登 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「打卡補登由人力資源部處理，不能轉單」） | 否 | `department_directory`、`policy_lookup`、`calendar_busy`、`calendar_events` |
+| `vpn` | 2 | VPN 申請 | 資訊管理一部（`dept-it-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「VPN 申請由資訊管理一部處理，不能轉單」） | 否 | `department_directory`、`policy_lookup`、`calendar_busy`、`calendar_events` |
+| `repair` | 2 | 報修 | 總務與硬體組（`dept-ga-1`，固定） | `FORM` | 是 | 否 | `department_directory`、`policy_lookup` |
+| `equipment` | 2 | 設備申請 | 總務與硬體組（`dept-ga-1`，固定） | `FORM` | 是 | 否 | `department_directory`、`policy_lookup` |
+| `purchase` | 2 | 採購申請 | 採購部（`dept-pur-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「採購申請由採購部處理，不能轉單」） | 否 | `department_directory`、`policy_lookup` |
+| `general` | 2 | 一般需求（`default_type`） | 由對話決定：AI 信心分數 ≥ 75 時採用，否則由使用者選擇 | `DEPARTMENT`（`judgement.source: 'draft'`，保存 `request_type`） | 是 | 否（「不能簽核自己提出的需求單」） | `department_directory`、`policy_lookup` |
 
 目前所有類型都沒有設定 `handler`，不提供指定處理人；請假以外的類型都沒有計算、額度帳與檢查；設備申請、打卡補登、VPN 申請、報修與採購申請的內容是示範用的預設值，可依實際需求修改；打卡補登、VPN 申請、報修、採購申請與一般需求的欄位見本節下方
 
@@ -64,11 +64,11 @@ backend/data/requestTypes/
 - 計算 `minutes`（請假時數，`work_minutes`，顯示為 `hours_minutes`）：期間與工作日（扣除 `holidays`）上班時段的重疊，依單位向上取整；為 0 時「請假期間沒有落在上班時段」；例：2026-12-01（週二）09:30～17:30 為 150 + 270 = 420 分鐘（7 小時 0 分鐘）
 - 額度帳：類別 `leave_type`、數量 `minutes`、期間為 `start_at` 的年度、額度表 `leave_entitlements`
 - 檢查：`ledger_balance`（draft、submit、approve；409 `LEAVE_BALANCE_INSUFFICIENT`「假別剩餘時數不足」；摘要「{leave_type}剩餘時數」）、`ledger_overlap`（draft、submit；409 `LEAVE_OVERLAP`「這段時間已有請假單」）
-- 版本相容：請假定義由版本 1 升為 2（欄位不變，規則併入同一檔）；已保存的單保留自己的 `form.version`，因此版本 1 的請假單仍可顯示、計入剩餘時數、阻擋期間重疊、讓同事在 `colleagues` 中顯示為不可擔任代理人，也可以簽核；以 `version: 1` 送出新單回 409 `FORM_VERSION_CHANGED`
+- 版本相容：請假定義由版本 1 升為 2（欄位不變，規則併入同一檔）；已保存的單保留自己的 `form.version`，因此版本 1 的請假單仍可顯示、計入剩餘時數、阻擋期間重疊、讓同事在 `colleagues` 中顯示為不可擔任代理人，也可以簽核；以 `version: 1` 送出新單回 409 `FORM_VERSION_CHANGED`；2026-11-15 再升為 3（加上 `notice_workdays` 檢查與核准通知 `workflow.notify`，欄位不變），版本 2 的草稿送出時同樣回 409，已送出的單保留自己的版本；2026-11-16 再升為 4（拿掉 `notice_workdays` 檢查，事假、特休改成建議至少提早 1 個工作天提出、不擋送出，欄位不變），版本 3 的草稿送出時同樣回 409
 
-**設備申請 `equipment.json`（版本 1）**：內容就是第 13 節的範例；欄位為申請人（self，自動填入、一律非必填）、設備品項（text，最多 50 字）、數量（number，整數 1～50）、用途說明（text，最多 200 字）、需要日期（date，不可早於台北今天）、送交地點（text，最多 50 字），申請人以外全部必填
+**設備申請 `equipment.json`（版本 2）**：比第 13 節的範例多開放 `policy_lookup`，並在 `ai.description` 寫明一張單只填一個品項；欄位為申請人（self，自動填入、一律非必填）、設備品項（text，最多 50 字）、數量（number，整數 1～50）、用途說明（text，最多 200 字）、需要日期（date，不可早於台北今天）、送交地點（text，最多 50 字），申請人以外全部必填
 
-**打卡補登、VPN 申請、報修、採購申請（各為版本 1）**：只用既有的欄位型別與工具（`department_directory`）；`self` 欄位（申請人或報修人）由後端填入目前帳號
+**打卡補登、VPN 申請、報修、採購申請（各為版本 2）**：只用既有的欄位型別；工具（版本 1 只有 `department_directory`）開放 `department_directory` 與 `policy_lookup`，打卡補登與 VPN 申請另開放 `calendar_busy`、`calendar_events`；這四種與設備申請、一般需求都在 2026-11-16 升為版本 2，版本 1 的草稿送出時回 409 `FORM_VERSION_CHANGED`，重新跟助理確認即可；`self` 欄位（申請人或報修人）由後端填入目前帳號
 
 | 類型 | key | label | 型別與規則 |
 | --- | --- | --- | --- |
@@ -92,7 +92,7 @@ backend/data/requestTypes/
 | `purchase` | `needed_by` | 需要日期 | date；必填；不可早於今天（台北） |
 | `purchase` | `supplier` | 建議供應商 | text，最多 50 字；選填（渲染時空白為「未指定」） |
 
-**一般需求 `general.json`（版本 1，`default_type`）**：欄位只有 `description`（需求說明，text，最多 1000 字、保留換行，必填）；部門由 `department_directory` 提供候選，AI 信心分數 ≥ 75（`department.min_confidence`）時採用，否則請使用者選；不提供指定處理人（固定文字只有需求說明與處理部門兩行）；`workflow` 設定 `approver: { not_requester: true, message: "不能簽核自己提出的需求單" }` 與 `transfer: true`：提單人不能簽核或退回自己的一般需求，送達部門的成員可以轉單；送出後的單保存 `request_type: { id: "general", version: 1 }`
+**一般需求 `general.json`（版本 2，`default_type`）**：欄位只有 `description`（需求說明，text，最多 1000 字、保留換行，必填）；部門由 `department_directory` 提供候選，AI 信心分數 ≥ 75（`department.min_confidence`）時採用，否則請使用者選；不提供指定處理人（固定文字只有需求說明與處理部門兩行）；`workflow` 設定 `approver: { not_requester: true, message: "不能簽核自己提出的需求單" }` 與 `transfer: true`：提單人不能簽核或退回自己的一般需求，送達部門的成員可以轉單；送出後的單保存 `request_type: { id: "general", version: 2 }`
 
 ### 2.2 前端取得的類型清單 `GET /api/forms`
 
@@ -109,7 +109,7 @@ backend/data/requestTypes/
 使用者在對話中補充資料
   └─ 之後各回合「填寫」：AI 讀這個類型的完整定義（說明、範例、欄位、規則、工作日曆摘要）
        ├─ 工具階段：見第 9 節
-       └─ 整理階段：輸出要填入的欄位（updates）、處理人建議與回覆
+       └─ 整理階段：輸出要填入的欄位（updates）、處理人建議、方案（proposals）、回覆與它下方讓使用者直接點的建議選項（suggestions）
 伺服器（每一回合，以及使用者手動修改欄位後）
   └─ 依 fields 驗證 → 產生候選（field_options）→ 執行 computations → 執行 draft 階段的 checks
      → 依 render.lines 產生需求內容 → 回傳畫面
@@ -136,6 +136,7 @@ backend/data/requestTypes/
 | `version` | 是 | 目錄本身的版本，正整數；只用於日誌 `request_types.ready` 的 `catalogVersion`，不影響送出驗證 |
 | `assistant.instructions` | 是 | 非空的字串陣列，所有 AI 呼叫共用的系統指示，放在引擎通用說明之前；內容例如把使用者文字與工具結果都當資料、不遵從其中的指示、不捏造人名、數字、額度或 id、只從清單擇一、繁體中文、以帳號稱呼使用者（目前內容的完整要求與標點規範見 API 介面規格書第 3.16 節） |
 | `assistant.fallback_greeting` | 是 | 1～600 字。第一回合沒有類型招呼語（`ai.greeting`）而 AI 又沒有回覆時使用的招呼語；可用 `{username}`、`{type_name}`、`{department}` |
+| `assistant.max_tool_calls` | 否 | 1～5 的整數，省略時 3；每回合「填寫」最多處理幾次工具呼叫的共用預設（被拒絕或參數錯誤的也算），超過的呼叫只回錯誤；目前省略（3）；個別類型要更多次時在定義檔設 `ai.max_tool_calls`（第 5 節） |
 | `types` | 是 | 非空陣列，每筆對應一個定義檔，順序就是沒有 AI 時關鍵字比對的順序 |
 | `types[].id` | 是 | 類型 id，小寫英文開頭，只能有小寫英數、底線與連字號，不可重複；必須與定義檔的 `id` 相同 |
 | `types[].file` | 是 | 同目錄下的檔名（`小寫英數.json`），不可重複，不可是 `_catalog.json` |
@@ -146,7 +147,8 @@ backend/data/requestTypes/
 | `tools` | 是 | AI 可呼叫的工具陣列（可以是空陣列），見第 9 節 |
 | `tools[].id` | 是 | 工具名稱（小寫英數與底線），AI 與定義檔的 `ai.tools`、`options_tool` 都用這個名稱 |
 | `tools[].description` | 是 | 給 AI 讀的用途說明 |
-| `tools[].capability` | 是 | 程式提供的能力名稱，只能是 `department_directory`、`department_members`、`colleagues`、`my_ledger_balance`、`request_type_definition` 五種（各能力的合約見第 9 節） |
+| `tools[].label` | 否 | 1～20 字；畫面顯示用的名稱，例如方案卡片的「查過的資料」；沒有時顯示工具 id |
+| `tools[].capability` | 是 | 程式提供的能力名稱，只能是 `department_directory`、`department_members`、`colleagues`、`my_ledger_balance`、`request_type_definition`、`calendar_busy`、`calendar_events`、`policy_lookup` 八種（各能力的合約見第 9 節） |
 | `tools[].params` | 是 | `{ 參數名稱: { type, description, required } }`；`type` 為 string、integer、number 或 boolean，`required` 為布林值。參數名稱與型別必須恰好符合能力的合約（見第 9 節），否則啟動失敗 |
 | `tools[].access` | 是 | 存取規則，必須是該能力允許的規則（見第 9 節） |
 | `tools[].returns` | 是 | 給 AI 讀的回傳內容說明 |
@@ -167,7 +169,7 @@ backend/data/requestTypes/
 | `fields` | 是 | 欄位陣列，至少一個，見第 6 節 |
 | `computations` | 否 | 計算，見第 7.1 節 |
 | `ledger` | 否 | 額度帳，見第 7.2 節 |
-| `checks` | 否 | 檢查，見第 7.3 節；需要 `ledger` |
+| `checks` | 否 | 檢查，見第 7.3 節；`ledger_balance`、`ledger_overlap` 需要 `ledger`，`notice_workdays` 不需要 |
 | `render` | 是 | `{ lines: [...] }`：需求內容的固定文字，見第 8 節 |
 | `workflow` | 是 | 送達、簽核與轉單規則，見第 10 節 |
 
@@ -180,6 +182,7 @@ backend/data/requestTypes/
 | `ai.greeting` | 否 | 1～600 字的第一回合招呼語，可用 `{username}`（帳號）、`{type_name}`（類型名稱）、`{department}`（處理部門名稱） |
 | `ai.ask_order` | 否 | 欄位 key 陣列，AI 詢問缺少資料的順序 |
 | `ai.tools` | 否 | 這個類型允許 AI 呼叫的工具 id（必須在目錄 `tools` 中）。沒有列出的工具，AI 呼叫時一律被拒絕 |
+| `ai.max_tool_calls` | 否 | 1～5 的整數；這個類型每回合「填寫」最多處理幾次工具呼叫，省略時用目錄的 `assistant.max_tool_calls`；請假設 5，讓 AI 查得完額度、同事、行事曆與規章；調高要一併確認有備援時的期限（API 介面規格書第 1 節「AI 供應商」） |
 
 ## 6. 欄位 `fields`
 
@@ -286,15 +289,21 @@ backend/data/requestTypes/
   { "capability": "ledger_balance", "on": ["draft", "submit", "approve"],
     "error": { "code": "LEAVE_BALANCE_INSUFFICIENT", "message": "假別剩餘時數不足" }, "summary_label": "{leave_type}剩餘時數" },
   { "capability": "ledger_overlap", "on": ["draft", "submit"], "args": { "start": "start_at", "end": "end_at" },
-    "error": { "code": "LEAVE_OVERLAP", "message": "這段時間已有請假單" } }
+    "error": { "code": "LEAVE_OVERLAP", "message": "這段時間已有請假單" } },
+  { "capability": "notice_workdays", "on": ["draft", "submit"], "args": { "start": "start_at", "category": "leave_type", "calendar": "calendar" },
+    "min_workdays": 3, "exempt": ["病假"], "error": { "code": "LEAVE_NOTICE_TOO_LATE", "message": "事假與特休要在請假日 3 個工作日前提出（病假不受限）" } }
 ]
 ```
 
+上面第三筆 `notice_workdays` 是能力的寫法範例：請假定義 2026-11-16 起（版本 4）已拿掉這一筆，提早提出改成建議、不擋送出；要改回強制規定時照這筆加回，並同步改知識庫 `KB-HR-004` 與規章範例第 11 條（見 `docs/企業規章與知識庫/README.md` 第 7 節）
+
 | 鍵 | 說明 |
 | --- | --- |
-| `capability` | `ledger_balance`（本次數量不可超過剩餘額度；剩餘＝額度表的年度額度，送出與核准都不會扣除，額度由人資在公司既有的系統處理）或 `ledger_overlap`（本人在期間內不可已有同類型的待簽核或已核准單）；都需要這份定義有 `ledger` |
+| `capability` | `ledger_balance`（本次數量不可超過剩餘額度；剩餘＝額度表的年度額度，送出與核准都不會扣除，額度由人資在公司既有的系統處理）或 `ledger_overlap`（本人在期間內不可已有同類型的待簽核或已核准單）；都需要這份定義有 `ledger`；或 `notice_workdays`（要在起點日期之前至少 `min_workdays` 個工作日提出，`exempt` 的類別不受限；不需要 ledger，只能用在 `draft`、`submit`） |
 | `on` | 在哪些階段執行：`draft`（自動生成畫面，失敗時欄位顯示錯誤、不能套用）、`submit`（送出時，與寫入在同一筆交易內）、`approve`（核准時在同一筆交易內重新計算；這張單已算在待簽核內，剩餘小於 0 才失敗，失敗時回 409 且不改變狀態） |
-| `args` | `ledger_overlap` 需要 `{ start, end }`，兩個 date／datetime 欄位的 key |
+| `args` | `ledger_overlap` 需要 `{ start, end }`，兩個 date／datetime 欄位的 key；`notice_workdays` 需要 `{ start（日期類欄位）, calendar（工作日曆物件的鍵）, category?（enum 欄位）}` |
+| `min_workdays` | 只用於 `notice_workdays`：1～30 的整數，要在起點日期之前至少幾個工作日提出；從今天算到起點前一天，只算工作日曆的 `workdays`、不算 `holidays`（例如週日提出、週四請假，中間的週一到週三是 3 個工作日）；以送出當天的日期計算，被退回後重新提出時，以重新提出那天重新算 3 個工作日（可能因此請不成，替代做法「以原單第一次送出的日期起算」待組員確認） |
+| `exempt` | 只用於 `notice_workdays`：不受限的類別（`args.category` 欄位的選項），例如請假的病假 |
 | `error` | `{ code, message }`：檢查失敗時的錯誤代碼與訊息（回應方式見 API 介面規格書第 3.3、3.7 節） |
 | `summary_label` | 選填（只對 `ledger_balance` 有意義），畫面摘要的名稱，可引用欄位，例如「{leave_type}剩餘時數」會產生「特休剩餘時數：112 小時 0 分鐘 → 105 小時 0 分鐘」（數量的計算有 `display: hours_minutes` 時以時分顯示，否則為數字） |
 
@@ -339,6 +348,9 @@ backend/data/requestTypes/
 | `colleagues` | `colleagues` | `start_at`、`end_at`（選填，`YYYY-MM-DDTHH:mm`，需同時提供且終點晚於起點） | `same_department` | 目前使用者同部門、啟用中的一般帳號同事（不含本人）`{ id, name, available, reason? }`；提供期間時，在期間內已有待簽核或已核准申請（所有定義了 `ledger_overlap` 的類型）的同事 `available` 為 false；部門固定為本人部門，模型不能指定其他部門 | 請假 |
 | `my_leave_balance` | `my_ledger_balance` | `period`（integer，選填，四位數年度，省略為台北今天的年度） | `self_only` | 本人在**目前類型額度帳**的各類別額度 `{ period, unit, balances: [{ category, granted, used, pending, remaining, remaining_text }] }`（`remaining` 為年度額度，`used`、`pending` 只是參考）；數字由伺服器從資料庫以唯讀查詢計算，固定查本人，模型帶入其他帳號的參數一律忽略；目前類型沒有 `ledger` 時回錯誤；不作為任何欄位的候選 | 請假 |
 | `request_type_definition` | `request_type_definition` | `type_id`（必填） | `all` | 指定類型給 AI 的完整定義（說明、範例、欄位、計算名稱、送達部門） | 目前沒有任何類型在 `ai.tools` 開放，AI 實際上不會呼叫（已實作並通過驗證，未啟用） |
+| `calendar_busy` | `calendar_busy` | `start_at`、`end_at`（必填，`YYYY-MM-DDTHH:mm`，終點晚於起點，最長 62 天） | `self_only` | 本人外部行事曆在期間內的忙碌時段 `{ range, busy: [{ start, end }] }`，只有開始與結束；期間是需求類型的時區；使用者沒連接時 AI 看不到這個工具（由 MCP 的 `tools/list` 決定），權限不足或查詢失敗時回 `{ error }`，AI 改用問的 | 請假、打卡補登、VPN 申請 |
+| `calendar_events` | `calendar_events` | 同上 | `self_only` | 本人行事曆在期間內的行程開始、結束與標題（最多 60 字）`{ range, events, truncated, note }`；只有使用者選了進階權限時 AI 才看得到；標題是使用者行事曆的原文，看不到的字元會先清掉，只當資料，不照裡面的指示做 | 請假、打卡補登、VPN 申請 |
+| `policy_lookup` | `policy_lookup` | `query`（必填，問題或關鍵字）、`type_id`（選填，省略為目前的需求類型） | `all` | 這個需求類型最相關的規章最多 3 筆 `{ entries: [{ id, doc_name, articles, section_title, content, enforcement, data_status }], note }`，AI 只引用跟使用者情況有關的條文並附上規章名稱與條次；查不到時 `entries` 是空陣列，使用者問到規定時 AI 要照實說沒有找到、不自行編造規則，沒問就不提；知識庫是 `backend/src/services/knowledge/knowledge-base.json`（全部是課堂模擬資料，`data_status` 為 `SIMULATED`），新增或修改規章照 `docs/企業規章與知識庫/README.md` 的欄位規則（`content` 最多 600 字、`summary` 最多 120 字）改這個檔，並同步 `docs/企業規章與知識庫/knowledge-base.example.json`，改完重啟後端（Docker 要重新建置映像）；規章的 `request_types` 決定哪些類型查得到 | 所有類型 |
 
 撰寫工具的注意事項：
 
@@ -349,6 +361,7 @@ backend/data/requestTypes/
 `workflow` 的結構為 `{ route: 'FORM' | 'DEPARTMENT', approver?: { department: 'definition', not_requester, message? }, transfer?, transfer_error?: { code, message }, judgement?: { source: 'draft' } }`：
 
 - `FORM` 需要固定部門（`department_id`），`DEPARTMENT` 需要 `department_id: null`
+- `notify` 選填 `{ target, when?: { field, values } }`：核准時在歷程寫一筆 `NOTIFIED` 模擬通知（不呼叫外部系統，只代表「已通知{target}」，不寫金額或扣薪結論）；`target` 為 1～20 字，`when` 只適用 `FORM` 單，`field` 為 enum 欄位、`values` 為它的選項，值符合時才寫；每張單最多一筆，退回與取消不寫；請假設定為假別是事假時通知「薪資系統」
 - `not_requester` 省略時為 true（不可本人簽核）；`transfer` 省略時依 route 決定（`FORM` 為不可轉單、`DEPARTMENT` 為可以）
 - `DEPARTMENT` 單不保存 `form`，改保存 `request_type: { id, version }`，後端的本人簽核與轉單檢查依這個類型的定義判斷（`approve` 檢查只對帶 `form` 的單執行）
 - 各鍵的完整行為（保存內容、簽核與轉單被拒時的回應與預設訊息、類型已不在目錄的單）見 [API 介面規格書](企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md)第 3.3、3.7、3.9、3.15 節
@@ -545,12 +558,31 @@ npm run eval:classify -- --min-accuracy 0.9    # 低於 90% 或有呼叫失敗�
 
 目前的做法是把全部類型的摘要一次交給 AI，類型在幾十種以內時，提示詞的長度不是問題。若評測顯示類型變多後準確度明顯下降，再考慮改成先檢索出幾個候選類型、再交給 AI 判斷的方式（需要改程式，第 12 節），並用同一份題庫比較前後的結果。
 
+### 15.1 方案評測（主模型與備援模型比較）
+
+`npm run eval:plan`（`backend/scripts/eval-plan.js`，比較的邏輯在 `scripts/lib/planEval.js`）用題庫 `backend/evals/plan-cases.json` 比較兩家 AI 的請假方案：同一組題目分別交給 Gemini 與 Claude（各自呼叫、不切換備援），每個方案一律用後端規則判定能不能送、不能送的原因，不用 AI 評 AI
+
+```bash
+cd backend
+npm run eval:plan -- --offline
+npm run eval:plan -- --json --out ../../plan-eval-20261116.json
+npm run eval:plan -- --provider anthropic --repeat 2
+```
+
+- 題庫是初版，由佳妤確認與增修：頂層有 `type_id`、`today`（固定的今天，例如 `2026-11-02`，評測以這天上午 9 點當現在時間）與 `compare`（比較兩家建議時看的欄位，請假是假別與起點日期）；每題有 `id`、`username`（示範名冊的一般帳號）、`subject`、`message`（使用者這次說的話）、`calendar`（替身行事曆的連接狀態 `ACTIVE`／`NOT_CONNECTED`／`NEEDS_RECONNECT`、權限等級 `basic`／`advanced`、忙碌時段與行程）、選填的 `entitlements`（覆寫這位員工當年度的額度，用來出「額度不足」的題目）、`expect`（題庫預期的方案與能不能送）與 `note`（寫給評測的人看）；目前 10 題涵蓋一般、有會議、額度不足、提前不足、病假、沒連接行事曆、需要重新連接、只有基本權限、要查規章與目標不明確
+- 每題每家記下：方案數、每個方案能不能通過後端驗證與原因、建議的假別與日期、和另一家是否相同、和題庫預期是否相同、有沒有呼叫沒連接（或權限不包含）的行事曆工具、耗時；多輪（`--repeat`）時另列建議不一致的題目
+- 選項：`--provider`（只跑一家、不比較）、`--repeat`（1～3 輪）、`--concurrency`（1～4）、`--json`、`--out`（另寫一份結果檔，檔案已存在就停，不覆蓋）、`--offline`（不呼叫 AI，把題庫預期當成方案，檢查題庫本身和後端規則一致；自動測試用這個模式）、`--verbose`
+- 資料：每題建一個全新的記憶體 SQLite，載入示範名冊（必要時覆寫額度），行事曆用替身；腳本一開始就把 `DATABASE_FILE` 設成記憶體，就算環境設定指向正式資料庫也不會開它，輸出只會有示範名冊與替身行事曆的資料
+- 結果檔請放在 repo 以外（例如上面的 `../../`），不要提交到 Git；比較結果會一直累積，所以不寫進資料庫、`meta` 或日誌
+- 用量：每題每家是一回合「自動生成」，工具階段最多 5 次請求加整理 1 次，約 2～7 次 API 請求；預設 10 題 × 2 家 × 1 輪約 40～140 次，會用到兩家的 API 額度，不經過服務的每日自動生成額度；真的呼叫要用組員自己的 `GEMINI_API_KEY` 與 `ANTHROPIC_API_KEY`（設在 `backend/.env`），只有一家的金鑰時加 `--provider`
+- 結束碼：參數錯誤、沒有金鑰或結果檔已存在為 2；有題目呼叫失敗，或離線模式下題庫預期和後端驗證不一致為 1；最先完成的 3 件全部失敗時停止評測（通常是金鑰、模型名稱或額度有問題）
+
 ## 16. 檢查清單
 
 - [ ] 目錄 `types` 有這筆，`id`、`file`、`name` 與定義檔一致；`summary` 寫清楚需求、需要的資料與處理部門；`keywords` 不容易誤判。
 - [ ] `department_id` 存在於 `data/departments.json`，該部門有一般帳號可以簽核；或 `department_id: null` 並設定 `department`。
 - [ ] 每個欄位的 `key` 唯一、`label` 清楚、`type` 正確；必填與格式限制符合實際需求；text 欄位都有 `max_length`。
-- [ ] `ai.description` 寫出每個欄位的限制；`ai.tools` 只開放需要的工具；需要固定說法時設定 `ai.greeting`。
+- [ ] `ai.description` 寫出每個欄位的限制，以及這個類型要 AI 主動提醒或建議的事（例如一張單一個品項、危險狀況先講安全）；`ai.tools` 只開放需要的工具，有規章的類型開放 `policy_lookup`；需要固定說法時設定 `ai.greeting`
 - [ ] `render.lines` 涵蓋所有需要的欄位，總長度在需求內容 2000 字以內。
 - [ ] `workflow` 的 `not_requester` 與 `transfer` 符合部門的實際作業。
 - [ ] 修改既有類型時已把 `version` 加 1。

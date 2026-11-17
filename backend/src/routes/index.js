@@ -5,6 +5,7 @@ import requestTypeRoutes from './requestTypeRoutes.js';
 import leaveRoutes from './leaveRoutes.js';
 import meRoutes from './meRoutes.js';
 import ticketRoutes from './ticketRoutes.js';
+import connectorRoutes from './connectorRoutes.js';
 
 const router = Router();
 
@@ -13,11 +14,13 @@ router.get('/health', (req, res) => {
 });
 
 // 按功能分類：登入、部門名單、需求類型清單、需求單（含自動生成對話）、本人資料與人資專用端點。對話 API 已移除。
+// 外部服務連接（Google 行事曆）：本人的連接清單、連接、中斷連接與 Google 回呼
 router.use('/auth', authRoutes);
 router.use('/departments', departmentRoutes);
 router.use('/forms', requestTypeRoutes);
 router.use('/tickets', ticketRoutes);
 router.use('/me', meRoutes);
 router.use('/leave', leaveRoutes);
+router.use('/connectors', connectorRoutes);
 
 export default router;

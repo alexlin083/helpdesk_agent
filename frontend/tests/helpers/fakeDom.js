@@ -206,48 +206,48 @@ export function buildLoginDom(doc) {
   return { form, username, password, toggle, error, button };
 }
 
-// 「自動生成」視窗的節點 id（與 propose.html 對應），頁面結構測試也用這份清單確認真實頁面具備這些節點。
+// 助理對話區的節點 id（與 propose.html 對應），頁面結構測試也用這份清單確認真實頁面具備這些節點
 export const DRAFT_DIALOG_IDS = [
-  'draft-dialog', 'draft-close', 'draft-intro', 'draft-log', 'draft-typing', 'draft-chat-form', 'draft-message', 'draft-message-count', 'draft-send',
-  'draft-fields', 'draft-department-field', 'draft-department', 'draft-department-source', 'draft-department-status',
+  'draft-dialog', 'draft-intro', 'draft-log', 'draft-starters', 'draft-typing', 'draft-chat-form', 'draft-message', 'draft-message-count', 'draft-send',
+  'draft-fields', 'draft-empty', 'draft-department-field', 'draft-department', 'draft-department-source', 'draft-department-status',
   'draft-field-list', 'draft-computed', 'draft-summaries', 'draft-prompt', 'draft-apply-choice', 'draft-replace', 'draft-append', 'draft-choice-cancel', 'draft-error',
-  'draft-cancel', 'draft-apply',
+  'draft-apply',
 ];
 
 /**
- * 建立「自動生成」視窗的節點樹（與 propose.html 的 id 對應），並以 createDraftDialog 需要的名稱回傳。
- * @param {object} doc 文件替身。
- * @param {FakeElement} parent 要掛上的父節點。
- * @returns {object} 節點：draftDialog、draftClose、draftLog… 以及給 createDraftDialog 用的 dialogNodes。
+ * 建立助理對話區的節點樹（與 propose.html 的 id 對應），並以 createDraftDialog 需要的名稱回傳
+ * @param {object} doc 文件替身
+ * @param {FakeElement} parent 要掛上的父節點
+ * @returns {object} 節點：draftDialog（對話區外框）以及給 createDraftDialog 用的 draftNodes
  */
 export function buildDraftDialogDom(doc, parent) {
-  const dialog = add(doc, parent, 'dialog', 'draft-dialog');
-  const tags = { 'draft-dialog': 'dialog', 'draft-log': 'div', 'draft-typing': 'p', 'draft-chat-form': 'form', 'draft-message': 'textarea', 'draft-fields': 'section',
+  const dialog = add(doc, parent, 'section', 'draft-dialog');
+  const tags = { 'draft-log': 'div', 'draft-starters': 'div', 'draft-typing': 'p', 'draft-chat-form': 'form', 'draft-message': 'textarea', 'draft-fields': 'section',
     'draft-department-field': 'div', 'draft-department': 'select', 'draft-field-list': 'div', 'draft-computed': 'div', 'draft-summaries': 'div', 'draft-apply-choice': 'div' };
   const hidden = new Set(['draft-typing', 'draft-department-field', 'draft-field-list', 'draft-computed', 'draft-summaries', 'draft-prompt', 'draft-apply-choice']);
   const byId = { 'draft-dialog': dialog };
   for (const id of DRAFT_DIALOG_IDS) {
     if (id === 'draft-dialog') continue;
-    const tag = tags[id] ?? (/(close|send|replace|append|cancel|apply)$/.test(id) && id !== 'draft-apply-choice' ? 'button' : 'p');
-    byId[id] = add(doc, dialog, tag, id, { hidden: hidden.has(id), disabled: id === 'draft-send' || id === 'draft-apply' });
+    const tag = tags[id] ?? (/(send|replace|append|cancel|apply)$/.test(id) && id !== 'draft-apply-choice' ? 'button' : 'p');
+    byId[id] = add(doc, dialog, tag, id, { hidden: hidden.has(id), disabled: id === 'draft-apply' });
   }
   const dialogNodes = {
-    dialog, close: byId['draft-close'], log: byId['draft-log'], typing: byId['draft-typing'], chatForm: byId['draft-chat-form'], message: byId['draft-message'],
+    log: byId['draft-log'], typing: byId['draft-typing'], chatForm: byId['draft-chat-form'], message: byId['draft-message'],
     messageCount: byId['draft-message-count'], send: byId['draft-send'], departmentField: byId['draft-department-field'],
     departmentSelect: byId['draft-department'], departmentSource: byId['draft-department-source'], departmentStatus: byId['draft-department-status'],
     fieldList: byId['draft-field-list'], computed: byId['draft-computed'], summaries: byId['draft-summaries'], prompt: byId['draft-prompt'],
     error: byId['draft-error'], applyChoice: byId['draft-apply-choice'],
-    replace: byId['draft-replace'], append: byId['draft-append'], choiceCancel: byId['draft-choice-cancel'], cancel: byId['draft-cancel'], apply: byId['draft-apply'],
+    replace: byId['draft-replace'], append: byId['draft-append'], choiceCancel: byId['draft-choice-cancel'], apply: byId['draft-apply'],
+    starters: byId['draft-starters'], empty: byId['draft-empty'],
   };
   return { draftDialog: dialog, draftNodes: dialogNodes };
 }
 
 /**
- * 建立提出需求單頁需要的節點樹（與 propose.html 的 id 對應）。
- * 頁面不再提供指定處理人選單（處理人只在「自動生成」視窗內指定），因此不建立 #handler 相關節點與 #form-remove；
- * 需求內容與真實頁面一樣預設唯讀，並在下方附上 #content-hint 說明文字。
- * @param {object} doc 文件替身。
- * @returns {object} 常用節點（含 draftDialog 與 draftNodes 等「自動生成」視窗節點）。
+ * 建立提出需求單頁需要的節點樹（與 propose.html 的 id 對應）
+ * 頁面沒有指定處理人選單，也沒有「自動生成」按鈕：助理對話區直接在頁面上；「確認並送出」表單在彈出視窗裡（一開始關著），需求內容預設唯讀
+ * @param {object} doc 文件替身
+ * @returns {object} 常用節點（含 draftDialog 與 draftNodes 等對話區節點）
  */
 export function buildProposeDom(doc) {
   const body = doc.body;
@@ -259,11 +259,14 @@ export function buildProposeDom(doc) {
   nodes.accountDepartment = add(doc, body, 'span', 'account-department');
   nodes.logout = add(doc, body, 'button', 'logout-button');
   nodes.notice = add(doc, body, 'p', 'list-notice', { hidden: true });
-  nodes.form = add(doc, body, 'form', 'ticket-form');
+  nodes.reset = add(doc, body, 'button', 'reset-button');
+  nodes.confirmDialog = add(doc, body, 'dialog', 'confirm-dialog');
+  nodes.confirmClose = add(doc, nodes.confirmDialog, 'button', 'confirm-close');
+  nodes.confirmBack = add(doc, nodes.confirmDialog, 'button', 'confirm-back');
+  nodes.form = add(doc, nodes.confirmDialog, 'form', 'ticket-form');
   nodes.subject = add(doc, nodes.form, 'input', 'subject');
   nodes.subjectCount = add(doc, nodes.form, 'span', 'subject-count');
   nodes.subjectError = add(doc, nodes.form, 'p', 'subject-error');
-  nodes.draftButton = add(doc, nodes.form, 'button', 'draft-button', { disabled: true, ownText: '自動生成' });
   nodes.content = add(doc, nodes.form, 'textarea', 'content', { readOnly: true });
   nodes.contentCount = add(doc, nodes.form, 'span', 'content-count');
   nodes.contentHint = add(doc, nodes.form, 'p', 'content-hint');
@@ -272,7 +275,6 @@ export function buildProposeDom(doc) {
   nodes.formChipText = add(doc, nodes.formChip, 'span', 'form-chip-text');
   nodes.formNotice = add(doc, nodes.form, 'p', 'form-notice', { hidden: true });
   nodes.submitError = add(doc, nodes.form, 'p', 'submit-error');
-  nodes.reset = add(doc, nodes.form, 'button', 'reset-button');
   nodes.submit = add(doc, nodes.form, 'button', 'submit-button', { ownText: '送出需求單' });
   nodes.departmentsButton = add(doc, body, 'button', 'departments-button', { disabled: true });
   nodes.departmentsDialog = add(doc, body, 'dialog', 'departments-dialog');

@@ -31,7 +31,7 @@ export function describeSummary(total, shown, limit) {
   if (total === 0) return '符合條件 0 筆';
   return total > shown ? `符合條件 ${total} 筆，顯示最新 ${shown} 筆（上限 ${limit} 筆）` : `符合條件 ${total} 筆`;
 }
-const EVENT_LABELS = { SUBMITTED: '送出需求單', APPROVED: '簽核', REJECTED: '退回', TRANSFERRED: '轉單', CANCELLED: '取消' };
+const EVENT_LABELS = { SUBMITTED: '送出需求單', APPROVED: '簽核', REJECTED: '退回', TRANSFERRED: '轉單', CANCELLED: '取消', NOTIFIED: '通知' };
 
 /**
  * 組出歷程一筆的說明文字；轉單事件包含來源、目標部門與處理人。
@@ -39,6 +39,8 @@ const EVENT_LABELS = { SUBMITTED: '送出需求單', APPROVED: '簽核', REJECTE
  * @returns {string} 例如「轉單・racky.huang：資訊管理一部 → 資訊管理二部（cindy.wang），AI 判斷錯誤」。
  */
 export function describeHistory(item) {
+  // 核准時的模擬通知：由系統記錄，只顯示通知對象（例如「通知薪資系統（模擬）」），不顯示記錄者與重複的說明
+  if (item.event === 'NOTIFIED') return `${EVENT_LABELS.NOTIFIED}${item.target ?? ''}${item.simulated ? '（模擬）' : ''}`;
   let text = `${EVENT_LABELS[item.event] ?? item.event}${item.by_username ? `・${item.by_username}` : ''}`;
   if (item.event === 'TRANSFERRED' && item.to_department_name) {
     text += `：${item.from_department_name || '—'} → ${item.to_department_name}${item.to_handler_name ? `（${item.to_handler_name}）` : ''}`;

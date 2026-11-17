@@ -1,5 +1,6 @@
 import { isCalendarDate, isClockTime, isTimezoneOffset, minutesOfDay, parseLocalDateTime, formatHoursMinutes, localToday, DEFAULT_TIMEZONE_OFFSET } from '../../utils/dates.js';
 import { definitionError, isPlainObject, nonempty, yearOf } from './fieldTypes.js';
+import { getKnowledgeBase } from '../knowledge/knowledgeBase.js';
 
 const MINUTES_PER_DAY = 1440;
 // 工具的資料存取規則；registry 依工具能力要求的規則驗證目錄，執行時再依規則限制輸入與輸出。
@@ -195,14 +196,35 @@ export const COMPUTATION_CAPABILITIES = Object.freeze({
 });
 
 /**
- * 檢查能力（checks[].capability），都需要定義的 ledger：
+ * 檢查能力（checks[].capability）；needsLedger 為 true 的需要定義的 ledger，phases 為可以設定的階段：
  * - ledger_balance：本次數量不可超過該類別該期間的剩餘額度（剩餘＝年度額度，不扣待簽核或已核准的單；送出與核准時同樣比較）；
  * - ledger_overlap：同一申請人在期間內不可已有待簽核或已核准的同類申請，args { start, end } 為 date／datetime 欄位 key。
+ * - notice_workdays：要在起點日期之前至少 min_workdays 個工作日提出（從今天算到起點前一天，只算工作日曆的工作日、不算假日），
+ *   args { start（日期類欄位）, calendar（工作日曆物件的鍵）, category?（enum 欄位）}，exempt 列出不受限的類別；只在 draft、submit 檢查，核准時不檢查
  */
 export const CHECK_CAPABILITIES = Object.freeze({
-  ledger_balance: Object.freeze({ needsArgs: [] }),
-  ledger_overlap: Object.freeze({ needsArgs: ['start', 'end'] }),
+  ledger_balance: Object.freeze({ needsArgs: [], needsLedger: true, phases: CHECK_PHASES }),
+  ledger_overlap: Object.freeze({ needsArgs: ['start', 'end'], needsLedger: true, phases: CHECK_PHASES }),
+  notice_workdays: Object.freeze({ needsArgs: ['start'], needsLedger: false, phases: Object.freeze(['draft', 'submit']) }),
 });
+
+/**
+ * 從 today（含）到 date（不含）之間的工作日數：只算工作日曆的 workdays，扣掉 holidays；數到 limit 就停（夠了不用再數）
+ * @param {object} calendar normalizeCalendar 的結果
+ * @param {string} today 今天 YYYY-MM-DD（需求類型的時區）
+ * @param {string} date 起點日期 YYYY-MM-DD
+ * @param {number} limit 數到這個數字就停
+ * @returns {number} 工作日數；date 不晚於 today 時為 0
+ */
+export function workdaysBefore(calendar, today, date, limit) {
+  let count = 0;
+  const end = Date.parse(`${date}T00:00:00Z`);
+  for (let day = Date.parse(`${today}T00:00:00Z`); day < end && count < limit; day += MINUTES_PER_DAY * 60000) {
+    const at = new Date(day);
+    if (calendar.workdays.has(at.getUTCDay()) && !calendar.holidays.get(at.getUTCFullYear())?.has(at.toISOString().slice(0, 10))) count += 1;
+  }
+  return count;
+}
 
 /**
  * 工具能力（目錄 tools[].capability）：access 為允許的存取規則，options 為可作為欄位選項來源的欄位型別，
@@ -214,7 +236,38 @@ export const TOOL_CAPABILITIES = Object.freeze({
   colleagues: Object.freeze({ access: ['same_department'], options: 'account', params: Object.freeze({ start_at: 'string', end_at: 'string' }) }),
   my_ledger_balance: Object.freeze({ access: ['self_only'], options: null, params: Object.freeze({ period: 'integer' }) }),
   request_type_definition: Object.freeze({ access: ['all'], options: null, params: Object.freeze({ type_id: 'string' }) }),
+  calendar_busy: Object.freeze({ access: ['self_only'], options: null, connector: 'google_calendar', params: Object.freeze({ start_at: 'string', end_at: 'string' }) }),
+  calendar_events: Object.freeze({ access: ['self_only'], options: null, connector: 'google_calendar', params: Object.freeze({ start_at: 'string', end_at: 'string' }) }),
+  policy_lookup: Object.freeze({ access: ['all'], options: null, params: Object.freeze({ query: 'string', type_id: 'string' }) }),
 });
+
+/**
+ * 交給 AI 的工具清單：需要外部服務連接的工具（能力有 connector）只留本人目前可用的，由行事曆服務經 MCP 的 tools/list 決定（依本人的連接與權限等級）；
+ * 其他工具原樣保留；沒連接、沒有行事曆服務或查詢失敗時，這類工具都不交給 AI，AI 直接問使用者
+ * @param {object[]} tools 需求類型允許的工具（registry.toolsFor）
+ * @param {object} context 執行環境
+ * @param {string} context.username 本人帳號（憑證身分）
+ * @param {{listAvailable: Function}} [context.calendar] 行事曆服務
+ * @returns {Promise<object[]>} 交給 AI 的工具
+ */
+export async function visibleTools(tools, { username, calendar }) {
+  if (!tools.some(/** 需要連接 @param {{capability: string}} tool 工具 @returns {boolean} 是時 true */ (tool) => TOOL_CAPABILITIES[tool.capability]?.connector)) return tools;
+  let available = [];
+  if (calendar) { try { available = await calendar.listAvailable(username); } catch { available = []; } }
+  return tools.filter(/** 不需要連接或本人可用 @param {{capability: string}} tool 工具 @returns {boolean} 保留時 true */ (tool) => !TOOL_CAPABILITIES[tool.capability]?.connector || available.includes(tool.capability));
+}
+
+/**
+ * 把類型時區的 YYYY-MM-DDTHH:mm 期間轉成含時區的 RFC 3339 期間（行事曆工具用）
+ * @param {unknown} start 起點 YYYY-MM-DDTHH:mm
+ * @param {unknown} end 終點 YYYY-MM-DDTHH:mm
+ * @param {string} offset 時區位移，例如 +08:00
+ * @returns {{start: string, end: string}|null} 期間；格式不對或終點不晚於起點時 null
+ */
+export function localRange(start, end, offset) {
+  if (!parseLocalDateTime(start) || !parseLocalDateTime(end) || !(end > start)) return null;
+  return { start: `${start}:00${offset}`, end: `${end}:00${offset}` };
+}
 
 /**
  * 計算某類別某期間的額度結果並判斷是否足夠：剩餘只由年度額度決定（見 computeLedgerBalances），
@@ -319,7 +372,10 @@ export function listColleagues({ user, accounts, helpers, busySpecs, period, rea
  * - department_members：指定部門的一般帳號，只回傳 { id, name }；
  * - colleagues：固定為本人部門、排除本人，可帶 start_at、end_at 標示期間內已有申請者；
  * - my_ledger_balance：固定查本人在目前需求類型 ledger 的額度（後端計算），只能查本人；
- * - request_type_definition：指定需求類型給 AI 的定義。
+ * - request_type_definition：指定需求類型給 AI 的定義；
+ * - calendar_busy、calendar_events：固定查本人的外部行事曆（後端內部經官方 MCP SDK 呼叫自寫的唯讀行事曆 MCP 伺服器，見 connectors/calendarMcp.js），期間為需求類型時區的 YYYY-MM-DDTHH:mm；
+ *   沒連接、權限等級不包含這個工具或提供者失敗時回 { error }，AI 改用問的，不假裝查到；
+ * - policy_lookup：依需求類型與問題查規章知識庫（knowledge/knowledgeBase.js），最多 3 筆並附來源；type_id 省略時為目前的需求類型；知識庫讀不到或查詢失敗時回 { error }
  * 參數不符、需求類型沒有 ledger 或查無資料時回傳 { error }，交給模型改問使用者，不讓請求失敗。資料庫錯誤原樣拋出。
  * @param {object} tool 目錄的工具定義（id、capability、params、access）。
  * @param {unknown} rawParams 模型提供的參數。
@@ -331,10 +387,12 @@ export function listColleagues({ user, accounts, helpers, busySpecs, period, rea
  * @param {object} context.departments 部門查詢服務。
  * @param {object} context.store 需求單儲存（withLedger）。
  * @param {Function} context.clock 時間來源。
+ * @param {{call: Function}} [context.calendar] 行事曆服務（createCalendarTools）；沒有提供時行事曆工具回 { error }
+ * @param {{search: Function}} [context.knowledge] 規章知識庫；省略時用正式知識庫（getKnowledgeBase）
  * @returns {Promise<object>} { result } 或 { error }。
  * @throws {HttpError} 503 資料庫無法讀取。
  */
-export async function executeTool(tool, rawParams, { user, type, registry, accounts, departments, store, clock }) {
+export async function executeTool(tool, rawParams, { user, type, registry, accounts, departments, store, clock, calendar, knowledge }) {
   const parsed = parseToolParams(tool, rawParams);
   if (!parsed.ok) return { error: parsed.error };
   const { params } = parsed;
@@ -359,6 +417,15 @@ export async function executeTool(tool, rawParams, { user, type, registry, accou
     const target = nonempty(params.type_id) ? registry.find(params.type_id) : null;
     if (!target) return { error: '找不到這個需求類型' };
     result = registry.aiView(target);
+  } else if (tool.capability === 'calendar_busy' || tool.capability === 'calendar_events') {
+    if (!calendar) return { error: '這個環境沒有啟用行事曆查詢；請直接問使用者' };
+    const range = localRange(params.start_at, params.end_at, type.timezoneOffset ?? DEFAULT_TIMEZONE_OFFSET);
+    if (!range) return { error: 'start_at 與 end_at 都要提供，格式為 YYYY-MM-DDTHH:mm（需求類型的時區），且終點晚於起點' };
+    return calendar.call(user.username, tool.capability, range);
+  } else if (tool.capability === 'policy_lookup') {
+    try { result = (knowledge ?? getKnowledgeBase()).search(params.query, nonempty(params.type_id) ? params.type_id : type.id); } catch {
+      return { error: '規章資料暫時無法使用；請照實告訴使用者，不要自行編造規則' };
+    }
   } else {
     return { error: '不支援的工具' };
   }

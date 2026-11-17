@@ -1,13 +1,13 @@
 {
   "id": "general",
-  "version": 1,
+  "version": 2,
   "name": "一般需求",
   "department_id": null,
   "department": { "options_tool": "department_directory", "min_confidence": 75 },
   "ai": {
-    "description": "沒有專用表單的需求：把使用者描述的狀況整理成清楚的需求說明（發生了什麼事、影響範圍、希望何時完成），並依部門職責與業務判斷處理部門。",
+    "description": "沒有專用表單的需求：把使用者描述的狀況整理成清楚的需求說明（發生了什麼事、影響範圍、希望何時完成；使用者沒說的部分不要自己補），並依部門職責與業務判斷處理部門。",
     "examples": ["VPN 連不上", "ERP 報表權限申請", "Outlook 收不到信"],
-    "tools": ["department_directory"]
+    "tools": ["department_directory", "policy_lookup"]
   },
   "fields": [
     { "key": "description", "label": "需求說明", "type": "text", "required": true, "max_length": 1000, "multiline": true }
