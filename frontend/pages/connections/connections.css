@@ -1,0 +1,42 @@
+/* 連接帳號頁：左清單右詳細（窄畫面改成上下排），沿用 base.css 的色彩變數與按鈕樣式 */
+/* 內容隨視窗寬度延展，左右留白和頂欄對齊 */
+.connections-layout { padding: 48px 40px 72px; }
+.connections-head h1 { margin: 0 0 8px; }
+.connections-head .intro { margin: 0 0 16px; color: var(--ink-soft); }
+.connections-head .privacy-link { margin: -8px 0 16px; font-size: 0.9rem; color: var(--ink-soft); }
+.connections-head .privacy-link a { color: var(--brown-deep); }
+.connections-status { min-height: 1.5em; margin: 0 0 16px; color: var(--success); }
+.connections-status:empty { margin: 0; min-height: 0; }
+.connections-status.is-error { color: var(--danger); }
+.connections-split { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 20px; align-items: start; }
+.connector-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.connector-item {
+  width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper);
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.connector-item:hover { background: var(--cream); }
+.connector-item[aria-pressed="true"] { border-color: var(--line-strong); background: var(--cream); font-weight: 700; }
+.connector-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.badge { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 400; border: 1px solid var(--line); color: var(--muted); background: var(--paper); }
+.badge-active { color: var(--success); border-color: var(--success); }
+.badge-needs_reconnect { color: var(--brown-deep); border-color: var(--notice-line); background: var(--notice); }
+.connector-detail { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: 24px; }
+.detail-title { margin: 0 0 6px; }
+.detail-description { margin: 0 0 12px; color: var(--ink-soft); }
+.detail-state { margin: 0 0 12px; font-weight: 700; }
+.detail-heading { margin: 16px 0 4px; font-size: 1rem; }
+.detail-list { margin: 0; padding-left: 1.2em; color: var(--ink-soft); }
+.level-options { margin: 16px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); }
+.level-options legend { padding: 0 4px; font-weight: 700; }
+.level-option { display: flex; gap: 8px; align-items: center; padding: 4px 0; cursor: pointer; }
+/* base.css 的 input 通用樣式會把單選鈕撐滿整列，這裡還原成原生大小 */
+.level-option input[type="radio"] { flex: none; width: auto; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; }
+.detail-downgrade { margin: 8px 0 0; font-size: 0.9rem; }
+.connector-detail .notice { margin: 12px 0 0; }
+.connector-detail .muted { margin: 12px 0 0; font-size: 0.9rem; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+@media (max-width: 760px) {
+  .connections-layout { padding: 28px 16px 48px; }
+  .connections-split { grid-template-columns: 1fr; }
+}

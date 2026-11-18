@@ -392,7 +392,7 @@ export function normalizeStoredTicket(data) {
   const history = (Array.isArray(data.history) ? data.history : []).filter((item) => item && typeof item === 'object' && isText(item.event) && isText(item.at))
     .map((item) => ({ event: item.event, at: item.at, by_username: isText(item.by_username) ? item.by_username : '', comment: isText(item.comment) ? item.comment.trim() : '',
       from_department_name: isText(item.from_department_name) ? item.from_department_name : '', to_department_name: isText(item.to_department_name) ? item.to_department_name : '',
-      to_handler_name: isText(item.to_handler_name) ? item.to_handler_name : '' }));
+      to_handler_name: isText(item.to_handler_name) ? item.to_handler_name : '', target: isText(item.target) ? item.target.trim() : '', simulated: item.simulated === true }));
   return {
     ticket_id: data.ticket_id.trim(), created_at: data.created_at, updated_at: isText(data.updated_at) ? data.updated_at : data.created_at,
     subject: data.subject.trim(), content: typeof data.content === 'string' ? data.content : '', status: data.status,

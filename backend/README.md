@@ -57,6 +57,18 @@ backend/
 │   │   ├── admin/                   # 管理功能：
 │   │   │   ├── adminService.js      #   管理重置（維護鎖內清空需求單與保護計數）
 │   │   │   └── adminMetrics.js      #   管理監測快照（唯讀）
+│   │   ├── connectors/              # 外部服務連接（Google 行事曆；資料存在既有的 meta 表，不升資料庫版本）：
+│   │   │   ├── connectors.json      #   連接器清單與權限等級（放在 src 底下，由 Dockerfile 既有的 COPY src 帶進映像）
+│   │   │   ├── registry.js          #   讀取並驗證連接器清單；清單壞掉時只讓連接 API 回 503
+│   │   │   ├── connectionService.js #   發起、完成、中斷連接，取存取權杖，自動生成回應用的連接狀態
+│   │   │   ├── googleOAuth.js       #   Google 授權網址（PKCE）、換權杖、更新與撤銷
+│   │   │   ├── crypto.js            #   以 AUTH_SECRET 加密授權與用戶端密鑰（AES-256-GCM）
+│   │   │   ├── metaRecords.js       #   meta 表裡連接紀錄與管理設定的名稱與格式
+│   │   │   ├── calendarMcp.js       #   自寫唯讀行事曆 MCP 伺服器與後端內部的 MCP client（官方 SDK，記憶體連線）
+│   │   │   └── index.js             #   正式服務用的連接服務與行事曆工具
+│   │   ├── knowledge/               # 規章知識庫：
+│   │   │   ├── knowledge-base.json  #   規章資料（課堂模擬，和 docs/企業規章與知識庫 的範例相同）
+│   │   │   └── knowledgeBase.js     #   讀取、驗證與查詢（policy_lookup）
 │   │   ├── requestTypes/            # 需求類型通用引擎（不含任何類型專屬的程式）：
 │   │   │   ├── registry.js          #   載入並驗證 _catalog.json 與各定義檔；提供 GET /api/forms 的形狀（forClient）、自動生成回應的類型（draftView，另帶日期類欄位的 rules 與工作日曆摘要 calendars）、交給 AI 的完整定義（aiView）、關鍵字備援（match）
 │   │   │   ├── fieldTypes.js        #   欄位型別（self、enum、text、number、date、datetime、account、department）的定義驗證、值的整理（例如 2026/12/1 9:30 → 2026-12-01T09:30）與檢查
@@ -68,8 +80,9 @@ backend/
 │   │   │   ├── claudeAssistant.js   #   Claude 呼叫：與 Gemini 版相同的流程（tool use、output_config 結構化輸出、effort low）
 │   │   │   └── workflow.js          #   送出、簽核與轉單時依定義執行的規則（API 規格書第 3.3、3.7、3.9 節）
 │   └── utils/                       # logger（JSON 日誌與遮蔽）、agentDeadline（上游逾時）、dates（台北日期、時間格式）、punctuation（AI 輸出的句號「。」：句中改成「；」、句尾刪除）、shutdown（連線追蹤、優雅關機、訊號處理）
-├── scripts/                         # 維運腳本：人員資料、請假紀錄查詢、舊檔匯入、匯出 JSON、線上備份、停機還原（一併複製進映像檔）；eval-classification.js 與 lib/ 為分類評測（開發用）
+├── scripts/                         # 維運腳本：人員資料、請假紀錄查詢、舊檔匯入、匯出 JSON、線上備份、停機還原（一併複製進映像檔）；eval-classification.js 與 lib/ 為分類評測、eval-plan.js 為方案評測（開發用）
 ├── evals/classification-cases.json  # 分類評測題庫（不複製進映像檔）
+├── evals/plan-cases.json            # 方案評測題庫（主模型與備援模型比較；初版，由佳妤確認與增修；不複製進映像檔）
 ├── data/                            # 規則設定檔（部門與需求類型，提交 Git）；人員資料不在這裡，只存在 SQLite
 │   ├── departments.json             # 部門設定檔（八個部門：部門、業務說明、關鍵字）
 │   ├── requestTypes/                # 需求類型（規則設定，提交 Git，整個資料夾複製進映像檔）
@@ -166,6 +179,8 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 - 需求類型定義驗證錯誤時記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 含檔名與鍵路徑，例如 `equipment.json fields[2].type 未知的欄位型別「slider」…`）並以結束碼 1 結束，成功記錄 `request_types.ready`（`types`、`defaultType`、`catalogVersion`）；修改定義後的重啟與重新建置規則見規範文件第 2 節
 - 通用引擎在 `src/services/requestTypes/`，不含任何類型的 id、欄位 key 或領域用語；`tests/requestTypes.test.js` 會掃描 `src/` 確認（資料庫結構、人員資料與人資假別 API 不在掃描範圍）。新增類型只需新增 JSON 檔並在目錄加一筆，不改程式（`tests/draftFlow.test.js` 以一個只存在測試中的 `overtime.json` 驗證）。需要新的欄位型別、計算或檢查能力時才改程式，並同步更新規範文件。
 - 分類評測：`npm run eval:classify` 以 `evals/classification-cases.json` 的題目量測第一回合分類（類型、部門、混淆、邊界題、多輪是否一致）；使用的 AI 供應商與備援、`--provider`、`--offline` 等選項，以及如何依結果修改摘要見規範文件第 15 節
+- Google 行事曆連接：設定步驟見[Google 行事曆連接設定手冊](../docs/Google行事曆連接設定手冊.md)，這次期末專題的變更與組員要跑的建置驗證見[期末專題功能變更說明](../docs/期末專題功能變更說明.md)
+- 方案評測：`npm run eval:plan` 以 `evals/plan-cases.json` 比較 Gemini 與 Claude 的請假方案，用後端規則判定能不能送；每題用記憶體資料庫與替身行事曆，不讀寫正式資料庫；`--offline` 不呼叫 AI；結果檔（`--out`）請放在 repo 以外；用法與用量見規範文件第 15.1 節
 
 ## API 端點
 

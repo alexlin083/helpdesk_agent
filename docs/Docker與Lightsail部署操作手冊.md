@@ -672,7 +672,7 @@ GEMINI_MODEL=gemini-3.5-flash-lite
    舊的 `.env` 若沒有 `AI_PROVIDER`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_MODEL` 這幾行，才加到檔案最後；production 會要求主要供應商的金鑰，`AI_PROVIDER=anthropic` 卻沒有 `ANTHROPIC_API_KEY` 時後端拒絕啟動；以 `grep -cE '^(AI_PROVIDER|ANTHROPIC_API_KEY|GEMINI_API_KEY)=' .env` 確認結果為 3（只印出筆數，不印出值）
 3. 以 `sudo docker compose up -d --no-build --pull never --wait` 重建容器；`docker compose restart` 不會載入修改後的 `.env`
 4. 以 `sudo docker compose logs --tail=100 backend | grep server.started` 確認 `aiProvider` 為 `anthropic`、`aiFallbackProvider` 為 `gemini`；再實際操作「自動生成」幾次，日誌應出現 `claude.generate.completed`
-5. 觀察 `ai.fallback.used` 的頻率：有備援時主要供應商有期限（自動生成一回合 30 秒、判斷部門 6 秒），超過就交給 Gemini，切換後 60 秒內的請求也都直接用 Gemini（全站共用）；`sudo docker compose logs --since 1h backend | grep -c ai.fallback.used` 可以算出次數；經常出現 `reason` 為 `AI_TIMEOUT` 時，先看 `claude.generate.completed` 的 `durationMs` 找出慢的階段；`ANTHROPIC_MODEL` 可改為 `claude-haiku-5-5` 比較（改 `.env` 後重做步驟 3，本機實測只換模型無法解決 10 秒期限的問題）；要再調整期限需修改程式（`PRIMARY_DRAFT_TIMEOUT_MS`，主要＋備援須小於前端 70 秒）並同步更新規格書
+5. 觀察 `ai.fallback.used` 的頻率：有備援時主要供應商有期限（自動生成一回合 40 秒、判斷部門 6 秒），超過就交給 Gemini，切換後 60 秒內的請求也都直接用 Gemini（全站共用）；`sudo docker compose logs --since 1h backend | grep -c ai.fallback.used` 可以算出次數；經常出現 `reason` 為 `AI_TIMEOUT` 時，先看 `claude.generate.completed` 的 `durationMs` 找出慢的階段；`ANTHROPIC_MODEL` 可改為 `claude-haiku-5-5` 比較（改 `.env` 後重做步驟 3，本機實測只換模型無法解決 10 秒期限的問題）；要再調整期限需修改程式（`PRIMARY_DRAFT_TIMEOUT_MS`，主要＋備援須小於前端 70 秒）並同步更新規格書
 
 改回 Gemini 為主：把 `AI_PROVIDER` 改為 `gemini`，再執行步驟 3；回滾程式時把 `pre-claude` 標籤改回 `latest`，其餘同第 5.2 節
 

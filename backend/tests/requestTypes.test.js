@@ -94,16 +94,20 @@ function evaluate(type, input, extra = {}) {
 }
 
 /**
- * 驗證無備援時自動生成整回合預設為 60 秒，並驗證實際定義檔可載入：目錄、七種類型（目錄順序即關鍵字備援的比對順序）、對外形狀、版本與期間規格；設定檔內容與規格書約定的值一致。
+ * 驗證無備援時自動生成整回合預設為 60 秒，並驗證實際定義檔可載入：目錄、七種類型（目錄順序即關鍵字備援的比對順序）、對外形狀、版本、各類型開放的工具與期間規格；設定檔內容與規格書約定的值一致。
  * @returns {void}
  */
 function realDefinitions() {
   assert.deepEqual(types.ids(), ['leave', 'attendance', 'vpn', 'repair', 'equipment', 'purchase', 'general']);
   assert.equal(types.defaultType().id, 'general');
   const leave = types.find('leave');
-  assert.equal(leave.version, 2);
+  assert.equal(leave.version, 4, '4：提早提出改成建議，拿掉 notice_workdays');
   assert.equal(leave.departmentId, 'dept-hr-1');
-  assert.deepEqual(leave.ai.tools, ['colleagues', 'my_leave_balance', 'department_directory']);
+  assert.deepEqual(leave.ai.tools, ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
+  const toolsOf = /** 取類型開放的工具 @param {string} id 類型 @returns {string[]} 工具 id */ (id) => types.find(id).ai.tools;
+  for (const id of ['attendance', 'vpn']) assert.deepEqual(toolsOf(id), ['department_directory', 'policy_lookup', 'calendar_busy', 'calendar_events'], `${id} 可以查規章與已連接的行事曆`);
+  for (const id of ['repair', 'equipment', 'purchase', 'general']) assert.deepEqual(toolsOf(id), ['department_directory', 'policy_lookup'], `${id} 可以查規章`);
+  for (const id of ['attendance', 'vpn', 'repair', 'equipment', 'purchase', 'general']) assert.equal(types.find(id).version, 2, `${id} 2：開放規章查詢、改寫給 AI 的說明`);
   assert.deepEqual(types.busySpecs(), [{ typeId: 'leave', startField: 'start_at', endField: 'end_at' }]);
   assert.deepEqual(Object.keys(types.forClient(leave)), ['id', 'version', 'name', 'summary', 'department', 'fields', 'computed', 'workflow']);
   assert.deepEqual(types.forClient(leave).computed, [{ key: 'minutes', label: '請假時數', display: 'hours_minutes' }]);

@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "description": "初版，由佳妤確認與增修；方案評測（主模型與備援模型比較）的題庫，資料全部是示範名冊與替身行事曆，today 固定為 2026-11-02（週一）上午 9 點，下週一是 11/9；expect 是題庫預期的方案（離線模式拿它當 AI 的方案，檢查題庫本身與後端規則一致），note 寫給評測的人看",
+  "type_id": "leave",
+  "today": "2026-11-02",
+  "compare": [{ "key": "leave_type" }, { "key": "start_at", "part": "date" }],
+  "cases": [
+    {
+      "id": "plain-day",
+      "username": "emily.wu",
+      "subject": "下週想請假",
+      "message": "下週二想請一天特休，代理人找 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "advanced", "busy": [], "events": [] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-10T09:00" }, { "key": "end_at", "value": "2026-11-10T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "一般情況：行事曆沒有行程，應提出週二整天的特休"
+    },
+    {
+      "id": "meeting-afternoon",
+      "username": "emily.wu",
+      "subject": "下週三請假",
+      "message": "下週三想請一天特休，但不要影響會議，代理人是 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "advanced",
+        "busy": [{ "start": "2026-11-11T14:00:00+08:00", "end": "2026-11-11T15:00:00+08:00" }],
+        "events": [{ "start": "2026-11-11T14:00:00+08:00", "end": "2026-11-11T15:00:00+08:00", "all_day": false, "title": "專案進度會議" }] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-11T09:00" }, { "key": "end_at", "value": "2026-11-11T12:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "週三下午有會議（進階權限看得到標題）；請週三上午、或改到其他天並說明，都算合理"
+    },
+    {
+      "id": "balance-short",
+      "username": "emily.wu",
+      "subject": "下週連休",
+      "message": "下週一到週三想連請三天特休，代理人 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "basic", "busy": [], "events": [] },
+      "entitlements": { "特休": 960 },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-09T09:00" }, { "key": "end_at", "value": "2026-11-11T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": false },
+      "note": "特休只剩 16 小時，三天不夠；方案應標成不能送，或改提出特休加事假、縮短天數的方案"
+    },
+    {
+      "id": "notice-short",
+      "username": "emily.wu",
+      "subject": "明天請事假",
+      "message": "明天家裡有事想請一天事假，代理人 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "basic", "busy": [], "events": [] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "事假" }, { "key": "start_at", "value": "2026-11-03T09:00" }, { "key": "end_at", "value": "2026-11-03T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "事假建議至少提早 1 個工作天提出、不擋送出；明天請剛好提早 1 個工作天，方案可以送，不應說請不成（提到建議時可附規章條次）"
+    },
+    {
+      "id": "sick-today",
+      "username": "emily.wu",
+      "subject": "今天請病假",
+      "message": "今天身體不舒服，想請今天下午的病假，代理人 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "basic", "busy": [], "events": [] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "病假" }, { "key": "start_at", "value": "2026-11-02T13:00" }, { "key": "end_at", "value": "2026-11-02T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "病假不受提前規定限制，當天下午可以請"
+    },
+    {
+      "id": "not-connected",
+      "username": "emily.wu",
+      "subject": "下週四請假",
+      "message": "下週四想請一天特休，幫我看行事曆有沒有衝突，代理人 frank.liu",
+      "calendar": { "status": "NOT_CONNECTED" },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-12T09:00" }, { "key": "end_at", "value": "2026-11-12T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "沒連接行事曆：AI 看不到行事曆工具，不能假裝查過，應說明查不到並改用問的"
+    },
+    {
+      "id": "vague-goal",
+      "username": "emily.wu",
+      "subject": "想休息",
+      "message": "最近好累，想休息幾天",
+      "calendar": { "status": "ACTIVE", "level": "advanced", "busy": [], "events": [] },
+      "expect": { "updates": [] },
+      "note": "目標不明確：應先問想休哪幾天，不應直接填日期；沒有方案或方案都標成不能送都算合理"
+    },
+    {
+      "id": "policy-question",
+      "username": "emily.wu",
+      "subject": "特休與請假",
+      "message": "我的特休一年有幾天？想在下週五請特休，代理人 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "advanced", "busy": [], "events": [] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-13T09:00" }, { "key": "end_at", "value": "2026-11-13T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "應查規章（policy_lookup）回答特休天數並附條次，再提出週五的方案"
+    },
+    {
+      "id": "basic-half-day",
+      "username": "emily.wu",
+      "subject": "下週一請半天",
+      "message": "下週一想請半天特休，挑沒有行程的時段，代理人 frank.liu",
+      "calendar": { "status": "ACTIVE", "level": "basic", "busy": [{ "start": "2026-11-09T09:00:00+08:00", "end": "2026-11-09T12:00:00+08:00" }], "events": [] },
+      "expect": { "updates": [{ "key": "leave_type", "value": "特休" }, { "key": "start_at", "value": "2026-11-09T13:00" }, { "key": "end_at", "value": "2026-11-09T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "只有基本權限（忙碌時段）：上午忙，應請下午；不能用看行程標題的工具"
+    },
+    {
+      "id": "needs-reconnect",
+      "username": "emily.wu",
+      "subject": "下週五請事假",
+      "message": "下週五想請一天事假辦點事情，代理人 frank.liu",
+      "calendar": { "status": "NEEDS_RECONNECT" },
+      "expect": { "updates": [{ "key": "leave_type", "value": "事假" }, { "key": "start_at", "value": "2026-11-13T09:00" }, { "key": "end_at", "value": "2026-11-13T18:00" }, { "key": "agent", "value": "frank.liu" }], "valid": true },
+      "note": "行事曆需要重新連接：AI 查不到行事曆，仍可依使用者說的日期提出方案"
+    }
+  ]
+}

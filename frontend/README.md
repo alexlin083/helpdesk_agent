@@ -29,19 +29,26 @@ frontend/
 │   ├── tickets/
 │   │   ├── tickets.html       # 狀態追蹤頁
 │   │   └── tickets.css
-│   └── admin/
-│       ├── admin.html         # 管理頁
-│       └── admin.css
+│   ├── admin/
+│   │   ├── admin.html         # 管理頁
+│   │   └── admin.css
+│   ├── connections/
+│   │   ├── connections.html   # 連接帳號頁（員工連接自己的 Google 行事曆）
+│   │   └── connections.css
+│   └── privacy/
+│       ├── privacy.html       # 隱私權政策頁（公開頁，不用登入、沒有腳本）
+│       └── privacy.css
 ├── styles/
 │   ├── base.css               # 全站基礎樣式
 │   ├── login.css              # 登入頁樣式；index.html 在根目錄（網站入口），沒有自己的 pages/ 資料夾，所以放在共用的 styles/
 │   └── layout.css             # 提單與追蹤頁共用的頂欄、導覽與帳號選單
 ├── src/
 │   ├── config.js、pageUrls.js # 全站共用：API 基底網址、各頁網址
-│   ├── pages/                 # 各頁組裝入口：login.js、propose.js、tickets.js、admin.js
+│   ├── pages/                 # 各頁組裝入口：login.js、propose.js、tickets.js、admin.js、connections.js
 │   ├── components/            # 畫面元件；account.js、dom.js 多頁共用，其餘依頁面分資料夾：
-│   │   ├── propose/           #   提出需求單頁（「自動生成」視窗與其日期時間欄位、結果視窗與部門卡片）
+│   │   ├── propose/           #   提出需求單頁（助理對話區與其日期時間欄位、結果視窗與部門卡片）
 │   │   ├── tickets/           #   狀態追蹤頁（申請表單與待辦表單清單、卡片、操作表單、已完成表單面板）
+│   │   ├── connections/       #   連接帳號頁（服務清單、權限等級與連接按鈕）
 │   │   └── admin/             #   管理頁（監測、重置）
 │   ├── services/              # API 服務
 │   └── utils/                 # 純顯示工具
@@ -57,6 +64,8 @@ frontend/
 | 提出需求單 | `/pages/propose/propose.html` |
 | 狀態追蹤 | `/pages/tickets/tickets.html`（`#mine` 申請表單、`#todo` 待辦表單、`#done` 已完成表單；舊網址 `#completed` 開啟已完成表單） |
 | 管理 | `/pages/admin/admin.html` |
+| 連接帳號 | `/pages/connections/connections.html` |
+| 隱私權政策 | `/pages/privacy/privacy.html`（公開頁，不用登入） |
 
 頁面內的樣式、腳本與導覽連結都使用相對於各頁深度的路徑（例如 `../../styles/base.css`、`../tickets/tickets.html`）；程式導頁統一透過 `src/pageUrls.js` 由模組位置建立網址，不依目前頁面深度推測，也不硬編碼網站根路徑或 repo 名稱
 
@@ -69,8 +78,8 @@ frontend/
 | `index.html`、`styles/login.css`、`src/pages/login.js` | 登入頁 |
 | `pages/admin/admin.html`、`pages/admin/admin.css`、`src/pages/admin.js`、`src/services/adminService.js` | 管理頁與其獨立的 API 服務 |
 | `pages/propose/propose.html`、`pages/propose/propose.css`、`src/pages/propose.js` | 提出需求單頁 |
-| `src/components/propose/draftDialog.js` | 「自動生成」視窗 |
-| `src/components/propose/dateTimeControl.js` | 「自動生成」視窗的日期時間選擇器：欄位按鈕展開月曆、時間按鈕與「其他時間」輸入；依 `rules.after` 把起訖欄位合併成期間（`layoutFields`），依 `type.calendars` 只列上班時段並停用非工作日 |
+| `src/components/propose/draftDialog.js` | 助理對話區：問候、第一句話當主題、需求單面板與套用 |
+| `src/components/propose/dateTimeControl.js` | 需求單面板的日期時間選擇器：欄位按鈕展開月曆、時間按鈕與「其他時間」輸入；依 `rules.after` 把起訖欄位合併成期間（`layoutFields`），依 `type.calendars` 只列上班時段並停用非工作日 |
 | `src/services/draftService.js` | 「自動生成」（`POST /api/tickets/draft`）與需求類型目錄（`GET /api/forms`）的存取 |
 | `src/utils/formFormatters.js` | 需求類型表單欄位與計算結果的顯示格式 |
 | `pages/tickets/tickets.html`、`pages/tickets/tickets.css`、`src/pages/tickets.js` | 狀態追蹤頁（「申請表單」——待簽核／已完成切換、「待辦表單」與「已完成表單」三個分頁） |
@@ -100,10 +109,10 @@ AI 金鑰（Claude 或 Gemini）只存在後端
 
 ## 流程
 
-登入、提出需求單、「自動生成」視窗、送出與結果視窗、追蹤與簽核、卡片動作、重新提出的畫面規則與錯誤提示見 [API 介面規格書](../docs/企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md) 第 2.1 節、第 3.8 節與第 3.18 節；需求單的保存方式見第 3.4 節，這裡只留下操作時最先碰到的兩個入口
+登入、提出需求單、助理對話區、送出與結果視窗、追蹤與簽核、卡片動作、重新提出的畫面規則與錯誤提示見 [API 介面規格書](../docs/企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md) 第 2.1 節、第 3.8 節與第 3.18 節；需求單的保存方式見第 3.4 節，這裡只留下操作時最先碰到的兩個入口
 
 1. **登入**：輸入 16 組英文姓名的一般帳號之一（例如 `racky.huang`，完整名單與所屬部門見 API 介面規格書；輸入框提示為「員工英文姓名（例如 alex.huang）」）與授課者另行提供的密碼；後端另外接受獨立的 alex.admin 管理員
-2. **自動生成**：在提出需求單頁按「自動生成」後開啟 `#draft-dialog`，焦點移到訊息輸入框，立即以 `{ subject }` 呼叫 `POST /api/tickets/draft`，第一則助理訊息是後端回的招呼語（內容由需求類型定義決定，例如請假時說明會由人資部處理，請提供日期、時間、假別與代理人），接著列出「還需要確認」的清單
+2. **跟助理說需求**：提出需求單頁一打開就是助理對話區 `#draft-dialog`，先顯示前端的問候與常見需求按鈕；使用者的第一句話當主題，以 `{ subject }` 呼叫 `POST /api/tickets/draft` 判斷需求類型，前端接著把同一句話當第一則對話送出，由助理直接回答，再列出「還需要確認」的清單；按常見需求按鈕時只送第一次呼叫，助理回後端的招呼語（內容由需求類型定義決定，例如請假時說明會由人資部處理，請提供日期、時間、假別與代理人）
 
 ## 測試
 

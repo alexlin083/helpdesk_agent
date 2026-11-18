@@ -6,6 +6,7 @@ import { requireAdmin } from '../middleware/authorize.js';
 import { createRateLimiters } from '../middleware/rateLimiter.js';
 import { resetClassroom } from '../services/admin/adminService.js';
 import { HttpError } from '../middleware/errorHandler.js';
+import { googleSettings, saveGoogleSettings } from '../controllers/connectorController.js';
 
 const router = Router();
 // 獨立計數，不被自己的重置清除；避免一般 IP 限流耗盡後管理員無法維護。
@@ -15,6 +16,9 @@ const monitorLimits = createRateLimiters({ ...env, httpRateWindowSeconds: MONITO
 const parseJson = express.json({ limit: '16kb' });
 router.get('/metrics', monitorLimits.apiRateLimiter, parseJson, authenticate, requireAdmin, monitorLimits.queryRateLimiter, metrics);
 router.post('/reset', adminLimits.apiRateLimiter, parseJson, authenticate, requireAdmin, adminLimits.ticketRateLimiter, reset);
+// Google 連接設定：管理員貼上 OAuth 用戶端；查詢與監測共用計數，儲存與重置共用計數；回應永遠不含 client secret
+router.get('/connectors/google', monitorLimits.apiRateLimiter, parseJson, authenticate, requireAdmin, monitorLimits.queryRateLimiter, googleSettings);
+router.post('/connectors/google', adminLimits.apiRateLimiter, parseJson, authenticate, requireAdmin, adminLimits.ticketRateLimiter, saveGoogleSettings);
 
 /**
  * 驗證不可逆清除的確認文字，再清空工作單與全部一般保護計數。

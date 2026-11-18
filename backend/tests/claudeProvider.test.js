@@ -270,7 +270,7 @@ async function draftFallback() {
     assert.equal((await assistant.fill({})).model, 'claude', `${failure.draftReason} ${failure.upstreamStatus ?? ''} 時改用 Claude`);
   }
   assert.deepEqual(built.slice(0, 2), [['gemini', PRIMARY_DRAFT_TIMEOUT_MS], ['anthropic', FALLBACK_DRAFT_TIMEOUT_MS]]);
-  assert.deepEqual([PRIMARY_DRAFT_TIMEOUT_MS, FALLBACK_DRAFT_TIMEOUT_MS], [30000, 15000], '主要 30 秒（2026-11-14 放寬）、備援 15 秒');
+  assert.deepEqual([PRIMARY_DRAFT_TIMEOUT_MS, FALLBACK_DRAFT_TIMEOUT_MS], [40000, 25000], '主要 40 秒、備援 25 秒（2026-11-15 依每回合工具上限放寬）');
   assert.equal(PRIMARY_DRAFT_TIMEOUT_MS + FALLBACK_DRAFT_TIMEOUT_MS < 70000, true, '兩段加起來在前端 70 秒等待上限內');
 
   const pair = { gemini: fakeAssistant('gemini', [{ draftReason: 'AI_INVALID_RESPONSE' }, 'ok'], time), claude: fakeAssistant('claude', [], time) };

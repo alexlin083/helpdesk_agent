@@ -4,14 +4,14 @@ import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, buildProposeDom, fakeAuth } from './helpers/fakeDom.js';
 import { initProposePage, PROPOSE_TEXT } from '../src/pages/propose.js';
 import { TicketServiceError, MESSAGES } from '../src/services/ticketService.js';
-import { fakeRequestDraft, fillAndApply, GENERAL_RENDERED } from './helpers/draftFixtures.js';
+import { fakeRequestDraft, completeGeneralResponse, fillAndApply, GENERAL_RENDERED } from './helpers/draftFixtures.js';
 
 // 套用一般需求草稿後的需求內容：保留整理好的固定格式文字，在後面補充說明（固定文字不可改動）。
 const CONTENT = `${GENERAL_RENDERED}\n補充：新進同仁需要 VPN 連線權限`;
 const departments = [{ id: 'dept-it-1', name: '資訊管理一部', type: '', duty: '', business: [], handlers: [{ id: 'h-1', name: 'racky.huang' }] }];
 
 /**
- * 建立已登入的頁面環境；部門資訊預設載入成功，「自動生成」預設使用一般需求已完成的草稿替身（不連網路、驗證不延遲），
+ * 建立已登入的頁面環境；部門資訊預設載入成功，助理對話預設使用一般需求已完成的草稿替身（不連網路、驗證不延遲），
  * 讓各測試可以先套用草稿再送出。
  * @param {object} [services={}] 服務替身，會覆寫預設的 loadDepartments、requestDraft 等。
  * @returns {object} doc、win、nodes、auth 與頁面控制器。
@@ -24,7 +24,7 @@ function mountPage(services = {}) {
   globalThis.document = doc;
   /** 預設名單載入成功。@returns {Promise<object[]>} 部門。 */
   async function loadDepartments() { return departments; }
-  const page = initProposePage(doc, win, { auth, loadDepartments, requestDraft: fakeRequestDraft(), draftDebounceMs: 0, ...services });
+  const page = initProposePage(doc, win, { auth, loadDepartments, loadRequestTypes: /** 常見需求清單替身（空的，不連網路） @returns {Promise<object[]>} 需求類型 */ async () => [], requestDraft: fakeRequestDraft(), draftDebounceMs: 0, ...services });
   return { doc, win, nodes, auth, page };
 }
 /** 清除全域文件替身。@returns {void} */
@@ -32,8 +32,14 @@ function cleanup() { delete globalThis.document; }
 test.afterEach(cleanup);
 
 /**
+ * 一般需求替身：intent 是 AI 寫的摘要
+ * @returns {object} 後端 JSON
+ */
+function vpnSummary() { return completeGeneralResponse({ intent: 'VPN 帳號申請' }); }
+
+/**
  * 以指定錯誤執行一次送出，回傳頁面環境供斷言。
- * 送出前先填主題、按「自動生成」並套用一般需求草稿（未套用時頁面不會送單），再在整理好的內容後補充說明（CONTENT）。
+ * 送出前先對助理說主題並套用一般需求草稿（未套用時頁面不會送單），再在整理好的內容後補充說明（CONTENT）。
  * @param {unknown} error 送單時拋出的錯誤。
  * @param {object} [services={}] 其他服務替身。
  * @returns {Promise<object>} 頁面環境。
@@ -41,7 +47,7 @@ test.afterEach(cleanup);
 async function submitWith(error, services = {}) {
   /** 一律失敗的送單。@returns {Promise<never>} @throws {unknown} 指定錯誤。 */
   async function submitTicket() { throw error; }
-  const mounted = mountPage({ submitTicket, ...services });
+  const mounted = mountPage({ submitTicket, requestDraft: fakeRequestDraft(vpnSummary), ...services });
   await mounted.page.ready;
   await fillAndApply(mounted.nodes, mounted.page, '申請 VPN 帳號');
   mounted.nodes.content.value = CONTENT;
@@ -51,8 +57,8 @@ async function submitWith(error, services = {}) {
 }
 
 /**
- * 驗證部門資訊載入失敗（404、格式不正確、逾時）：只停用「查看各部門業務範圍」並在表單上方顯示原因，不導頁，
- * 填寫主題後仍可按「自動生成」；非預期錯誤顯示固定原因並寫入主控台；部門資訊 401 回登入頁。
+ * 驗證部門資訊載入失敗（404、格式不正確、逾時）：只停用「各部門業務範圍」並在頁面上方顯示原因，不導頁，
+ * 仍可直接對助理說話；非預期錯誤顯示固定原因並寫入主控台；部門資訊 401 回登入頁。
  * @param {import('node:test').TestContext} context mock 管理器。
  * @returns {Promise<void>}
  */
@@ -70,9 +76,7 @@ async function listFailures(context) {
     assert.equal(nodes.notice.hidden, false);
     assert.equal(nodes.notice.textContent, `${PROPOSE_TEXT.notice}原因：${failure.message}`);
     assert.deepEqual(win.redirects, []);
-    nodes.subject.value = '申請 VPN 帳號';
-    await nodes.subject.dispatch('input');
-    assert.equal(nodes.draftButton.disabled, false, '部門資訊失敗不影響自動生成');
+    assert.equal(nodes.draftNodes.send.disabled, false, '部門資訊失敗不影響對助理說話');
     cleanup();
   }
   const errors = context.mock.method(console, 'error', () => {});
@@ -95,7 +99,7 @@ test('名單載入失敗的畫面狀態與 401 導回登入', listFailures);
 
 /**
  * 驗證 429 非額度錯誤依後端秒數倒數，倒數中不能送出，結束後恢復送出鈕。
- * 先套用一般需求草稿再啟用模擬時間（Date 與 setInterval），避免模擬時間影響「自動生成」視窗的非同步流程；
+ * 先套用一般需求草稿再啟用模擬時間（Date 與 setInterval），避免模擬時間影響助理對話的非同步流程；
  * 恢復後再送一次成功，結果視窗依 FALLBACK 顯示人工分派說明。
  * @param {import('node:test').TestContext} context 可控制的時間。
  * @returns {Promise<void>}
@@ -175,7 +179,7 @@ async function displayedErrors() {
     const { nodes, win } = await submitWith(error);
     assert.equal(nodes.submitError.textContent, error.message);
     assert.equal(nodes.resultDialog.open, false);
-    assert.equal(nodes.subject.value, '申請 VPN 帳號');
+    assert.equal(nodes.subject.value, 'VPN 帳號申請', '主題（AI 整理的需求摘要）保留');
     assert.equal(nodes.content.value, CONTENT);
     assert.equal(nodes.submit.disabled, false);
     assert.deepEqual(win.redirects, []);

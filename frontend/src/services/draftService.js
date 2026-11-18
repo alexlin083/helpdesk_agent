@@ -192,17 +192,91 @@ function normalizeAiError(error) {
     retryAfter: Number.isInteger(error.retry_after) && error.retry_after > 0 ? error.retry_after : null };
 }
 
+// 方案的數量與長度上限（和後端相同）與連接狀態代碼
+const PROPOSAL_LIMITS = Object.freeze({ count: 3, title: 40, summary: 200, reasons: 3, reason: 120, basis: 5, label: 40, problems: 5 });
+const SUGGESTION_LIMITS = Object.freeze({ count: 3, label: 20 });
+const CONNECTION_STATUSES = Object.freeze(['ACTIVE', 'NEEDS_RECONNECT', 'NOT_CONNECTED', 'UNAVAILABLE']);
+
+/**
+ * 取陣列裡的非空白文字，最多 count 筆、每筆截到 limit 字
+ * @param {unknown} list 陣列
+ * @param {number} count 筆數上限
+ * @param {number} limit 字數上限
+ * @returns {string[]} 文字
+ */
+function textList(list, count, limit) {
+  const result = [];
+  for (const item of Array.isArray(list) ? list : []) if (isText(item) && result.length < count) result.push(truncate(item, limit));
+  return result;
+}
+
+/**
+ * 整理 AI 的方案（後端已逐一驗證）：最多 3 個，沒有 id 或標題的略過；updates 只留面板上的欄位、值為字串；valid 只認 true；problems 只留有說明的項目
+ * @param {unknown} list 後端回傳的 proposals
+ * @param {Set<string>} keys 面板上的欄位代號
+ * @returns {Array<{id: string, title: string, summary: string, reasons: string[], basisLabels: string[], updates: Array<{key: string, value: string}>, valid: boolean, problems: Array<{key: string, message: string}>}>} 方案
+ */
+function toProposals(list, keys) {
+  const result = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    if (!isPlainObject(item) || !isText(item.id) || !isText(item.title) || result.length >= PROPOSAL_LIMITS.count) continue;
+    const updates = [];
+    for (const update of Array.isArray(item.updates) ? item.updates : []) if (isPlainObject(update) && keys.has(update.key) && typeof update.value === 'string') updates.push({ key: update.key, value: update.value });
+    const problems = [];
+    for (const problem of Array.isArray(item.problems) ? item.problems : []) {
+      if (isPlainObject(problem) && isText(problem.message) && problems.length < PROPOSAL_LIMITS.problems) problems.push({ key: isText(problem.key) ? problem.key : '', message: problem.message.trim() });
+    }
+    result.push({ id: item.id.trim(), title: truncate(item.title, PROPOSAL_LIMITS.title), summary: isText(item.summary) ? truncate(item.summary, PROPOSAL_LIMITS.summary) : '',
+      reasons: textList(item.reasons, PROPOSAL_LIMITS.reasons, PROPOSAL_LIMITS.reason), basisLabels: textList(item.basis_labels, PROPOSAL_LIMITS.basis, PROPOSAL_LIMITS.label),
+      updates, valid: item.valid === true, problems });
+  }
+  return result;
+}
+
+/**
+ * 整理 AI 的建議選項（後端已驗證要填的欄位）：最多 3 個，沒有 id 或文字的略過，文字截到 20 字；updates 只留面板上的欄位、值為字串
+ * @param {unknown} list 後端回傳的 suggestions
+ * @param {Set<string>} keys 面板上的欄位代號
+ * @returns {Array<{id: string, label: string, updates: Array<{key: string, value: string}>}>} 建議選項
+ */
+function toSuggestions(list, keys) {
+  const result = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    if (!isPlainObject(item) || !isText(item.id) || !isText(item.label) || result.length >= SUGGESTION_LIMITS.count) continue;
+    const updates = [];
+    for (const update of Array.isArray(item.updates) ? item.updates : []) if (isPlainObject(update) && keys.has(update.key) && typeof update.value === 'string') updates.push({ key: update.key, value: update.value });
+    result.push({ id: item.id.trim(), label: truncate(item.label, SUGGESTION_LIMITS.label), updates });
+  }
+  return result;
+}
+
+/**
+ * 整理這個需求類型用到的外部服務連接狀態：只留認得的狀態，沒有名稱時用 id
+ * @param {unknown} list 後端回傳的 connections
+ * @returns {Array<{id: string, name: string, status: string, tools: string[]}>} 連接狀態
+ */
+function toConnections(list) {
+  const result = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    if (!isPlainObject(item) || !isText(item.id) || !CONNECTION_STATUSES.includes(item.status)) continue;
+    result.push({ id: item.id.trim(), name: isText(item.name) ? item.name.trim() : item.id.trim(), status: item.status, tools: textList(item.tools, 10, 60) });
+  }
+  return result;
+}
+
 /**
  * 整理 POST /api/tickets/draft 的回應（設定檔驅動的需求類型）。前端不認得任何特定類型：欄位、候選、計算結果與摘要都依回應呈現。
  * - type：採用的需求類型 { id, version, name, fields }（也接受舊名稱 form）；沒有時面板只保留 DESCRIPTION_FIELD。
  * - departmentFixed：類型帶有固定部門（type.department）或後端標示處理部門來源為 system 時為 true，畫面改為唯讀。
  * - values、sources、missing、invalid、field_options 只保留面板上的欄位以及處理部門／指定處理人（department_id、handler_id）。
  * - computed、summaries 由後端依定義檔的 computations 與 checks 產生；tools_used 只保留文字。
+ * - proposals 是 AI 整理、後端驗證過的方案（見 toProposals），使用者選了才套用；suggestions 是回覆下方可以直接點的建議選項（見 toSuggestions）；
+ *   connections 是外部服務的連接狀態（見 toConnections）
  * - reply 最多 400 字、intent 最多 80 字；ai_available 缺漏視為 true。
  * complete 必須同時符合：後端回 true、有 rendered_content、沒有缺漏與格式錯誤、已知處理部門；否則視為未完成（不能套用）。
  * @param {unknown} data 解析後的 JSON。
  * @returns {object} { intent, type, fields, departmentFixed, department, departmentOptions, handler, handlerOptions, values, sources, missing, invalid,
- *   fieldOptions, computed, summaries, reply, prompt, aiAvailable, aiError, complete, rendered, preview, toolsUsed }。
+ *   fieldOptions, computed, summaries, reply, prompt, aiAvailable, aiError, complete, rendered, preview, toolsUsed, proposals, suggestions, connections }
  * @throws {TicketServiceError} 回應無法辨識。
  */
 export function normalizeDraftResponse(data) {
@@ -271,6 +345,7 @@ export function normalizeDraftResponse(data) {
     aiAvailable: data.ai_available !== false, aiError: normalizeAiError(data.ai_error),
     complete, rendered: complete ? rendered : null, preview: typeof data.preview_content === 'string' ? data.preview_content : '',
     toolsUsed: texts(data.tools_used),
+    proposals: toProposals(data.proposals, keys), suggestions: toSuggestions(data.suggestions, keys), connections: toConnections(data.connections),
   };
 }
 

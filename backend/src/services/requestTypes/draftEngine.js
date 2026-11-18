@@ -3,7 +3,7 @@ import { DEFAULT_TIMEZONE_OFFSET, localToday } from '../../utils/dates.js';
 import { logger } from '../../utils/logger.js';
 import { removeFullStops } from '../../utils/punctuation.js';
 import { DRAFT_REPLY_MAX, INTENT_MAX } from './aiAssistant.js';
-import { executeTool } from './capabilities.js';
+import { executeTool, TOOL_CAPABILITIES, visibleTools } from './capabilities.js';
 import { buildPrompt, editableFields, evaluateForm, renderContent } from './evaluator.js';
 import { FIELD_KEY_PATTERN, FIELD_VALUE_MAX, isPlainObject, normalizeFieldValue, rawValueMax, TEXT_MAX } from './fieldTypes.js';
 
@@ -15,6 +15,89 @@ const STATE_FIELDS_MAX = 20;
 const LOCKED_MAX = 30;
 const HANDLER_ID_MAX = 100;
 const TYPE_ID_MAX = 64;
+
+// 方案回應裡每個方案最多列出的問題數
+const PROPOSAL_PROBLEMS_MAX = 5;
+
+/**
+ * 把 AI 的方案套在目前的欄位上（不寫進 values）：只採信這個需求類型可填、沒有被鎖定、不是本人欄位的 key，值依欄位型別正規化
+ * @param {object} options 參數
+ * @param {object} options.type 需求類型
+ * @param {Record<string, string>} options.input 目前的欄位值（已套用 AI 的直接更新）
+ * @param {Set<string>} options.locked 使用者鎖定的欄位
+ * @param {object[]} [options.proposals] buildFill 整理過的方案
+ * @returns {Array<{proposal: object, updates: Array<{key: string, value: string}>, input: Record<string, string>}>} 每個方案的欄位
+ */
+export function proposalInputs({ type, input, locked, proposals }) {
+  return (proposals ?? []).map(/** 套用一個方案 @param {object} proposal 方案 @returns {object} 方案與欄位 */ (proposal) => {
+    const next = { ...input };
+    const updates = [];
+    for (const { key, value } of proposal.updates ?? []) {
+      const field = type.fieldsByKey.get(key);
+      if (!field || field.type === 'self' || locked.has(key)) continue;
+      next[key] = normalizeFieldValue(field, value);
+      updates.push({ key, value: next[key] });
+    }
+    return { proposal, updates, input: next };
+  });
+}
+
+/**
+ * 整理成回應裡的一個方案：能不能送（valid）由後端驗證決定，問題寫出欄位與原因；依據只留本回合實際呼叫過的工具
+ * @param {{proposal: object, updates: object[], result: object}} item 方案、套用的欄位與驗證結果
+ * @param {number} index 第幾個方案
+ * @param {object} context 參數
+ * @param {object} context.type 需求類型
+ * @param {boolean} context.hasDepartment 是否已決定處理部門
+ * @param {string[]} context.toolsSucceeded 本回合成功回傳的工具 id（回錯誤的呼叫不算）
+ * @param {Map<string, string>} [context.labels] 工具 id 對應的顯示名稱（目錄 tools[].label，沒有時用 id）
+ * @returns {object} 方案 { id, title, summary, reasons, basis, updates, valid, problems }
+ */
+export function proposalView({ proposal, updates, result }, index, { type, hasDepartment, toolsSucceeded, labels = new Map() }) {
+  const problems = [
+    ...(hasDepartment ? [] : [{ key: 'department_id', message: '尚未決定處理部門' }]),
+    ...result.missing.map(/** 缺少的欄位 @param {string} key 欄位 key @returns {object} 問題 */ (key) => ({ key, message: `缺少「${type.fieldsByKey.get(key)?.label ?? key}」` })),
+    ...result.invalid.map(/** 欄位錯誤 @param {{key: string, message: string}} item 錯誤 @returns {object} 問題 */ ({ key, message }) => ({ key, message })),
+    ...result.failures.map(/** 檢查失敗 @param {{key: string, message: string}} item 失敗 @returns {object} 問題 */ ({ key, message }) => ({ key, message })),
+  ];
+  const basis = proposal.basis.filter(/** 本回合成功回傳過 @param {string} id 工具 id @returns {boolean} 是時 true */ (id) => toolsSucceeded.includes(id));
+  return {
+    id: `p${index + 1}`, title: removeFullStops(proposal.title), summary: removeFullStops(proposal.summary),
+    reasons: proposal.reasons.map(/** 標點規範 @param {string} reason 理由 @returns {string} 理由 */ (reason) => removeFullStops(reason)),
+    basis, basis_labels: basis.map(/** 顯示名稱 @param {string} id 工具 id @returns {string} 名稱 */ (id) => labels.get(id) ?? id),
+    updates, valid: !problems.length,
+    problems: problems.slice(0, PROPOSAL_PROBLEMS_MAX).map(/** 標點規範 @param {{key: string, message: string}} item 問題 @returns {object} 問題 */ ({ key, message }) => ({ key, message: removeFullStops(message) })),
+  };
+}
+
+/**
+ * 建議選項的數字只能來自使用者：選項要填數字欄位時，值要出現在使用者講過的話裡（主題、這次的訊息與對話裡使用者的訊息，千分位逗號先拿掉再比對），
+ * 否則整個選項不列，避免 AI 自己猜金額或數量讓使用者一點就填進去
+ * @param {Array<{label: string, updates: Array<{key: string, value: string}>}>|undefined} suggestions buildFill 整理過的建議選項
+ * @param {object} type 需求類型
+ * @param {string[]} userTexts 使用者講過的話
+ * @returns {Array<{label: string, updates: Array<{key: string, value: string}>}>} 留下的選項
+ */
+export function userBackedSuggestions(suggestions, type, userTexts) {
+  const said = userTexts.join('\n').replace(/(\d),(?=\d{3})/gu, '$1');
+  return (suggestions ?? []).filter(/** 數字欄位的值使用者講過 @param {{updates: Array<{key: string, value: string}>}} item 選項 @returns {boolean} 可列時 true */ ({ updates }) => updates.every(/** 一個欄位 @param {{key: string, value: string}} update 欄位 @returns {boolean} 不是數字欄位或使用者講過時 true */ ({ key, value }) => {
+    if (type.fieldsByKey.get(key)?.type !== 'number') return true;
+    const digits = value.trim().replace(/,/gu, '');
+    return /^\d+(\.\d+)?$/u.test(digits) && new RegExp(`(^|[^\\d.])${digits.replace('.', '\\.')}(?![\\d])`, 'u').test(said);
+  }));
+}
+
+/**
+ * 整理成回應裡的建議選項：選項要填的欄位在驗證時出現格式錯誤或檢查失敗就不列，只填文字的選項照列；id 依留下的順序編 s1、s2、s3
+ * @param {Array<{proposal: {label: string}, updates: Array<{key: string, value: string}>, result: object}>} items 選項、套用的欄位與驗證結果
+ * @returns {Array<{id: string, label: string, updates: Array<{key: string, value: string}>}>} 建議選項
+ */
+export function suggestionViews(items) {
+  return items.filter(/** 要填的欄位都沒有錯 @param {object} item 選項 @returns {boolean} 可列時 true */ ({ updates, result }) => {
+    const wrong = new Set([...result.invalid, ...result.failures].map(/** 出錯的欄位 @param {{key: string}} entry 錯誤 @returns {string} key */ (entry) => entry.key));
+    return !updates.some(/** 欄位出錯 @param {{key: string}} update 欄位 @returns {boolean} 出錯時 true */ (update) => wrong.has(update.key));
+  }).map(/** 回應形狀 @param {object} item 選項 @param {number} index 位置 @returns {object} 選項 */ ({ proposal, updates }, index) => ({ id: `s${index + 1}`, label: removeFullStops(proposal.label), updates }));
+}
 
 // AI 無法使用時的固定說明（ai_error.message 與後端產生的回覆共用），依原因代碼對應；依共用標點規範不加句號
 export const AI_NOTICES = Object.freeze({
@@ -33,17 +116,21 @@ export const AI_NOTICES = Object.freeze({
 const CLASSIFY_TASK = [
   '輸入是 JSON：today 是台北今天的日期與星期；user 是使用者帳號與部門；subject 是需求主題；types 是可用的需求類型（id、name、summary、department）；departments 是公司部門（id、name、duty、business）。',
   '工作：1. 依 types 的 summary 判斷 type_id，沒有適合的專用類型時使用 default_type；2. 依 departments 的 duty 與 business 判斷 department_id，並給 confidence_score（0～100 的整數，明確屬於該部門業務才給高分）；所選類型有 department 時 department_id 必須是它；',
-  '3. intent 用一句話簡述需求；4. reply 用親切的一到三句話打招呼，說明處理部門與接下來需要哪些資料。輸出符合 schema 的 JSON，不加 Markdown。',
+  '3. intent 寫成這張需求單的主題：一句話、30 字以內，寫出要辦的事與關鍵日期或對象（例如「12/1 筆電螢幕故障報修」），不要用「使用者想」開頭，也不要照抄使用者的原話；4. reply 用親切的一到三句話打招呼，說明處理部門與接下來需要哪些資料。輸出符合 schema 的 JSON，不加 Markdown。',
 ].join('\n');
 const FILL_TASK = [
   '輸入是 JSON：today、user、subject、message（使用者這次的訊息）、history（之前的對話）；request_type 是目前需求類型的完整定義（欄位、必填、選項、規則、rules_data）；',
   'other_types 是其他可用的需求類型；departments 是部門 id 與名稱；state 是畫面右側目前的內容（type_id、department_id、handler_id、fields、locked）；handler_options 是目前處理部門可指定的處理人；tool_results 是本回合工具回傳的資料。',
-  '工作：1. intent 用一句話簡述需求；2. type_id 維持 state.type_id，只有使用者明確要改成 other_types 中的其他需求時才更換；',
+  '工作：1. intent 寫成這張需求單的主題：一句話、30 字以內，寫出要辦的事與關鍵日期或對象（例如「12/1 筆電螢幕故障報修」），不要用「使用者想」開頭，也不要照抄使用者的原話；2. type_id 維持 state.type_id，只有使用者明確要改成 other_types 中的其他需求時才更換；',
   '3. request_type.department 有值時 department_id 必須是它，否則依部門職責判斷並給 confidence_score（0～100 的整數）；',
   '4. updates 只填使用者明確提供、或可由工具結果確定的欄位：key 必須是 request_type.fields 的 key，value 一律是字串，locked 中的欄位不得輸出；',
-  '   datetime 為 YYYY-MM-DDTHH:mm、date 為 YYYY-MM-DD，相對日期依 today 換算；enum 只能從 options 擇一；account 欄位只能從工具回傳且 available 為 true 的 id 擇一；number 只填阿拉伯數字；',
+  '   datetime 為 YYYY-MM-DDTHH:mm、date 為 YYYY-MM-DD，相對日期依 today 換算（「下週」是 today 那一週的下一週，一週從週一開始）；enum 只能從 options 擇一；account 欄位只能從工具回傳且 available 為 true 的 id 擇一；number 只填阿拉伯數字；',
   '5. handler_id 只在使用者明確要求指定處理人時，從 handler_options 擇一，否則為 null；',
-  '6. reply 用親切的一到三句話回應，依 ask_order 詢問還缺的資料；回答格式或可選人員等問題時只能引用定義與工具結果；額度或計算結果等數字只能引用工具結果，不可自行計算。',
+  '6. reply 用親切的一到四句話：先回應這次的訊息與要提醒的事，再依 ask_order 詢問還缺的資料，已經填好或使用者講過的不要再問；回答格式或可選人員等問題時只能引用定義與工具結果；額度、時數等由後端計算的數字只能引用工具結果，使用者自己給的數字可以做簡單換算（例如單價乘數量）並請他確認；',
+  '7. suggestions 是 reply 下方讓使用者直接點的選項，每次給 1～3 個、至少 1 個，優先針對 reply 最後問的那件事：label 是使用者點了就等於回覆的那句話（20 字以內，例如「11/24（二）整天」「上午 09:00～12:00」「其他日期」）；',
+  '   updates 是點了要填的欄位，格式同第 4 點，只能填 options、工具結果或規則允許的值（例如 today 以後的日期），沒把握的選項只給 label、updates 給空陣列；問日期時直接給 2～3 個具體日期；',
+  '   金額、數量只能用使用者講過的或工具結果，不要自己猜；文字欄位只給常見的分類說法（例如「替換舊螢幕」），不替使用者編造具體經過或原因，選填的文字欄位（例如備註）只給「不用補充」這類選項；',
+  '   問的是只能打字的具體資訊時，不給「我再補充」這類點了也沒用的選項：問地點可以給使用者所屬部門當選項，其他就改給可以直接選的欄位；已經填好或使用者講過的不再給；有 proposals 時不要重複方案的內容；需求內容都已完整時，給補充或調整用的選項',
   '輸出符合 schema 的 JSON，不加 Markdown。',
 ].join('\n');
 
@@ -234,9 +321,11 @@ function aiErrorOf(error) {
  * @param {{classify: Function, fill: Function}} options.assistant AI 助手。
  * @param {object} options.config 設定（aiApiKey：主要 AI 供應商的金鑰；aiFallbackProvider：有金鑰的備援供應商；兩者都沒有時不呼叫 AI）。
  * @param {Function} options.clock 時間來源。
+ * @param {{call: Function}} [options.calendar] 行事曆服務（行事曆工具用，見 connectors/calendarMcp.js）；沒有提供時行事曆工具回 { error }
+ * @param {{statusOf: Function}} [options.connectors] 連接服務（回應的 connections 用，見 connectors/connectionService.js 的 statusOf）；沒有提供時一律 UNAVAILABLE
  * @returns {{run: Function}} 引擎。
  */
-export function createDraftEngine({ types, departments, accounts, store, usage, assistant, config, clock }) {
+export function createDraftEngine({ types, departments, accounts, store, usage, assistant, config, clock, calendar, connectors }) {
   /**
    * 預扣自動生成額度後呼叫 AI，無論成功失敗都釋放租約；AI 相關失敗轉成 aiError，不讓請求失敗。
    * @param {object} user 憑證身分。
@@ -294,10 +383,11 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
      * 之後各回合：交給 AI 目前類型的完整定義與 state，讓它依需要呼叫允許的工具（伺服器端執行並套用存取規則）。
      * @returns {Promise<object>} 填寫結果。
      */
-    function fill() {
+    async function fill() {
       const today = todayOf(activeType);
-      const allowed = types.toolsFor(activeType);
+      const allowed = await visibleTools(types.toolsFor(activeType), { username: user.username, calendar });
       const stateDepartment = activeType.departmentId ?? state?.departmentId ?? null;
+      const toolResults = new Map();
       const keys = [...new Set(types.list().flatMap(/** 取各類型可填欄位。@param {object} type 類型。@returns {string[]} key。 */ (type) => editableFields(type).map(/** 取 key。@param {{key: string}} field 欄位。@returns {string} key。 */ (field) => field.key)))];
       /**
        * 執行一次工具：只允許目前類型 ai.tools 內的工具；資料庫暫時無法讀取時回傳錯誤資料給模型，不讓請求失敗。
@@ -308,8 +398,13 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
       async function runTool(id, args) {
         const tool = allowed.find(/** 比對工具 id。@param {{id: string}} item 工具。@returns {boolean} 相符時 true。 */ (item) => item.id === id);
         if (!tool) return { error: '這個工具不能在目前的需求類型使用' };
+        // 同一個請求內同樣的工具與參數只查一次（主要供應商失敗改由備援重跑時，不再向外部服務查第二次）；回錯誤的不留，備援可以再試
+        const cacheKey = `${id}\u0000${JSON.stringify(args ?? {})}`;
+        if (toolResults.has(cacheKey)) return toolResults.get(cacheKey);
         try {
-          return await executeTool(tool, args, { user, type: activeType, registry: types, accounts, departments, store, clock });
+          const outcome = await executeTool(tool, args, { user, type: activeType, registry: types, accounts, departments, store, clock, calendar });
+          if (!outcome?.error) toolResults.set(cacheKey, outcome);
+          return outcome;
         } catch (error) {
           if (error instanceof HttpError) return { error: '資料暫時無法讀取，請稍後再試' };
           throw error;
@@ -320,6 +415,7 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
         lists: { typeIds: types.ids(), departmentIds, keys },
         tools: allowed,
         runTool,
+        maxToolCalls: activeType.ai.maxToolCalls ?? types.catalog.assistant.maxToolCalls,
         context: {
           today: { date: today.date, weekday: today.weekday }, user: { username: user.username, department: { id: user.department.id, name: user.department.name } },
           subject, message, history,
@@ -369,9 +465,11 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
       if (input[field.key]) sources[field.key] = locked.has(field.key) ? 'user' : 'ai';
     }
     let aiUpdates = 0;
+    // AI 有給方案時，和任何方案相同的欄位不直接寫進欄位：方案要使用者選了才套用
+    const proposedKeys = new Set((ai?.proposals ?? []).flatMap(/** 方案要填的欄位 @param {{updates: Array<{key: string}>}} proposal 方案 @returns {string[]} key */ (proposal) => (proposal.updates ?? []).map(/** 取 key @param {{key: string}} item 欄位 @returns {string} key */ (item) => item.key)));
     for (const { key, value } of ai?.updates ?? []) {
       const field = type.fieldsByKey.get(key);
-      if (!field || field.type === 'self' || locked.has(key)) continue;
+      if (!field || field.type === 'self' || locked.has(key) || proposedKeys.has(key)) continue;
       input[key] = normalizeFieldValue(field, value);
       aiUpdates += 1;
       if (input[key]) sources[key] = 'ai';
@@ -379,8 +477,18 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
     }
     // ⑤ 驗證、計算與檢查
     const today = todayOf(type).date;
-    const evaluation = await store.withLedger(/** 在讀取交易內驗證。@param {object} helpers 交易內查詢。@returns {object} 結果。 */ (helpers) => evaluateForm({
-      type, input, user, department: departmentRef, registry: types, accounts, departments, helpers, today, phase: 'draft' }));
+    const drafts = proposalInputs({ type, input, locked, proposals: ai?.proposals });
+    // 建議選項和方案一樣先套在目前的欄位上驗證（不寫進 values）；數字欄位的值要是使用者講過的
+    const userTexts = [subject, message ?? '', ...history.filter(/** 使用者的訊息 @param {{role: string}} turn 對話 @returns {boolean} 是時 true */ (turn) => turn.role === 'user').map(/** 取文字 @param {{text: string}} turn 對話 @returns {string} 文字 */ (turn) => turn.text)];
+    const choices = proposalInputs({ type, input, locked, proposals: userBackedSuggestions(ai?.suggestions, type, userTexts) });
+    // 目前的欄位、每個方案與每個建議選項在同一個讀取交易內驗證，看到的額度與已有申請一致
+    const { evaluation, checked, checkedChoices } = await store.withLedger(/** 在讀取交易內驗證 @param {object} helpers 交易內查詢 @returns {object} 結果 */ (helpers) => {
+      /** 驗證一組欄位 @param {Record<string, string>} formInput 欄位 @returns {object} evaluateForm 的結果 */
+      const check = (formInput) => evaluateForm({ type, input: formInput, user, department: departmentRef, registry: types, accounts, departments, helpers, today, phase: 'draft' });
+      /** 驗證一個方案或選項 @param {object} draft 方案與欄位 @returns {object} 加上驗證結果 */
+      const withResult = (draft) => ({ ...draft, result: check(draft.input) });
+      return { evaluation: check(input), checked: drafts.map(withResult), checkedChoices: choices.map(withResult) };
+    });
     const { values, computed, computedMap, summaries, fieldOptions } = evaluation;
     const missing = [...(department ? [] : ['department_id']), ...evaluation.missing];
     const invalid = [...evaluation.invalid, ...evaluation.failures.map(/** 檢查失敗轉成欄位錯誤。@param {{key: string, message: string}} failure 失敗。@returns {{key: string, message: string}} 錯誤。 */ ({ key, message: text }) => ({ key, message: text }))];
@@ -421,6 +529,16 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
       reply = [opening, aiError?.message].filter(Boolean).join('\n');
     }
     const intent = ai?.intent || state?.intent || (type.departmentId || !department ? type.name : `${department.name}相關需求`);
+    // 這個需求類型用到的外部服務連接：狀態只讀資料庫的連接紀錄、不連外部服務（手動編輯的驗證也會走到這裡），畫面據此提示連接或重新連接
+    const connectorTools = types.toolsFor(type).filter(/** 需要連接的工具 @param {{capability: string}} tool 工具 @returns {boolean} 是時 true */ (tool) => TOOL_CAPABILITIES[tool.capability]?.connector);
+    const toolLabels = new Map(types.toolsFor(type).map(/** 工具的顯示名稱 @param {{id: string, label: string|null}} tool 工具 @returns {[string, string]} [id, 名稱] */ (tool) => [tool.id, tool.label ?? tool.id]));
+    const connections = [...new Set(connectorTools.map(/** 連接器 id @param {{capability: string}} tool 工具 @returns {string} id */ (tool) => TOOL_CAPABILITIES[tool.capability].connector))].map(/** 一個連接器的狀態 @param {string} id 連接器 id @returns {object} 狀態 */ (id) => {
+      let current = { name: id, status: 'UNAVAILABLE', tools: [] };
+      try { if (connectors) current = connectors.statusOf(user.username, id); } catch { /* 連接器設定檔無法使用時當成不能連接，不讓請求失敗 */ }
+      const tools = connectorTools.filter(/** 這個連接器、權限等級有開放的工具 @param {{capability: string}} tool 工具 @returns {boolean} 是時 true */ (tool) => TOOL_CAPABILITIES[tool.capability].connector === id && current.tools.includes(tool.capability))
+        .map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id);
+      return { id, name: current.name ?? id, status: current.status, tools };
+    });
     logger('info', 'ticket.draft.evaluated', { typeId: type.id, departmentId: department?.id ?? null, firstCall, aiAttempted: wantsAI, aiUsed: Boolean(ai),
       aiError: aiError?.code ?? null, aiUpdates, toolsUsed: ai?.toolsUsed ?? [], historyCount: history.length, lockedCount: locked.size,
       missingCount: missing.length, invalidCount: invalid.length, complete });
@@ -439,6 +557,11 @@ export function createDraftEngine({ types, departments, accounts, store, usage, 
       ai_error: aiError && { ...aiError, message: removeFullStops(aiError.message) },
       complete, rendered_content: complete ? preview : null, preview_content: preview,
       tools_used: ai?.toolsUsed ?? [],
+      // 方案只是建議，不寫進 values；使用者選了方案，前端把方案的 updates 帶進欄位再送一次驗證
+      proposals: checked.map(/** 整理方案 @param {object} item 方案 @param {number} index 位置 @returns {object} 方案 */ (item, index) => proposalView(item, index, { type, hasDepartment: Boolean(department), toolsSucceeded: ai?.toolsSucceeded ?? [], labels: toolLabels })),
+      // 建議選項：點了要填的欄位有錯（格式、規則或檢查不通過）的選項不列；其他欄位還沒填不影響
+      suggestions: suggestionViews(checkedChoices),
+      connections,
     };
   }
   return { run };

@@ -3,66 +3,151 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>課堂管理 · 企業智慧服務台</title>
+  <title>管理員控制台 · 企業智慧服務台</title>
   <link rel="stylesheet" href="../../styles/base.css">
+  <link rel="stylesheet" href="../../styles/layout.css">
   <link rel="stylesheet" href="./admin.css">
   <script type="module" src="../../src/pages/admin.js"></script>
 </head>
-<body>
-  <main class="admin-panel">
-    <p class="admin-eyebrow">企業智慧服務台 · 課堂管理</p>
-    <h1>管理員控制台</h1>
-    <p><strong id="account-name"></strong> · <span id="account-department"></span></p>
-    <button id="logout-button" type="button" class="link-button">登出</button>
-    <section id="admin-monitoring" aria-labelledby="monitor-title">
-      <div class="monitor-heading">
-        <div><h2 id="monitor-title">限流與用量監測</h2><p class="muted">每 5 秒更新，可隨時暫停或手動更新。</p></div>
-        <div class="monitor-actions">
-          <button id="metrics-refresh" class="secondary-button" type="button">立即更新</button>
-          <button id="metrics-toggle" class="secondary-button" type="button" aria-pressed="true">暫停自動更新</button>
+<body class="admin-page">
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 14.5l1.8 1.8 3.4-3.6"/></svg>
+      </span>
+      <div><p class="brand-name">企業智慧服務台</p><p class="brand-sub">管理員控制台</p></div>
+      <span class="role-badge">管理員</span>
+    </div>
+    <details id="account-menu" class="account-menu">
+      <summary class="account-summary" aria-label="帳號選單">
+        <span id="account-avatar" class="avatar" aria-hidden="true"></span>
+        <span id="account-name" class="account-name"></span>
+        <span class="chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="account-panel">
+        <p class="account-id"><span class="muted">使用者代號</span><span id="account-id"></span></p>
+        <p class="account-id"><span class="muted">所屬部門</span><span id="account-department"></span></p>
+        <button id="logout-button" class="secondary-button" type="button">登出</button>
+      </div>
+    </details>
+  </header>
+
+  <div class="admin-shell">
+    <nav class="admin-nav" aria-label="管理頁區塊">
+      <a href="#admin-monitoring" aria-current="true">即時監測</a>
+      <a href="#admin-tickets">需求單資料庫</a>
+      <a href="#admin-accounts">各帳號 AI 使用</a>
+      <a href="#admin-protection">頻率與登入保護</a>
+      <a href="#admin-connectors">Google 連接設定</a>
+      <a href="#admin-reset" class="nav-danger">清除工作單</a>
+    </nav>
+
+    <main class="admin-main">
+      <div class="admin-head">
+        <h1>管理員控制台</h1>
+        <p class="admin-intro">管理員帳號只用來管理網站：看用量、設定 Google 連接、清除工作單；提出需求單、簽核與連接帳號，請改用一般帳號登入</p>
+      </div>
+
+      <section id="admin-monitoring" class="admin-card" aria-labelledby="monitor-title">
+        <div class="card-head">
+          <div>
+            <h2 id="monitor-title">限流與用量監測</h2>
+            <p id="metrics-updated" class="muted">尚無成功快照</p>
+          </div>
+          <div class="monitor-actions">
+            <button id="metrics-refresh" class="secondary-button" type="button">立即更新</button>
+            <button id="metrics-toggle" class="secondary-button" type="button" aria-pressed="true">暫停自動更新</button>
+          </div>
         </div>
-      </div>
-      <p id="metrics-status" role="status" aria-live="polite">等待取得監測資料…</p>
-      <p id="metrics-updated" class="muted">尚無成功快照</p>
-      <div id="metrics-cards" class="metric-grid"></div>
-      <label for="metrics-quota-progress">全站今日自動生成額度使用情況</label>
-      <progress id="metrics-quota-progress" max="1" value="0"></progress>
-      <p id="metrics-policy"></p>
-      <p id="metrics-runtime" class="muted"></p>
-      <p class="monitor-note">只監測目前這個後端程序；重啟或管理重置會讓一般計數歸零。這是本地保護額度，不是 AI 供應商（Claude／Gemini）的帳單或 Token 用量。自動生成每回合扣一次，一回合內切換到備援供應商也只扣一次；以自動生成結果送單、指定處理人的工作單不扣 AI 判斷部門額度。</p>
-      <h3>需求單資料庫</h3>
-      <p id="metrics-ticket-store" class="muted"></p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="需求單資料庫摘要">
-        <table><thead><tr><th scope="col">全部</th><th scope="col">待簽核</th><th scope="col">已簽核</th><th scope="col">已退回</th><th scope="col">已取消</th><th scope="col">資料庫檔</th><th scope="col">WAL 檔</th></tr></thead><tbody id="metrics-tickets"></tbody></table>
-      </div>
-      <h3>各帳號 AI 使用狀態</h3>
-      <p class="muted">自動生成是提出需求單頁的 AI 對話；AI 判斷部門只在 API 送單未指定部門時使用，冷卻也只套用在判斷部門。</p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="各帳號 AI 使用狀態">
-        <table><thead><tr><th scope="col">帳號</th><th scope="col">部門</th><th scope="col">自動生成 今日已用／上限</th><th scope="col">自動生成 剩餘</th><th scope="col">判斷部門 今日已用／上限</th><th scope="col">目前狀態</th><th scope="col">判斷部門冷卻</th></tr></thead><tbody id="metrics-users"></tbody></table>
-      </div>
-      <h3>一般 HTTP 頻率保護</h3>
-      <p class="muted">計數是各個仍有效固定視窗的合計，不是每秒流量或歷史總次數。達上限表示下一次請求將被拒絕；超額次數不含容量不足的拒絕。不顯示來源 IP。</p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="HTTP 頻率摘要">
-        <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別／容量</th><th scope="col">視窗請求合計</th><th scope="col">達上限識別數</th><th scope="col">超額次數</th></tr></thead><tbody id="metrics-http"></tbody></table>
-      </div>
-      <h3>登入失敗保護</h3>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="登入失敗摘要">
-        <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別數</th><th scope="col">視窗失敗合計</th><th scope="col">封鎖識別數</th></tr></thead><tbody id="metrics-login"></tbody></table>
-      </div>
-      <p id="metrics-login-capacity" class="muted"></p>
-      <p id="metrics-monitor-policy" class="muted"></p>
-    </section>
-    <section aria-labelledby="reset-title">
-      <h2 id="reset-title">清除目前所有工作單</h2>
-      <p>此操作會永久清空全部工作單，並重置所有帳號與全站的 AI 額度、冷卻時間、登入失敗及一般 HTTP 限流計數。</p>
-      <p>重置時會暫停新操作，等待進行中的工作結束。帳號與登入憑證會保留；管理操作本身的頻率保護不會重置。</p>
-      <form id="reset-form">
-        <label for="reset-confirmation">請輸入 <strong>RESET_HELPDESK</strong> 確認，資料無法復原。</label>
-        <input id="reset-confirmation" autocomplete="off" spellcheck="false" required aria-describedby="reset-status">
-        <button id="reset-button" class="primary-button" type="submit" disabled>清除全部工作單並重置限量限流</button>
-      </form>
-      <p id="reset-status" role="status" aria-live="polite"></p>
-    </section>
-  </main>
+        <p id="metrics-status" role="status" aria-live="polite">等待取得監測資料…</p>
+        <div id="metrics-cards" class="metric-grid"></div>
+        <div class="quota">
+          <label for="metrics-quota-progress">全站今日自動生成額度使用情況</label>
+          <progress id="metrics-quota-progress" max="1" value="0"></progress>
+          <p id="metrics-policy" class="muted"></p>
+        </div>
+        <details class="admin-help">
+          <summary>這些數字怎麼算</summary>
+          <p class="monitor-note">只監測目前這個後端程序；重啟或管理重置會讓一般計數歸零。這是本地保護額度，不是 AI 供應商（Claude／Gemini）的帳單或 Token 用量。自動生成每回合扣一次，一回合內切換到備援供應商也只扣一次；以自動生成結果送單、指定處理人的工作單不扣 AI 判斷部門額度。</p>
+        </details>
+        <p id="metrics-runtime" class="muted card-foot"></p>
+      </section>
+
+      <section id="admin-tickets" class="admin-card" hidden aria-labelledby="tickets-title">
+        <div class="card-head">
+          <div>
+            <h2 id="tickets-title">需求單資料庫</h2>
+            <p id="metrics-ticket-store" class="muted"></p>
+          </div>
+        </div>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="需求單資料庫摘要">
+          <table><thead><tr><th scope="col">全部</th><th scope="col">待簽核</th><th scope="col">已簽核</th><th scope="col">已退回</th><th scope="col">已取消</th><th scope="col">資料庫檔</th><th scope="col">WAL 檔</th></tr></thead><tbody id="metrics-tickets"></tbody></table>
+        </div>
+      </section>
+
+      <section id="admin-accounts" class="admin-card" hidden aria-labelledby="accounts-title">
+        <div class="card-head">
+          <div>
+            <h2 id="accounts-title">各帳號 AI 使用狀態</h2>
+            <p class="muted">自動生成是提出需求單頁的 AI 對話；AI 判斷部門只在 API 送單未指定部門時使用，冷卻也只套用在判斷部門。</p>
+          </div>
+        </div>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="各帳號 AI 使用狀態">
+          <table><thead><tr><th scope="col">帳號</th><th scope="col">部門</th><th scope="col">自動生成 今日已用／上限</th><th scope="col">自動生成 剩餘</th><th scope="col">判斷部門 今日已用／上限</th><th scope="col">目前狀態</th><th scope="col">判斷部門冷卻</th></tr></thead><tbody id="metrics-users"></tbody></table>
+        </div>
+      </section>
+
+      <section id="admin-protection" class="admin-card" hidden aria-labelledby="protection-title">
+        <div class="card-head">
+          <div>
+            <h2 id="protection-title">頻率與登入保護</h2>
+            <p id="metrics-monitor-policy" class="muted"></p>
+          </div>
+        </div>
+        <h3>一般 HTTP 頻率保護</h3>
+        <p class="muted">計數是各個仍有效固定視窗的合計，不是每秒流量或歷史總次數。達上限表示下一次請求將被拒絕；超額次數不含容量不足的拒絕。不顯示來源 IP。</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="HTTP 頻率摘要">
+          <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別／容量</th><th scope="col">視窗請求合計</th><th scope="col">達上限識別數</th><th scope="col">超額次數</th></tr></thead><tbody id="metrics-http"></tbody></table>
+        </div>
+        <h3>登入失敗保護</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="登入失敗摘要">
+          <table><thead><tr><th scope="col">限制項目</th><th scope="col">設定上限</th><th scope="col">有效識別數</th><th scope="col">視窗失敗合計</th><th scope="col">封鎖識別數</th></tr></thead><tbody id="metrics-login"></tbody></table>
+        </div>
+        <p id="metrics-login-capacity" class="muted table-note"></p>
+      </section>
+
+      <section id="admin-connectors" class="admin-card" hidden aria-labelledby="connectors-title">
+        <div class="card-head">
+          <div>
+            <h2 id="connectors-title">Google 連接設定</h2>
+            <p id="google-settings-state" class="muted"></p>
+          </div>
+        </div>
+        <p class="muted">員工在「連接帳號」頁連接自己的 Google 行事曆之前，要先在 Google Cloud 建一個 OAuth 用戶端（類型選「網頁應用程式」），把下面的回呼網址貼到「已授權的重新導向 URI」，再把用戶端 ID 與密鑰填在這裡；只需要設定一次</p>
+        <p class="copy-field"><span class="copy-label">回呼網址</span><code id="google-redirect-uri">讀取中…</code> <button id="google-copy-redirect" class="secondary-button" type="button" aria-label="複製回呼網址">複製</button></p>
+        <form id="google-settings-form" class="connector-settings-form">
+          <label for="google-client-id">用戶端 ID</label>
+          <input id="google-client-id" autocomplete="off" spellcheck="false" required>
+          <label for="google-client-secret">用戶端密鑰（只寫不讀，每次儲存都要重新輸入）</label>
+          <input id="google-client-secret" type="password" autocomplete="off" data-lpignore="true" data-1p-ignore spellcheck="false" required>
+          <button id="google-settings-save" class="primary-button" type="submit">儲存 Google 連接設定</button>
+        </form>
+        <p id="google-settings-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="admin-reset" class="admin-card danger-zone" hidden aria-labelledby="reset-title">
+        <p class="danger-eyebrow">危險操作</p>
+        <h2 id="reset-title">清除目前所有工作單</h2>
+        <p>此操作會永久清空全部工作單，並重置所有帳號與全站的 AI 額度、冷卻時間、登入失敗及一般 HTTP 限流計數。</p>
+        <p class="muted">重置時會暫停新操作，等待進行中的工作結束。帳號與登入憑證會保留；管理操作本身的頻率保護不會重置。</p>
+        <form id="reset-form">
+          <label for="reset-confirmation">請輸入 <strong>RESET_HELPDESK</strong> 確認，資料無法復原。</label>
+          <input id="reset-confirmation" autocomplete="off" spellcheck="false" required aria-describedby="reset-status">
+          <button id="reset-button" class="primary-button" type="submit" disabled>清除全部工作單並重置限量限流</button>
+        </form>
+        <p id="reset-status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+  </div>
 </body>
 </html>

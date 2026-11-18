@@ -32,10 +32,17 @@
 
 .intro { color: var(--muted); margin: 14px 0 36px; }
 
+@media (max-width: 760px) {
+  /* 有導覽的頂欄放不下帳號名，只留頭像，避免品牌名、導覽與帳號名擠成兩行 */
+  .top-bar:has(.top-nav) .account-name { display: none; }
+}
+
 @media (max-width: 640px) {
   .top-bar { padding: 12px 16px; }
   .brand-sub { display: none; }
-  .top-nav { margin-left: 12px; }
-  .top-nav a { padding: 6px 10px; font-size: 14px; }
+  /* 手機寬度再收起品牌名，只留圖示、導覽與頭像，避免擠成一字一行 */
+  .top-bar:has(.top-nav) .brand > div { display: none; }
+  .top-nav { margin-left: 8px; }
+  .top-nav a { padding: 6px 10px; font-size: 14px; white-space: nowrap; }
   .intro { margin-bottom: 28px; }
 }
