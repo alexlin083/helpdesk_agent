@@ -189,14 +189,14 @@ test('交給 AI 的行事曆工具由 MCP 的 tools/list 決定：基本等級�
   const ids = (list) => list.map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id);
   const basic = createCalendarTools({ connections: fakeConnections(['calendar_busy']), fetchImpl: fakeGoogle(), log() {} });
   assert.deepEqual(await basic.listAvailable('racky.huang'), ['calendar_busy']);
-  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: basic })), ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'policy_lookup']);
+  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: basic })), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'calendar_busy', 'policy_lookup']);
   const advanced = createCalendarTools({ connections: fakeConnections(['calendar_busy', 'calendar_events']), fetchImpl: fakeGoogle(), log() {} });
-  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: advanced })), ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
+  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: advanced })), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
   const notConnected = createCalendarTools({ connections: fakeConnections('CONNECTOR_NOT_CONNECTED'), fetchImpl: fakeGoogle(), log() {} });
   assert.deepEqual(await notConnected.listAvailable('racky.huang'), []);
-  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: notConnected })), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup']);
-  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: { /** 查詢失敗 @returns {Promise<never>} 失敗 */ async listAvailable() { throw new Error('x'); } } })), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup']);
-  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang' })), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup'], '沒有行事曆服務');
+  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: notConnected })), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'policy_lookup']);
+  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang', calendar: { /** 查詢失敗 @returns {Promise<never>} 失敗 */ async listAvailable() { throw new Error('x'); } } })), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'policy_lookup']);
+  assert.deepEqual(ids(await visibleTools(allTools, { username: 'racky.huang' })), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'policy_lookup'], '沒有行事曆服務');
 });
 
 test('時區跟著需求類型：期間用需求類型的時區位移，Google 查詢不另外寫死時區', () => {

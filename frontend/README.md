@@ -49,7 +49,7 @@ frontend/
 │   │   ├── propose/           #   提出需求單頁（助理對話區與其日期時間欄位、結果視窗與部門卡片）
 │   │   ├── tickets/           #   狀態追蹤頁（申請表單與待辦表單清單、卡片、操作表單、已完成表單面板）
 │   │   ├── connections/       #   連接帳號頁（服務清單、權限等級與連接按鈕）
-│   │   └── admin/             #   管理頁（監測、重置）
+│   │   └── admin/             #   管理頁（監測、Google 連接設定、假日資料、重置）
 │   ├── services/              # API 服務
 │   └── utils/                 # 純顯示工具
 ├── tests/
@@ -97,6 +97,7 @@ frontend/
 | `src/components/tickets/completedTickets.js` | 「已完成表單」面板（本部門已結案的單，`scope=department`） |
 | `src/components/tickets/ticketText.js`、`src/utils/ticketFormatters.js` | 共用文案及純顯示函式 |
 | `src/components/admin/adminMonitoring.js`、`src/components/admin/adminMetrics.js` | 管理監測的輪詢與畫面繪製 |
+| `src/components/admin/adminHolidays.js`、`src/services/holidayService.js` | 管理頁「假日資料」：各年度的假日來源、檢查外部來源的差異、套用與還原（API 規格書第 3.20 節） |
 | `src/components/propose/dialogs.js` | 結果視窗與部門卡片的繪製 |
 | `src/components/dom.js` | 以 `textContent` 建立元素，避免 HTML 注入 |
 | `tests/` | 測試與測試替身（執行方式見下方「測試」） |

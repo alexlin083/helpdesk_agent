@@ -348,8 +348,14 @@ export function normalizeDefinition(raw, { entry, tools, departments, ledgerTabl
       notify,
     },
     timezoneOffset: calendars[0]?.timezoneOffset ?? null,
-    references: Object.fromEntries(computations.filter(/** 有日曆的計算。@param {object} item 計算。@returns {boolean} 有日曆時 true。 */ (item) => item.resolved.calendar)
-      .map(/** 轉成 AI 摘要。@param {object} item 計算。@returns {[string, object]} [鍵, 摘要]。 */ (item) => [item.args.calendar, describeCalendar(item.resolved.calendar)])),
+    /**
+     * 交給 AI 的規則資料（工作日曆摘要，以定義中的日曆鍵為名）；每次讀取時重新產生，管理員同步假日後不需重新載入定義就會反映。
+     * @returns {Record<string, object>} 日曆鍵 → describeCalendar 摘要。
+     */
+    get references() {
+      return Object.fromEntries(computations.filter(/** 有日曆的計算。@param {object} item 計算。@returns {boolean} 有日曆時 true。 */ (item) => item.resolved.calendar)
+        .map(/** 轉成 AI 摘要。@param {object} item 計算。@returns {[string, object]} [鍵, 摘要]。 */ (item) => [item.args.calendar, describeCalendar(item.resolved.calendar)]));
+    },
   });
 }
 

@@ -69,6 +69,9 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | 「確認並送出」改成彈出視窗（2026-11-16）：套用後彈出 `#confirm-dialog`，「返回修改」與 × 只關視窗、資料保留，送出中不能關，送出成功後改開結果視窗；重新提出時開頁就彈出 | 已實作（第 3.18 節）；後端 API 不變 |
 | 請假以外的類型也由助理主動協助（2026-11-16）：打卡補登、VPN 申請、報修、設備申請、採購申請、一般需求開放規章查詢 `policy_lookup`，打卡補登與 VPN 申請另開放行事曆工具（使用者有連接時 AI 才看得到）；`assistant.instructions` 改成先回應使用者這次說的話、主動提醒會影響這張單的事、不重問講過的資料、大約的值先填再請使用者確認；填寫回合的 `reply` 改成一到四句話，先回應再問缺的資料，使用者自己給的數字可以簡單換算；規章查詢的提醒改成只引用相關條文，查不到時使用者沒問就不提 | 已實作（第 3.15 節工具表、第 3.16 節）；回應形狀與 API 不變；六種類型的版本升為 2，只改 `ai` 說明與工具，欄位與規則不變；更新時還沒送出的版本 1 草稿，送出會回 409 `FORM_VERSION_CHANGED`，重新跟助理確認即可，已送出的單不受影響 |
 | AI 回覆附建議選項（2026-11-17）：填寫回合的輸出新增 `suggestions`，要求 AI 每次給 1～3 個讓使用者直接點的選項；後端驗證後回應多一個 `suggestions` 欄位（驗證不過的選項不列，最多 3 個），前端在回覆下方列成按鈕，點了就填欄位並把選項文字當成回覆送出，能用選的就不用打字 | 已實作（第 3.16、3.18 節）；回應只多一個欄位，舊前端會忽略，其他 API 不變 |
+| 請假定義版本 5（2026-11-19）：工作日曆 `holidays` 補上 2026 年 11～12 月與 2027 年 1～3 月的國定假日與補假（2026-12-25、2027-01-01、2027-02-04～02-05、2027-02-08～02-10、2027-03-01，依人事行政總處辦公日曆表，2027 年無補班日），這些日期不計入請假時數、選擇器停用；交給 AI 的工作日曆摘要（不是 API 回應）另列 `holidays`，讓方案避開假日 | 已實作（第 3.16、3.18 節）；API 形狀不變，`calendars[].holidays` 由空陣列變成上述日期；其他月份尚未補（2026 年 1～10 月、2027 年 4 月以後仍當工作日計算），系統也還不支援週末補班日；版本 4 的草稿送出時回 409 `FORM_VERSION_CHANGED`，重新按「自動生成」即可 |
+| 管理頁同步假日（2026-11-19）：新增 `GET /api/admin/holidays`、`POST /api/admin/holidays/check`、`POST /api/admin/holidays/apply`、`POST /api/admin/holidays/revert`；管理員從外部來源（政府辦公日曆表的 JSON 版）檢查某一年的假日差異，確認後套用，存在 `meta` 表 `holiday_calendar`，套用後所有工作日曆立即使用（時數計算、提前工作日、選擇器、AI 摘要），不需重新啟動；管理頁新增「假日資料」區塊 | 已實作（第 3.20 節）；不升資料庫結構版本（維持 8）；其他 API 形狀不變；排程自動同步未實作 |
+| AI 工具「我的待辦需求單」（2026-11-19）：新增能力 `department_queue`（目錄工具 `my_pending_tickets`，`same_department`，沒有參數），回傳本人部門待簽核、不是本人提出的需求單摘要（主旨、類型、送出日期、等待天數、是否指定給本人），不含內容與提單人；請假的 `ai.tools`、AI 說明與招呼語加入這個工具 | 已實作（第 3.15 節）；API 形狀不變（`tools_used`、`proposals[].basis` 可能出現 `my_pending_tickets`，`basis_labels` 為「我的待辦需求單」）；請假定義版本維持 5（欄位與規則不變） |
 | 管理監測顯示自動生成額度、串流回覆 | 未實作（監測的 `ai` 只含需求單判斷額度） |
 | 人員管理 API 或管理頁畫面（新增、停用、調整部門、設定額度） | 未實作；目前只有維運腳本 `scripts/personnel.js`（第 3.6 節），沒有對應的 HTTP 端點 |
 | 「送達」實際通知處理人或部門、Email 或即時通知 | 未實作，不在本次範圍 |
@@ -130,6 +133,10 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
 | GET | `/api/leave/balances` | Bearer（人資） | 人資部門成員查詢某位員工的假別時數 |
 | GET | `/api/admin/metrics` | Bearer ADMIN | 取得設定、即時取樣用量與需求單資料庫筆數摘要（第 3.14 節） |
 | POST | `/api/admin/reset` | Bearer ADMIN | 清空全部工作單並重置一般限量限流（第 3.12 節） |
+| GET | `/api/admin/holidays` | Bearer ADMIN | 假日資料摘要：來源與各年度目前使用的假日（第 3.20 節） |
+| POST | `/api/admin/holidays/check` | Bearer ADMIN | 從外部來源抓取某一年的假日並列出差異，不寫入（第 3.20 節） |
+| POST | `/api/admin/holidays/apply` | Bearer ADMIN | 套用檢查過的某一年假日（第 3.20 節） |
+| POST | `/api/admin/holidays/revert` | Bearer ADMIN | 刪掉某一年的同步資料，改回定義檔的假日（第 3.20 節） |
 
 未知路由與方法不符（例如對 `/api/tickets` 發 GET、對 `/api/tickets/{id}/decision` 發 PUT）一律回 404 `NOT_FOUND`。
 
@@ -375,6 +382,7 @@ tags: [中原資管碩, 人工智慧與流程自動化實務研討]
   - 版本 7：`ALTER TABLE accounts ADD COLUMN department_name TEXT NOT NULL DEFAULT ''`，在 `accounts` 加上所屬部門的中文名稱（版本 8 移到 `department_id` 旁邊），方便直接檢視資料庫；這個欄位只供顯示，程式判斷部門一律用 `department_id`。每次開啟資料庫時（寫入示範名冊之後）在一筆 IMMEDIATE 交易內依部門設定檔同步（`personnel.js` 的 `syncAccountDepartmentNames`：名稱不同才更新、不改 `updated_at`，部門已不在設定檔時為空字串；有更新時記錄 `storage.department_names.synced`（`accounts` 筆數）），`scripts/personnel.js` 的 `add`、`set-department` 也在同一筆交易內同步，因此部門設定檔改名後重新啟動服務即更新
   - 版本 8：人員資料改以員工編號 `employee_no` 關聯（`username` 只是登入名稱，可能因同名或改名而變動，員工編號才是人資的穩定識別碼）。依 SQLite 建議步驟在交易外暫時關閉 `foreign_keys` 後重建三張表、維持原本的寫入順序，提交前以 `foreign_key_check` 確認：`employees(employee_no TEXT PRIMARY KEY, display_name, hire_date)`（不再存 `username`）；`accounts(username PRIMARY KEY, employee_no UNIQUE REFERENCES employees, department_id, department_name, role, active, created_at, updated_at, CHECK (role = 'USER' OR employee_no IS NULL))`，一般帳號以 `employee_no` 連到自己的員工資料、管理員必須為 NULL，`department_name` 移到 `department_id` 旁邊，並重建索引 `accounts_department` 與禁止刪除帳號的觸發器（原本的 `employees_not_admin` 觸發器由上述 CHECK 取代）；`leave_entitlements(employee_no REFERENCES employees, leave_type, year, granted_minutes, PRIMARY KEY (employee_no, leave_type, year))`。程式仍以帳號辨識使用者：查詢員工資料與額度時以 `accounts.employee_no` 串回帳號（額度表允許清單的 `ownerByUsername` 子查詢）；已送出的需求單仍以帳號記錄提單人，不改寫
   - `meta` 另存外部服務連接資料，不升版（仍是版本 8）：名稱 `connector_user:{帳號}:{連接器 id}` 與 `connector_setting:{連接器 id}`，值的格式、讀取規則與降版測試見第 3.19 節
+  - `meta` 另存管理員同步的假日，不升版：固定名稱 `holiday_calendar`，全部年度放在同一筆 JSON，格式見第 3.20 節
   - 人員名冊寫入：開啟資料庫時，只有 `accounts` 為空（全新資料庫、版本 1 升級或版本 2 沒有員工）才在同一筆 IMMEDIATE 交易內寫入一次示範名冊（依序寫入員工、帳號（一般帳號帶員工編號）與 2026／2027 額度）；因此全新資料庫第一次啟動時（本機為 `backend/storage/helpdesk.db`，Docker 為 volume 內的 `/app/storage/helpdesk.db`）會建立結構版本 8，並寫入 16 組一般帳號、管理員、假員工與假別額度；已有任何帳號時永遠不再寫入；之後的人員調整與年度額度用 `scripts/personnel.js`（第 3.6 節）
   - 剩餘額度不另存使用量，每次由通用額度帳（ledger，`dataStore` 的 `withLedger`、`ledgerBalances` 與交易內的 `ledgerOverlaps`、`ledgerBusy`）以唯讀查詢計算：某員工某類別某期間的剩餘 = 定義 `ledger.entitlement_table` 指定的額度表（只能是 `database.js` 的程式允許清單 `LEDGER_TABLES` 內的表，目前只有 `leave_entitlements`；額度表的欄位寫死在程式，新增一種額度表需要改程式）的年度額度；需求單不從剩餘扣除，額度的扣除與調整由人資在公司既有的系統處理，不在本系統；另列出該員工同一需求類型（`form.id` 相同）的需求單中狀態為 `PENDING`（pending）與 `APPROVED`（used）、同類別同期間的數量總和作為參考；已退回與已取消的單不計；需求單的類別、數量與期間優先取自送出時保存的 `form.ledger`（`{ category, amount, period, start, end }`）；沒有這份快照的舊版請假單（版本 1）改取 `form.fields` 的類別欄位（`leave_type`）、`form.computed` 的數量（`minutes`）與期間欄位（`start_at`）的年度；以請假為例：剩餘 = `granted_minutes`，同假別同年度待簽核與已核准請假單的分鐘數只列為參考；期間重疊以既有單的起點 < 新終點且終點 > 新起點判定（起訖同樣優先取 `form.ledger.start`／`end`），只看待簽核與已核准
 - 開啟時先檢查檔案身分與結構版本，通過後才寫入任何 PRAGMA 或套用遷移：`application_id` 不是 `HDK1` 的檔案，除非是完全空白的新檔（application_id 0、user_version 0、沒有任何結構物件），一律以 `FOREIGN_DATABASE` 拒絕，因此 `DATABASE_FILE` 誤指到其他程式的 SQLite 檔時不會被改動；結構版本比自身支援的新則以 `SCHEMA_TOO_NEW` 拒絕，因此舊版 image 無法開啟新版結構；通過後連線設定 `journal_mode=WAL`、`synchronous=NORMAL`、`foreign_keys=ON`、busy timeout 5000 ms、`secure_delete=ON`
@@ -530,7 +538,7 @@ AI 判斷錯誤或指定錯處理人時，送達部門的成員可把「待簽�
 { "deletedTickets": 12, "resetAt": "2026-10-28T00:00:00.000Z" }
 ```
 
-外部服務連接與 Google 連接設定（`meta` 表，第 3.19 節）不在清除範圍內，重置後保留
+外部服務連接與 Google 連接設定（`meta` 表，第 3.19 節）、同步的假日（`meta` 表 `holiday_calendar`，第 3.20 節）不在清除範圍內，重置後保留
 
 維護流程：阻擋新登入及業務工作 → 等待既有登入、AI、查詢與變更完成 → 以單一 DELETE 交易清空 SQLite 內的全部需求單（secure_delete），再以 `wal_checkpoint(TRUNCATE)` 合併 WAL → 清除帳號／全站每日額度（含自動生成額度）、冷卻、並行租約、登入失敗記錄 → 清除一般 HTTP 計數（含 `draft`）；重置只刪除需求單，不清除人員資料表 `accounts`、`employees`、`leave_entitlements`；剩餘時數本來就只由年度額度決定，刪除請假單不會改變剩餘（只有參考用的已核准、待簽核歸零）；資料庫失敗回 503 TICKET_STORE_UNAVAILABLE，整筆回滾、不刪除任何需求單且不清計數；WAL 合併時若有其他讀取連線（例如執行中的備份）佔用，最多只等待 250 ms；未能完成時記錄警告 `tickets.store.checkpoint_failed`（busy、walFrames、checkpointed，或例外時的 errorCode），重置本身仍成功；請求與回應格式不變；維護中或重複維護回 503 SERVICE_BUSY，Retry-After 10 秒；關機也會等待維護工作；維護期間被阻擋的新登入與業務工作同樣回 503 `SERVICE_BUSY`；重複重置不會排入無限等待；WAL 要等之後的 checkpoint 才會截斷，因此不要在備份執行中清除；重置不清除舊版匯入紀錄，重啟後不會再次匯入 `tickets.json`（之後才放入的舊檔只回報 `legacy-appeared`，見第 3.4 節）；重置也不刪除備份、volume 內保留的舊版 `tickets.json` 或還原前保留的舊資料庫檔；稽核日誌 `admin.reset.completed` 只記錄操作者 userID、筆數及時間
 
@@ -642,6 +650,7 @@ HTTP totalHits 是目前仍有效的各識別視窗合計，不是每秒流量�
 | `calendar_busy` | `self_only` | `start_at`、`end_at`（string，`YYYY-MM-DDTHH:mm`，需求類型的時區，兩個都要，終點晚於起點，最長 62 天；轉成帶時區位移的時間再查，Google 查詢不另外寫死時區） | 無 | 本人外部行事曆在期間內的忙碌時段 `{ range, busy: [{ start, end }] }`，只有開始與結束；後端內部用官方 MCP SDK（`@modelcontextprotocol/sdk` 1.32.2）的記憶體連線，呼叫自寫的唯讀 Google 行事曆 MCP 伺服器（`backend/src/services/connectors/calendarMcp.js`），沒有開放給外部的 MCP client；每次呼叫只帶入本人的存取權杖；交給 AI 的行事曆工具由 MCP 的 `tools/list` 依本人的連接與權限等級決定，沒連接時 AI 看不到；Google 回 401 或 403 時丟掉快取的存取權杖重試一次（授權已撤銷就標成需要重新連接）；沒連接、需要重新連接、權限等級不包含這個工具或 Google 失敗時回 `{ error }` |
 | `calendar_events` | `self_only` | 同上 | 無 | 本人行事曆在期間內的行程 `{ range, events: [{ start, end, all_day, title }], truncated, note }`；只有使用者選了進階權限時可用；標題的控制字元與換行換成空白，格式字元（含零寬字元、方向控制、Unicode 標籤字元）、私用區、未指派碼位與變體選擇符一律刪掉，清完再截到 60 字，`note` 提醒 AI 標題是行事曆原文、只當資料；已取消與標成「有空」的行程不列；最多 50 筆，超過時 `truncated` 為 true |
 | `policy_lookup` | `all` | `query`（string，問題或關鍵字，必填）、`type_id`（string，選填，省略為目前的需求類型） | 無 | 這個需求類型最相關的規章最多 3 筆 `{ entries: [{ id, doc_name, articles, section_title, content, enforcement, data_status }], note }`：關鍵字出現在問題裡（或問題是關鍵字的一部分）每個 3 分、問題的相鄰兩字出現在主題、摘要、關鍵字或範例問題裡每組 1 分，至少 2 分才列；`note` 要 AI 只引用跟使用者情況有關的條文並附上 `doc_name` 與條次，查不到時 `entries` 是空陣列，`note` 要 AI 在使用者問到規定時照實說沒有找到、不自行編造規則，沒問就不提；知識庫是 `backend/src/services/knowledge/knowledge-base.json`（內容同 `docs/企業規章與知識庫/knowledge-base.example.json`，全部是課堂模擬資料），第一次查詢時讀取並驗證（欄位齊全、id 不重複、`content` 最多 600 字、`summary` 最多 120 字），讀不到或格式錯誤時回 `{ error }`，不影響啟動；七種類型都開放這個工具（請假以外的類型 2026-11-16 起） |
+| `department_queue`（目錄工具 id 為 `my_pending_tickets`） | `same_department` | 沒有參數 | 無 | 本人手上的待辦需求單：`department_id` 為本人部門、`status` 為 `PENDING`、`requester.username` 不是本人的單 `{ department, total_pending, assigned_to_me, oldest_waiting_days, tickets: [{ subject, type, submitted_on, waiting_days, assigned_to_me }], truncated, note }`；`assigned_to_me` 為 `handler.id` 是本人的單；`type` 為 `form.name`，只存 `request_type` 的單查目錄的類型名稱，直接送單的為 null；`submitted_on` 為需求類型時區的送出日期，`waiting_days` 為送出到現在的整天數；依 `created_at` 由舊到新，最多 20 張（`truncated`），主旨截到 60 字；不含 `content`、`requester`、`ticket_id`、`history`、`decision`；範圍和員工在「待辦表單」分頁看得到的相同，不擴大權限；需求單沒有截止日，`note` 提醒 AI 這是目前整體的待辦量、跟日期無關，不要說成某一天有或沒有待辦、主旨只當資料；請假開放（2026-11-19 起） |
 
 工具結果只當資料交給模型，不是指示；工具參數不符、查無資料（找不到部門或類型）、類型沒有額度帳時回 `{ error }` 給模型，由模型改問使用者，不讓請求失敗；資料庫暫時無法讀取時也只回錯誤資料給模型（不回 503，第 4 節）
 
@@ -892,6 +901,30 @@ curl -X POST http://localhost:3000/api/tickets/draft \
 - 本機沒設定 `AUTH_SECRET` 時，金鑰（`local_auth_secret`）和密文在同一個資料庫檔，拿到檔案或備份檔就解得開，這時的加密只能防止直接看到原文，備份檔要照密碼的等級保管；正式環境一定要設定 `AUTH_SECRET`（沒設定時拒絕啟動），金鑰才不在資料庫裡
 - 日後組員要正式升資料庫版本時，把這兩種資料搬到獨立的資料表（例：`user_connections`、`connector_settings`）：遷移時讀出 `meta` 的這兩種名稱寫進新表再刪除，`metaRecords.js` 與 `dataStore` 的四個方法改成讀新表，其他程式不用改
 
+### 3.20 假日資料同步 API（管理頁「假日資料」；已實作）
+
+工作日曆（需求類型定義的 `calendar`，例如請假）會扣掉假日：時數計算（`work_minutes`）、提前提出的工作日（`notice_workdays`）、日期時間選擇器停用的日期與交給 AI 的工作日曆摘要都用同一份假日。假日原本只寫在定義檔的 `holidays`；管理員可以從外部來源同步某一年，同步過的年度改用資料庫的資料
+
+- **來源**：[ruyut/TaiwanCalendar](https://github.com/ruyut/TaiwanCalendar)（CC BY 4.0），把政府資料開放平臺「中華民國政府行政機關辦公日曆表」（data.gov.tw 資料集 14718，行政院人事行政總處，政府資料開放授權條款第 1 版）轉成每年一份 JSON，網址 `https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json`；網址寫死在 `backend/src/services/holidays/holidaySync.js`，管理員與前端不能指定其他網址。官方資料集本身只提供每年一份、網址含隨機 UUID 的 CSV，沒有 API，所以用這份 JSON
+- **怎麼取資料**：只保留週一到週五的放假日（週末本來就不是工作日）；週六、週日要上班的日子是補班日，工作日曆目前沒有補班的設定，所以有補班日的年度不能套用（民國 115、116 年都沒有補班日）；來源每一天都要有、依序不缺不重複、星期與日期相符，否則整份不採用
+- **怎麼合併**：有同步資料的年度整年取代定義檔的假日（不逐日合併，來源刪掉的假日才不會殘留），也視為開放年度（定義檔沒列的年度同步後就能計算）；沒有同步資料的年度照用定義檔；同步資料是全公司共用的，套用到所有工作日曆
+- **生效時機**：套用與還原後立即生效，不需重新啟動；啟動時在監聽前從 `meta` 載入（日誌 `holidays.ready`，`syncedYears` 為載入的年度數），讀不到或格式不符時記錄 `holidays.load_failed`／`holidays.record_invalid` 並改用定義檔，不讓啟動失敗
+- **已送出的單不受影響**：送出時已把計算結果（請假時數）存在需求單的 `form.computed`，簽核時的額度檢查與剩餘時數都沿用保存的值；同步只影響之後的草稿與送出
+- **沒有排程**：只在管理員按按鈕時才連外；政府約每年 6 月公布下一年度，來源隨後更新
+
+API（requireAdmin；`GET` 與監測共用計數，三個 `POST` 與重置、Google 連接設定共用管理員計數）：
+
+- `GET /api/admin/holidays`：回 `{ source: { id, name, url_template, license, homepage }, latest_year, years: [{ year, origin, dates: [{ date, description }], applied_by, applied_at }] }`；`latest_year` 是可同步的最晚年度（台北今天的明年）；`years` 列出定義檔或同步資料有的年度（遞增）；`origin` 為 `synced`（同步資料）或 `definition`（定義檔，`description` 為 null、`applied_by`／`applied_at` 為 null）
+- `POST /api/admin/holidays/check`：本文 `{ year }`（2017～`latest_year` 的整數，否則 400 `INVALID_PAYLOAD`，在連外之前就檢查）；抓取來源並和這一年目前使用的假日比對，不寫入；回 `{ year, origin, holidays, added, removed, unchanged, makeup_days, can_apply, blocked_reason, digest }`：`holidays` 為來源的工作日放假日 `[{ date, description }]`，`added`／`removed` 為和目前相比新增與移除的日期，`unchanged` 為沒變的天數，`makeup_days` 為週末補班日，`can_apply` 在沒有補班日時為 true，`blocked_reason` 為不能套用的原因，`digest` 為 `holidays` 的 SHA-256
+- `POST /api/admin/holidays/apply`：本文 `{ year, digest }`，`digest` 為檢查結果的值（64 個十六進位字元，否則 400）；重新抓取來源，摘要值不同時回 409 `HOLIDAYS_CHANGED`（請重新檢查），有補班日時 409 `HOLIDAYS_MAKEUP_UNSUPPORTED`；通過後寫入 `meta` 並立即生效，回應形狀同 `GET`
+- `POST /api/admin/holidays/revert`：本文 `{ year }`；刪掉這一年的同步資料、改回定義檔（定義檔沒有這一年時，這一年變回未開放）；這一年沒有同步資料時 404 `HOLIDAYS_NOT_SYNCED`；回應形狀同 `GET`
+- 抓取來源的錯誤（檢查與套用都一樣，都不寫入）：來源還沒有這一年 404 `HOLIDAYS_NOT_PUBLISHED`；連線失敗、逾時（10 秒）或非 2xx 為 502 `HOLIDAYS_SOURCE_UNAVAILABLE`（日誌 `holidays.fetch_failed`）；內容不是 JSON、超過 256 KB 或格式不符為 502 `HOLIDAYS_SOURCE_INVALID`
+- 部署：後端要能連到 `cdn.jsdelivr.net`（HTTPS）；連不到時只有這個功能失敗，其他功能與已同步的資料照常
+
+**資料存放：既有的 `meta` 表，不升資料庫結構版本**（理由同第 3.19 節）：固定名稱 `holiday_calendar` 一筆，值為 JSON `{ version: 1, years: { "2027": { source, applied_by, applied_at, dates: [{ date, description }] } } }`；`dates` 為該年度的 `YYYY-MM-DD`、依日期遞增、最多 60 筆，`description` 最多 40 字；名稱與格式只在 `backend/src/services/holidays/holidayRecord.js` 定義，`dataStore` 只提供 `readHolidayRecord` 與在一筆交易內讀改寫的 `updateHolidayRecord`；讀出後逐欄驗證，任一處不符時整筆視為無效（改用定義檔並記錄警告），下次套用時覆寫。備份與還原跟著整個資料庫；舊版程式不讀這個名稱
+
+前端：管理頁左側「假日資料」（`src/components/admin/adminHolidays.js`、`src/services/holidayService.js`）列出各年度的來源、工作日的假日天數、套用者與時間，同步過的年度有「還原成定義檔」；輸入年度（預設 `latest_year`）按「檢查更新」列出新增（＋）與移除（－）的日期，按「套用」把 `digest` 送回；改了年度就清掉舊的檢查結果；有補班日時套用按鈕停用並顯示原因；`HOLIDAYS_CHANGED` 時清掉檢查結果請管理員重新檢查；頁尾標示資料來源與授權
+
 ## 4. 錯誤處理與 HTTP 狀態碼規範
 
 為確保前端在面對網路異常或後端故障時能維持良好之 UI/UX 狀態（如解除按鈕鎖定、顯示友善錯誤提示），後端必須遵守以下標準 HTTP 狀態碼回應原則。
@@ -934,6 +967,9 @@ curl -X POST http://localhost:3000/api/tickets/draft \
 | `415 Unsupported Media Type` | `UNSUPPORTED_MEDIA_TYPE` | 請求本文的 charset 不是 UTF 系列（例如 `charset=latin1`）或 Content-Encoding 不支援 | 顯示後端訊息；沒有訊息時「請求格式不受支援」 |
 | `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED`、`REQUEST_IN_PROGRESS`、`LOGIN_RATE_LIMITED` | HTTP 請求頻率、冷卻、處理中、登入失敗過多或 AI 上游限流 | 依 `retry_after` 倒數（1～300 秒；提出需求單頁的送出鈕、登入頁的登入鈕與待簽核卡片的按鈕），超過 300 秒或沒有秒數只顯示提示；送出鈕與觸發的卡片按鈕顯示「請等 N 秒」，待簽核卡片倒數期間該卡片所有按鈕停用，到期自動解除 |
 | `429 Too Many Requests` | `DAILY_QUOTA_EXCEEDED`、`GLOBAL_QUOTA_EXCEEDED` | 帳號或全站今日額度耗盡（需求單判斷；自動生成的額度用盡不回 429，改在 200 回應的 `ai_error`） | 顯示台北午夜重置提示，不倒數 |
+| `404 Not Found` | `HOLIDAYS_NOT_PUBLISHED`、`HOLIDAYS_NOT_SYNCED` | 假日來源還沒有這一年的資料；還原沒有同步資料的年度（第 3.20 節） | 管理頁假日資料區顯示後端訊息 |
+| `409 Conflict` | `HOLIDAYS_CHANGED`、`HOLIDAYS_MAKEUP_UNSUPPORTED` | 套用假日時來源在檢查之後變了；這一年有週末補班日（第 3.20 節） | 管理頁顯示後端訊息；`HOLIDAYS_CHANGED` 時清掉檢查結果，請重新檢查 |
+| `502 Bad Gateway` | `HOLIDAYS_SOURCE_UNAVAILABLE`、`HOLIDAYS_SOURCE_INVALID` | 假日來源連不上、逾時、回非 2xx，或內容格式不符（第 3.20 節）；不寫入任何資料 | 管理頁顯示後端訊息，稍後再試 |
 | `429 Too Many Requests` | `CONNECT_BUSY` | 進行中的 Google 授權超過 500 筆 | 提示稍後再試 |
 | `503 Service Unavailable` | `CONNECTORS_UNAVAILABLE` | 連接器設定檔 `backend/src/services/connectors/connectors.json` 不見或格式錯誤（只影響連接相關的 API） | 連接帳號頁顯示後端訊息 |
 | `500 Internal Error` | `SERVER_ERROR` | 需求單判斷時兩家都沒有 AI 金鑰、模型輸出未通過驗證、上游失敗或逾時、其他未預期錯誤（自動生成的 AI 失敗不回 500，改在 200 回應的 `ai_error`） | 顯示系統暫時無法使用提示，解除送出鎖定 |

@@ -59,6 +59,17 @@
 #google-settings-status { min-height: 1.5em; margin-top: 10px; font-size: 0.9rem; }
 #google-settings-status.is-error { color: var(--danger); }
 
+/* 假日資料：年度表格、檢查表單與差異預覽 */
+.holidays-form { display: grid; gap: 8px; max-width: 560px; margin-top: 18px; }
+.holidays-form label { font-size: 0.9rem; font-weight: 600; }
+.holidays-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+#holidays-year { width: 9em; }
+#holidays-years .secondary-button { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+.holidays-preview { margin-top: 14px; padding: 14px 16px; background: var(--cream); border: 1px solid var(--line); border-radius: 10px; }
+.holidays-preview ul { margin: 8px 0 12px; padding-left: 1.2em; font-size: 0.9rem; }
+#holidays-status { min-height: 1.5em; margin-top: 10px; font-size: 0.9rem; }
+#holidays-status.is-error { color: var(--danger); }
+
 /* 危險操作：紅框與紅色按鈕，和上面的日常操作分開 */
 .danger-zone { border-color: var(--danger); }
 .danger-eyebrow { margin-bottom: 4px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em; color: var(--danger); }

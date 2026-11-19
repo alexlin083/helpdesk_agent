@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createFakeDocument, createFakeWindow } from './helpers/fakeDom.js';
 import { initAdminSections } from '../src/components/admin/adminSections.js';
 
-const IDS = ['admin-monitoring', 'admin-tickets', 'admin-accounts', 'admin-protection', 'admin-connectors', 'admin-reset'];
+const IDS = ['admin-monitoring', 'admin-tickets', 'admin-accounts', 'admin-protection', 'admin-connectors', 'admin-holidays', 'admin-reset'];
 
 /**
  * 建立左側清單與六個區塊（id 和 admin.html 相同），視窗記錄改網址與捲動

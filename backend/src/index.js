@@ -3,6 +3,7 @@ import { taskTracker } from './services/taskTracker.js';
 import { dataStore } from './services/storage/dataStore.js';
 import { SCHEMA_VERSION } from './services/storage/database.js';
 import { getRequestTypes } from './services/requestTypes/registry.js';
+import { holidaySync } from './services/holidays/index.js';
 import { installShutdown, listenServer } from './utils/shutdown.js';
 import { app } from './server.js';
 import { env } from './config/env.js';
@@ -60,6 +61,8 @@ function prepareRequestTypes() {
 
 prepareRequestTypes();
 await prepareStorage();
+// 管理員同步過的假日（meta 表 holiday_calendar）在監聽前載入；讀不到時記錄錯誤、改用定義檔的假日，不讓啟動失敗
+logger('info', 'holidays.ready', { syncedYears: holidaySync.load() });
 // 不把 onListening 傳給 app.listen：Express 5 會在監聽失敗時也呼叫該回呼，listenServer 只在 'listening' 事件記錄啟動。
 const server = listenServer(app, env.port, { onListening, onError: onServerError });
 

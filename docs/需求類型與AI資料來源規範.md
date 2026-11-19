@@ -39,7 +39,7 @@ backend/data/requestTypes/
 
 | id | 版本 | 名稱 | 送達部門 | 流程（`workflow.route`） | 可轉單 | 本人可簽核 | AI 可用工具 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `leave` | 4 | 請假申請 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「請假單不能轉出人資部」） | 否（「不能簽核自己提出的請假單」） | `colleagues`、`my_leave_balance`、`department_directory`、`calendar_busy`、`calendar_events`、`policy_lookup` |
+| `leave` | 5 | 請假申請 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「請假單不能轉出人資部」） | 否（「不能簽核自己提出的請假單」） | `colleagues`、`my_leave_balance`、`my_pending_tickets`、`department_directory`、`calendar_busy`、`calendar_events`、`policy_lookup` |
 | `attendance` | 2 | 打卡補登 | 人力資源部（`dept-hr-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「打卡補登由人力資源部處理，不能轉單」） | 否 | `department_directory`、`policy_lookup`、`calendar_busy`、`calendar_events` |
 | `vpn` | 2 | VPN 申請 | 資訊管理一部（`dept-it-1`，固定） | `FORM` | 否（`FORM_TICKET_LOCKED`「VPN 申請由資訊管理一部處理，不能轉單」） | 否 | `department_directory`、`policy_lookup`、`calendar_busy`、`calendar_events` |
 | `repair` | 2 | 報修 | 總務與硬體組（`dept-ga-1`，固定） | `FORM` | 是 | 否 | `department_directory`、`policy_lookup` |
@@ -60,11 +60,11 @@ backend/data/requestTypes/
 | `agent` | 代理人 | account；必填；候選來自 `colleagues`；同部門、不可為本人、啟用中、`start_at`～`end_at` 期間內不可也有待簽核或已核准的請假（不可選者 `reason`「此期間已有請假」，選了則為「這位同事在此期間也有請假，不能擔任代理人」） |
 | `note` | 備註 | text，最多 200 字；選填 |
 
-- 工作日曆 `calendar`：`timezone_offset` 為 `+08:00`、上班時段 09:00～12:00 與 13:00～18:00、週一到週五、`holidays` 只開放 2026 與 2027 年度（目前為空陣列，其他年度「{year} 年度尚未開放請假」）、單位 1 分鐘、最少 1 分鐘、最多 14 天（「請假期間最多 14 天」）、不可跨年度（「請假期間不可跨年度，請分開申請」）
+- 工作日曆 `calendar`：`timezone_offset` 為 `+08:00`、上班時段 09:00～12:00 與 13:00～18:00、週一到週五、`holidays` 只開放 2026 與 2027 年度（其他年度「{year} 年度尚未開放請假」）；目前只補了 2026 年 11～12 月與 2027 年 1～3 月落在工作日的國定假日與補假：2026-12-25、2027-01-01、2027-02-04、02-05、02-08、02-09、02-10、03-01（依人事行政總處辦公日曆表，2027 年無補班日），其他月份仍當工作日計算；系統沒有「週末補班」的設定，日後官方若安排補班日需先擴充工作日曆；管理員也可以在管理頁「假日資料」從外部來源同步某一年（存在資料庫，有同步資料的年度整年取代這裡的 `holidays`，也視為開放年度，見 API 規格書第 3.20 節）、單位 1 分鐘、最少 1 分鐘、最多 14 天（「請假期間最多 14 天」）、不可跨年度（「請假期間不可跨年度，請分開申請」）
 - 計算 `minutes`（請假時數，`work_minutes`，顯示為 `hours_minutes`）：期間與工作日（扣除 `holidays`）上班時段的重疊，依單位向上取整；為 0 時「請假期間沒有落在上班時段」；例：2026-12-01（週二）09:30～17:30 為 150 + 270 = 420 分鐘（7 小時 0 分鐘）
 - 額度帳：類別 `leave_type`、數量 `minutes`、期間為 `start_at` 的年度、額度表 `leave_entitlements`
 - 檢查：`ledger_balance`（draft、submit、approve；409 `LEAVE_BALANCE_INSUFFICIENT`「假別剩餘時數不足」；摘要「{leave_type}剩餘時數」）、`ledger_overlap`（draft、submit；409 `LEAVE_OVERLAP`「這段時間已有請假單」）
-- 版本相容：請假定義由版本 1 升為 2（欄位不變，規則併入同一檔）；已保存的單保留自己的 `form.version`，因此版本 1 的請假單仍可顯示、計入剩餘時數、阻擋期間重疊、讓同事在 `colleagues` 中顯示為不可擔任代理人，也可以簽核；以 `version: 1` 送出新單回 409 `FORM_VERSION_CHANGED`；2026-11-15 再升為 3（加上 `notice_workdays` 檢查與核准通知 `workflow.notify`，欄位不變），版本 2 的草稿送出時同樣回 409，已送出的單保留自己的版本；2026-11-16 再升為 4（拿掉 `notice_workdays` 檢查，事假、特休改成建議至少提早 1 個工作天提出、不擋送出，欄位不變），版本 3 的草稿送出時同樣回 409
+- 版本相容：請假定義由版本 1 升為 2（欄位不變，規則併入同一檔）；已保存的單保留自己的 `form.version`，因此版本 1 的請假單仍可顯示、計入剩餘時數、阻擋期間重疊、讓同事在 `colleagues` 中顯示為不可擔任代理人，也可以簽核；以 `version: 1` 送出新單回 409 `FORM_VERSION_CHANGED`；2026-11-15 再升為 3（加上 `notice_workdays` 檢查與核准通知 `workflow.notify`，欄位不變），版本 2 的草稿送出時同樣回 409，已送出的單保留自己的版本；2026-11-16 再升為 4（拿掉 `notice_workdays` 檢查，事假、特休改成建議至少提早 1 個工作天提出、不擋送出，欄位不變），版本 3 的草稿送出時同樣回 409；2026-11-19 再升為 5（`holidays` 補上上述假日，欄位不變），版本 4 的草稿送出時同樣回 409
 
 **設備申請 `equipment.json`（版本 2）**：比第 13 節的範例多開放 `policy_lookup`，並在 `ai.description` 寫明一張單只填一個品項；欄位為申請人（self，自動填入、一律非必填）、設備品項（text，最多 50 字）、數量（number，整數 1～50）、用途說明（text，最多 200 字）、需要日期（date，不可早於台北今天）、送交地點（text，最多 50 字），申請人以外全部必填
 
@@ -107,7 +107,7 @@ backend/data/requestTypes/
   └─ 第一回合「分類」：AI 讀 _catalog.json 的 types[].summary 與部門名錄
        → 選出 type_id、處理部門與信心分數，回覆招呼語
 使用者在對話中補充資料
-  └─ 之後各回合「填寫」：AI 讀這個類型的完整定義（說明、範例、欄位、規則、工作日曆摘要）
+  └─ 之後各回合「填寫」：AI 讀這個類型的完整定義（說明、範例、欄位、規則、工作日曆摘要；摘要含假日清單，提方案時避開假日）
        ├─ 工具階段：見第 9 節
        └─ 整理階段：輸出要填入的欄位（updates）、處理人建議、方案（proposals）、回覆與它下方讓使用者直接點的建議選項（suggestions）
 伺服器（每一回合，以及使用者手動修改欄位後）
@@ -148,7 +148,7 @@ backend/data/requestTypes/
 | `tools[].id` | 是 | 工具名稱（小寫英數與底線），AI 與定義檔的 `ai.tools`、`options_tool` 都用這個名稱 |
 | `tools[].description` | 是 | 給 AI 讀的用途說明 |
 | `tools[].label` | 否 | 1～20 字；畫面顯示用的名稱，例如方案卡片的「查過的資料」；沒有時顯示工具 id |
-| `tools[].capability` | 是 | 程式提供的能力名稱，只能是 `department_directory`、`department_members`、`colleagues`、`my_ledger_balance`、`request_type_definition`、`calendar_busy`、`calendar_events`、`policy_lookup` 八種（各能力的合約見第 9 節） |
+| `tools[].capability` | 是 | 程式提供的能力名稱，只能是 `department_directory`、`department_members`、`colleagues`、`my_ledger_balance`、`request_type_definition`、`calendar_busy`、`calendar_events`、`policy_lookup`、`department_queue` 九種（各能力的合約見第 9 節） |
 | `tools[].params` | 是 | `{ 參數名稱: { type, description, required } }`；`type` 為 string、integer、number 或 boolean，`required` 為布林值。參數名稱與型別必須恰好符合能力的合約（見第 9 節），否則啟動失敗 |
 | `tools[].access` | 是 | 存取規則，必須是該能力允許的規則（見第 9 節） |
 | `tools[].returns` | 是 | 給 AI 讀的回傳內容說明 |
@@ -258,7 +258,7 @@ backend/data/requestTypes/
 | `timezone_offset` | `±HH:mm`，例如 `+08:00`；也決定這個類型的「今天」 |
 | `work_windows` | 依時間排序、不重疊的上班時段，例如 `[["09:00","12:00"],["13:00","18:00"]]` |
 | `workdays` | 0～6 的不重複整數（0 為週日），例如 `[1,2,3,4,5]` |
-| `holidays` | 以四位數年度為鍵、值為該年度內的 `YYYY-MM-DD` 假日陣列；**只有列出的年度可以計算**，其他年度回「{year} 年度尚未開放」 |
+| `holidays` | 以四位數年度為鍵、值為該年度內的 `YYYY-MM-DD` 假日陣列；**只有列出的年度（或管理員同步過的年度）可以計算**，其他年度回「{year} 年度尚未開放」；管理員同步過的年度整年改用同步資料（API 規格書第 3.20 節），這裡的值只是沒同步時的預設 |
 | `unit_minutes` | 正整數，結果依此向上取整 |
 | `min_minutes` | 正整數，結果小於它時視為沒有落在上班時段 |
 | `max_days` | 正整數，期間最多幾天 |
@@ -351,6 +351,7 @@ backend/data/requestTypes/
 | `calendar_busy` | `calendar_busy` | `start_at`、`end_at`（必填，`YYYY-MM-DDTHH:mm`，終點晚於起點，最長 62 天） | `self_only` | 本人外部行事曆在期間內的忙碌時段 `{ range, busy: [{ start, end }] }`，只有開始與結束；期間是需求類型的時區；使用者沒連接時 AI 看不到這個工具（由 MCP 的 `tools/list` 決定），權限不足或查詢失敗時回 `{ error }`，AI 改用問的 | 請假、打卡補登、VPN 申請 |
 | `calendar_events` | `calendar_events` | 同上 | `self_only` | 本人行事曆在期間內的行程開始、結束與標題（最多 60 字）`{ range, events, truncated, note }`；只有使用者選了進階權限時 AI 才看得到；標題是使用者行事曆的原文，看不到的字元會先清掉，只當資料，不照裡面的指示做 | 請假、打卡補登、VPN 申請 |
 | `policy_lookup` | `policy_lookup` | `query`（必填，問題或關鍵字）、`type_id`（選填，省略為目前的需求類型） | `all` | 這個需求類型最相關的規章最多 3 筆 `{ entries: [{ id, doc_name, articles, section_title, content, enforcement, data_status }], note }`，AI 只引用跟使用者情況有關的條文並附上規章名稱與條次；查不到時 `entries` 是空陣列，使用者問到規定時 AI 要照實說沒有找到、不自行編造規則，沒問就不提；知識庫是 `backend/src/services/knowledge/knowledge-base.json`（全部是課堂模擬資料，`data_status` 為 `SIMULATED`），新增或修改規章照 `docs/企業規章與知識庫/README.md` 的欄位規則（`content` 最多 600 字、`summary` 最多 120 字）改這個檔，並同步 `docs/企業規章與知識庫/knowledge-base.example.json`，改完重啟後端（Docker 要重新建置映像）；規章的 `request_types` 決定哪些類型查得到 | 所有類型 |
+| `my_pending_tickets` | `department_queue` | 無 | `same_department` | 本人手上的待辦需求單：送達本人部門、待簽核、而且不是本人提出的單（就是「狀態追蹤」的「待辦表單」裡本人可以處理的）`{ department, total_pending, assigned_to_me, oldest_waiting_days, tickets: [{ subject, type, submitted_on, waiting_days, assigned_to_me }], truncated, note }`；依送出時間由舊到新，最多 20 張（總數照實計算），主旨截到 60 字；只給衡量工作量需要的欄位，不含需求內容、提單人、單號與簽核紀錄；部門固定為本人部門，模型帶的參數一律忽略；需求單沒有截止日，`note` 提醒 AI 這是目前整體的待辦量、跟日期無關，不要說成某一天有或沒有待辦、某一天比較忙（2026-11-19 實測時 AI 曾說「當天沒有待辦需求單」，因此工具說明、`note` 與請假的 AI 說明都寫明要說「你目前有 N 張待辦」）；同日另在請假的 AI 說明寫明：使用者給了期間（例如下下週）但沒指定哪一天時，不先問哪一天，直接提出 1 到 3 個落在期間內、日期不同的方案（實測時同一句「下下週想請一天，不要影響手上的工作」有時給方案、有時只問哪一天）；連期間都不清楚時才先問，主旨是別人寫的原文、只當資料 | 請假（2026-11-19 起；請假定義版本維持 5，只改 AI 可用的工具與說明，欄位與規則不變） |
 
 撰寫工具的注意事項：
 
