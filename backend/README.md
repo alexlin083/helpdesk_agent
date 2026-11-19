@@ -66,6 +66,10 @@ backend/
 │   │   │   ├── metaRecords.js       #   meta 表裡連接紀錄與管理設定的名稱與格式
 │   │   │   ├── calendarMcp.js       #   自寫唯讀行事曆 MCP 伺服器與後端內部的 MCP client（官方 SDK，記憶體連線）
 │   │   │   └── index.js             #   正式服務用的連接服務與行事曆工具
+│   │   ├── holidays/                # 假日資料同步（管理頁「假日資料」；資料存在既有的 meta 表 holiday_calendar，不升資料庫版本）：
+│   │   │   ├── holidaySync.js       #   從政府辦公日曆表的 JSON 版（ruyut/TaiwanCalendar，CC BY 4.0）檢查差異、套用、還原，並交給工作日曆計算
+│   │   │   ├── holidayRecord.js     #   meta 表 holiday_calendar 的名稱與格式
+│   │   │   └── index.js             #   正式服務用的同步服務
 │   │   ├── knowledge/               # 規章知識庫：
 │   │   │   ├── knowledge-base.json  #   規章資料（課堂模擬，和 docs/企業規章與知識庫 的範例相同）
 │   │   │   └── knowledgeBase.js     #   讀取、驗證與查詢（policy_lookup）
@@ -179,6 +183,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 - 需求類型定義驗證錯誤時記錄 `request_types.failed`（`reason: REQUEST_TYPES_INVALID`，`detail` 含檔名與鍵路徑，例如 `equipment.json fields[2].type 未知的欄位型別「slider」…`）並以結束碼 1 結束，成功記錄 `request_types.ready`（`types`、`defaultType`、`catalogVersion`）；修改定義後的重啟與重新建置規則見規範文件第 2 節
 - 通用引擎在 `src/services/requestTypes/`，不含任何類型的 id、欄位 key 或領域用語；`tests/requestTypes.test.js` 會掃描 `src/` 確認（資料庫結構、人員資料與人資假別 API 不在掃描範圍）。新增類型只需新增 JSON 檔並在目錄加一筆，不改程式（`tests/draftFlow.test.js` 以一個只存在測試中的 `overtime.json` 驗證）。需要新的欄位型別、計算或檢查能力時才改程式，並同步更新規範文件。
 - 分類評測：`npm run eval:classify` 以 `evals/classification-cases.json` 的題目量測第一回合分類（類型、部門、混淆、邊界題、多輪是否一致）；使用的 AI 供應商與備援、`--provider`、`--offline` 等選項，以及如何依結果修改摘要見規範文件第 15 節
+- 假日資料：管理頁「假日資料」可從外部來源同步某一年的國定假日與補假（先檢查差異再套用，套用後立即生效、已送出的單不受影響）；後端要能連到 `cdn.jsdelivr.net`；API 與資料格式見 [API 介面規格書](../docs/企業智慧服務台%20Agent%20前後端%20API%20介面規格書.md) 第 3.20 節
 - Google 行事曆連接：設定步驟見[Google 行事曆連接設定手冊](../docs/Google行事曆連接設定手冊.md)，這次期末專題的變更與組員要跑的建置驗證見[期末專題功能變更說明](../docs/期末專題功能變更說明.md)
 - 方案評測：`npm run eval:plan` 以 `evals/plan-cases.json` 比較 Gemini 與 Claude 的請假方案，用後端規則判定能不能送；每題用記憶體資料庫與替身行事曆，不讀寫正式資料庫；`--offline` 不呼叫 AI；結果檔（`--out`）請放在 repo 以外；用法與用量見規範文件第 15.1 節
 

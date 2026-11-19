@@ -39,13 +39,14 @@
       <a href="#admin-accounts">各帳號 AI 使用</a>
       <a href="#admin-protection">頻率與登入保護</a>
       <a href="#admin-connectors">Google 連接設定</a>
+      <a href="#admin-holidays">假日資料</a>
       <a href="#admin-reset" class="nav-danger">清除工作單</a>
     </nav>
 
     <main class="admin-main">
       <div class="admin-head">
         <h1>管理員控制台</h1>
-        <p class="admin-intro">管理員帳號只用來管理網站：看用量、設定 Google 連接、清除工作單；提出需求單、簽核與連接帳號，請改用一般帳號登入</p>
+        <p class="admin-intro">管理員帳號只用來管理網站：看用量、設定 Google 連接、同步假日、清除工作單；提出需求單、簽核與連接帳號，請改用一般帳號登入</p>
       </div>
 
       <section id="admin-monitoring" class="admin-card" aria-labelledby="monitor-title">
@@ -133,6 +134,33 @@
           <button id="google-settings-save" class="primary-button" type="submit">儲存 Google 連接設定</button>
         </form>
         <p id="google-settings-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="admin-holidays" class="admin-card" hidden aria-labelledby="holidays-title">
+        <div class="card-head">
+          <div>
+            <h2 id="holidays-title">假日資料</h2>
+            <p id="holidays-state" class="muted">讀取中…</p>
+          </div>
+        </div>
+        <p class="muted">需求單以工作日計算的時數、提前提出的工作日與助理的建議都會扣掉國定假日與補假。這裡可以從外部來源同步某一年的假日：先按「檢查更新」看差異，確認後再按「套用」；套用只影響之後的計算，已送出的單維持送出時的時數。有週末補班日的年度不能套用（系統目前不支援補班）。</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="各年度的假日資料">
+          <table><thead><tr><th scope="col">年度</th><th scope="col">來源</th><th scope="col">工作日的假日</th><th scope="col">套用者與時間</th><th scope="col">操作</th></tr></thead><tbody id="holidays-years"></tbody></table>
+        </div>
+        <form id="holidays-check-form" class="holidays-form">
+          <label for="holidays-year">要同步的年度（西元）</label>
+          <div class="holidays-row">
+            <input id="holidays-year" type="number" inputmode="numeric" min="2017" step="1" required>
+            <button id="holidays-check" class="secondary-button" type="submit">檢查更新</button>
+          </div>
+        </form>
+        <div id="holidays-preview" class="holidays-preview" hidden>
+          <p id="holidays-preview-summary"></p>
+          <ul id="holidays-preview-list"></ul>
+          <button id="holidays-apply" class="primary-button" type="button" disabled>套用</button>
+        </div>
+        <p id="holidays-status" role="status" aria-live="polite"></p>
+        <p class="muted card-foot">資料來源：<a id="holidays-source-link" href="https://github.com/ruyut/TaiwanCalendar" target="_blank" rel="noopener noreferrer">ruyut/TaiwanCalendar</a>（CC BY 4.0），整理自政府資料開放平臺「中華民國政府行政機關辦公日曆表」（行政院人事行政總處，政府資料開放授權條款第 1 版）</p>
       </section>
 
       <section id="admin-reset" class="admin-card danger-zone" hidden aria-labelledby="reset-title">

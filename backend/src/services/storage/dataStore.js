@@ -8,6 +8,7 @@ import { normalizePersonnelSeed, seedPersonnelIfEmpty, syncAccountDepartmentName
 import { departmentService } from '../departmentService.js';
 import { demoPersonnelSeed } from '../personnel/demoPersonnel.js';
 import { isConnectorKey } from '../connectors/metaRecords.js';
+import { HOLIDAY_RECORD } from '../holidays/holidayRecord.js';
 
 export const TICKET_STATUSES = Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']);
 
@@ -505,6 +506,32 @@ export function createSqliteDataStore({ file = env.databaseFile, seed = demoPers
       requireConnectorKey(name);
       const { statements: prepared } = connection();
       return guarded('persist', /** 刪除一筆 @returns {boolean} 有刪除時 true */ () => prepared.metaDelete.run(name).changes > 0);
+    },
+    /**
+     * 讀取管理員同步的假日紀錄（meta 表固定名稱 holiday_calendar）；值的格式由 holidays/holidayRecord.js 驗證
+     * @returns {string|null} 原始 JSON 字串，沒有時 null
+     * @throws {HttpError} 503 TICKET_STORE_UNAVAILABLE：資料庫無法讀取
+     */
+    readHolidayRecord() {
+      const { statements: prepared } = connection();
+      return guarded('load', /** 讀取紀錄 @returns {string|null} 值 */ () => prepared.metaGet.get(HOLIDAY_RECORD)?.value ?? null);
+    },
+    /**
+     * 在同一筆交易內讀出、修改並寫回假日紀錄（沒有紀錄時 change 收到 null）；change 回傳非字串時不寫入。
+     * @param {(raw: string|null) => string|null} change 收到原始值、回傳新值的同步函式（可拋出錯誤取消寫入）
+     * @returns {boolean} 有寫入時 true
+     * @throws {HttpError} 503 TICKET_STORE_UNAVAILABLE：資料庫無法寫入；change 拋出的錯誤原樣拋出（交易回滾）
+     */
+    updateHolidayRecord(change) {
+      const { db: database, statements: prepared } = connection();
+      /** 讀出後修改再寫回 @returns {boolean} 有寫入時 true */
+      function update() {
+        const next = change(prepared.metaGet.get(HOLIDAY_RECORD)?.value ?? null);
+        if (typeof next !== 'string') return false;
+        prepared.metaPut.run(HOLIDAY_RECORD, next);
+        return true;
+      }
+      return guarded('persist', database.transaction(update).immediate);
     },
     /**
      * 取得本機登入簽章金鑰：讀取 meta 表的 local_auth_secret，沒有時產生 32 bytes 隨機值保存後回傳。

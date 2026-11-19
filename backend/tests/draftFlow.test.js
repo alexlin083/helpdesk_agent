@@ -284,7 +284,8 @@ async function draftWithoutAI() {
     assert.deepEqual(Object.keys(body.type), ['id', 'version', 'name', 'department', 'fields', 'calendars']);
     assert.deepEqual(body.type.fields[3], { key: 'end_at', label: '請假截止時間', type: 'datetime', required: true, rules: { after: 'start_at' } }, '日期類欄位帶規則供選擇器使用');
     assert.deepEqual(body.type.calendars, [{ start: 'start_at', end: 'end_at', timezone_offset: '+08:00', work_windows: [['09:00', '12:00'], ['13:00', '18:00']],
-      workdays: [1, 2, 3, 4, 5], holidays: [], open_years: [2026, 2027] }], '工作日曆摘要只含選擇器需要的資料');
+      workdays: [1, 2, 3, 4, 5], holidays: ['2026-12-25', '2027-01-01', '2027-02-04', '2027-02-05', '2027-02-08', '2027-02-09', '2027-02-10', '2027-03-01'],
+      open_years: [2026, 2027] }], '工作日曆摘要只含選擇器需要的資料');
     assert.equal(body.type.id, 'leave');
     assert.equal(body.type.version, LEAVE_VERSION);
     assert.deepEqual(body.department, { id: 'dept-hr-1', name: '人力資源部' });

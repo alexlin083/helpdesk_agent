@@ -101,7 +101,7 @@ function realDefinitions() {
   assert.deepEqual(types.ids(), ['leave', 'attendance', 'vpn', 'repair', 'equipment', 'purchase', 'general']);
   assert.equal(types.defaultType().id, 'general');
   const leave = types.find('leave');
-  assert.equal(leave.version, 4, '4：提早提出改成建議，拿掉 notice_workdays');
+  assert.equal(leave.version, 5, '5：補上 2026 年 11～12 月與 2027 年 1～3 月的國定假日與補假');
   assert.equal(leave.departmentId, 'dept-hr-1');
   assert.deepEqual(leave.ai.tools, ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
   const toolsOf = /** 取類型開放的工具 @param {string} id 類型 @returns {string[]} 工具 id */ (id) => types.find(id).ai.tools;
@@ -213,6 +213,29 @@ function workMinutes() {
   assert.deepEqual(result.computed, [{ key: 'minutes', label: '請假時數', value: 420, text: '7 小時 0 分鐘' }], '實際定義的計算結果');
 }
 test('work_minutes 依定義的工作日曆計算', workMinutes);
+
+/**
+ * 驗證請假定義實際的假日資料：2026 年 11～12 月與 2027 年 1～3 月的國定假日與補假（依人事行政總處辦公日曆表，2027 年無補班日）
+ * 不計入請假時數，假日當天單獨請假會被拒絕，並且交給 AI 的日曆摘要列出這些假日。
+ * @returns {void}
+ */
+function leaveHolidays() {
+  const leave = types.find('leave');
+  const { calendar } = leave.computations[0].resolved;
+  const { messages } = leave.computations[0];
+  const expected = ['2026-12-25', '2027-01-01', '2027-02-04', '2027-02-05', '2027-02-08', '2027-02-09', '2027-02-10', '2027-03-01'];
+  for (const date of expected) {
+    const result = computeWorkMinutes(`${date}T09:00`, `${date}T18:00`, calendar, messages);
+    assert.equal(result.ok, false, `${date} 是假日`);
+    assert.match(result.message, /^請假期間沒有落在上班時段$/u);
+  }
+  assert.equal(computeWorkMinutes('2026-12-24T09:00', '2026-12-28T18:00', calendar).minutes, 960, '行憲紀念日（週五）不計：12/24 與 12/28');
+  assert.equal(computeWorkMinutes('2027-02-01T09:00', '2027-02-12T18:00', calendar).minutes, 2400, '春節 2/4～2/10 不計：2/1～2/3 與 2/11～2/12 共 5 天');
+  assert.equal(computeWorkMinutes('2027-02-26T09:00', '2027-03-02T18:00', calendar).minutes, 960, '和平紀念日補假 3/1 不計：2/26 與 3/2');
+  assert.equal(computeWorkMinutes('2026-11-02T09:00', '2026-11-06T18:00', calendar).minutes, 2400, '2026 年 11 月沒有國定假日');
+  assert.deepEqual(leave.references.calendar.holidays, expected, 'AI 的日曆摘要列出假日');
+}
+test('請假定義的假日資料不計入請假時數', leaveHolidays);
 
 /**
  * 驗證欄位型別的整理與檢查：datetime／date 正規化、number 範圍與整數、not_before_today、after、enum、text 與帳號篩選。
