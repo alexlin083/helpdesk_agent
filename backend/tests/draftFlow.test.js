@@ -297,7 +297,7 @@ async function draftWithoutAI() {
     assert.deepEqual(body.field_options, { agent: [{ id: 'two.it', name: 'two.it', available: true }, { id: 'three.it', name: 'three.it', available: true }] });
     assert.deepEqual(body.computed, []);
     assert.deepEqual(body.summaries, []);
-    assert.equal(body.reply, `one.it 你好，這邊已經收到你想要請假的需求，根據您的需求您的業務將會由人資部進行處理；你可以直接告訴我想達成的目標，例如「下週想請一天，不要影響手上的工作」，我會查你的假別額度、同事的請假狀況，以及你已連接的行事曆與公司規章，整理 1 到 3 個方案給你挑，你選了才會填進右側；也可以直接告訴我你想請假的日期、時間、假別、代理人，我將會自動為您生成需求單給您送出；事假與特休建議至少提早 1 個工作天提出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式或者代理人可以選擇誰等等\n${AI_NOTICES.AI_UNAVAILABLE}`);
+    assert.equal(body.reply, `one.it 你好，這邊已經收到你想要請假的需求，根據您的需求您的業務將會由人資部進行處理；你可以直接告訴我想達成的目標，例如「下週想請一天，不要影響手上的工作」，我會查你的假別額度、同事的請假狀況、你手上的待辦需求單，以及你已連接的行事曆與公司規章，整理 1 到 3 個方案給你挑，你選了才會填進右側；也可以直接告訴我你想請假的日期、時間、假別、代理人，我將會自動為您生成需求單給您送出；事假與特休建議至少提早 1 個工作天提出；如果填寫過程中有遇到任何問題，可以隨時與我溝通，例如不清楚填寫格式或者代理人可以選擇誰等等\n${AI_NOTICES.AI_UNAVAILABLE}`);
     assert.equal(body.prompt, '這份需求單將送到「人力資源部」；還需要提供：假別、請假起始時間、請假截止時間、代理人');
     assertNoFullStop(body);
     assert.equal(body.ai_available, false);
@@ -431,7 +431,7 @@ async function draftWithAI() {
     assert.equal(fillCall.request.context.message, 'secret-message-abc 12/1 09:30 到 17:30，代理人 two.it');
     assert.deepEqual(fillCall.request.context.state.locked, ['leave_type']);
     assert.deepEqual(fillCall.request.context.history, [{ role: 'assistant', text: 'AI 的招呼語' }]);
-    assert.deepEqual(fillCall.request.tools.map(/** 取工具 id。@param {{id: string}} tool 工具。@returns {string} id。 */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup']);
+    assert.deepEqual(fillCall.request.tools.map(/** 取工具 id。@param {{id: string}} tool 工具。@returns {string} id。 */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'policy_lookup']);
     assert.ok(fillCall.request.lists.keys.includes('agent') && fillCall.request.lists.keys.includes('item') && !fillCall.request.lists.keys.includes('applicant'));
     setAI({ fill: filled({ typeId: 'equipment', departmentId: 'dept-ga-1', updates: [{ key: 'item', value: '筆電' }, { key: 'quantity', value: '1' }], reply: '改為設備申請' }) });
     const switched = (await call('POST', '/tickets/draft', 'one.it', { subject: '筆電', message: '其實我是要申請一台筆電', state: { type_id: 'general', fields: {} } })).body;

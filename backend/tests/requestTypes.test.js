@@ -103,7 +103,7 @@ function realDefinitions() {
   const leave = types.find('leave');
   assert.equal(leave.version, 5, '5：補上 2026 年 11～12 月與 2027 年 1～3 月的國定假日與補假');
   assert.equal(leave.departmentId, 'dept-hr-1');
-  assert.deepEqual(leave.ai.tools, ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
+  assert.deepEqual(leave.ai.tools, ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
   const toolsOf = /** 取類型開放的工具 @param {string} id 類型 @returns {string[]} 工具 id */ (id) => types.find(id).ai.tools;
   for (const id of ['attendance', 'vpn']) assert.deepEqual(toolsOf(id), ['department_directory', 'policy_lookup', 'calendar_busy', 'calendar_events'], `${id} 可以查規章與已連接的行事曆`);
   for (const id of ['repair', 'equipment', 'purchase', 'general']) assert.deepEqual(toolsOf(id), ['department_directory', 'policy_lookup'], `${id} 可以查規章`);

@@ -302,7 +302,7 @@ test('引擎整合：方案經驗證、不寫進欄位，AI 同時寫進 updates
   const body = await engine.run(userOf('emily.wu'), request);
   const [sent] = requests;
   assert.equal(sent.maxToolCalls, 5, '請假定義檔的 ai.max_tool_calls');
-  assert.deepEqual(sent.tools.map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
+  assert.deepEqual(sent.tools.map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'calendar_busy', 'calendar_events', 'policy_lookup']);
   assert.deepEqual(ranges, [{ username: 'emily.wu', tool: 'calendar_busy', range: { start: '2026-11-03T09:00:00+08:00', end: '2026-11-03T18:00:00+08:00' } }], '期間照類型時區轉成 RFC 3339；同樣的查詢第二次由快取回，不再查 Google');
   assert.deepEqual(body.connections, [{ id: 'google_calendar', name: 'Google 行事曆', status: 'ACTIVE', tools: ['calendar_busy', 'calendar_events'] }]);
   assert.deepEqual(body.tools_used, ['calendar_busy', 'calendar_busy', 'policy_lookup']);
@@ -315,7 +315,7 @@ test('引擎整合：方案經驗證、不寫進欄位，AI 同時寫進 updates
   assert.ok(body.proposals[1].problems.some(/** 缺起點 @param {{key: string}} problem 問題 @returns {boolean} 是時 true */ (problem) => problem.key === 'start_at'), '缺少的欄位列在 problems');
 
   const other = await engine.run(userOf('frank.liu'), request);
-  assert.deepEqual(requests[1].tools.map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'department_directory', 'policy_lookup'], '沒連接的人 AI 看不到行事曆工具');
+  assert.deepEqual(requests[1].tools.map(/** 取 id @param {{id: string}} tool 工具 @returns {string} id */ (tool) => tool.id), ['colleagues', 'my_leave_balance', 'my_pending_tickets', 'department_directory', 'policy_lookup'], '沒連接的人 AI 看不到行事曆工具');
   assert.deepEqual(other.connections, [{ id: 'google_calendar', name: 'Google 行事曆', status: 'NEEDS_RECONNECT', tools: [] }], '分得出需要重新連接');
   assert.deepEqual(other.tools_used, ['calendar_busy', 'calendar_busy', 'policy_lookup']);
   assert.deepEqual(other.proposals[0].basis, [], 'calendar_busy 回錯誤（沒連接），不能當依據');
