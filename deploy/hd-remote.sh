@@ -121,8 +121,8 @@ cmd_load() {
   local tag="$1" backend_id="$2" web_id="$3" archive
   valid_tag "$tag"
   archive=".hd/releases/$tag/images.tar.gz"
-  [ -f "$archive" ] || die "找不到 $archive，上傳可能沒有完成"
-  step "載入 image（$tag）"
+  [ -f "$archive" ] || die "找不到 ${archive}，上傳可能沒有完成"
+  step "載入 image（${tag}）"
   gunzip -c "$archive" | sudo docker load
   [ "$(image_id "$BACKEND:$tag")" = "$backend_id" ] || die "主機上 $BACKEND:$tag 的 ID 和本機建置的不同"
   [ "$(image_id "$WEB:$tag")" = "$web_id" ] || die "主機上 $WEB:$tag 的 ID 和本機建置的不同"
@@ -134,7 +134,7 @@ cmd_load() {
 check_env_keys() {
   local example="$1" missing
   [ -f .env ] || die '部署目錄沒有 .env'
-  [ -f "$example" ] || { warn "找不到 $example，略過 .env 檢查"; return 0; }
+  [ -f "$example" ] || { warn "找不到 ${example}，略過 .env 檢查"; return 0; }
   missing="$(grep -oE '^[A-Z][A-Z0-9_]*=' "$example" | tr -d '=' | sort -u | while read -r key; do
     grep -qE "^${key}=" .env || echo "$key"; done)"
   if [ -n "$missing" ]; then
@@ -150,7 +150,7 @@ check_env_keys() {
 COMPOSE_BACKUP=''
 sync_compose() {
   local incoming="$1" tag="$2"
-  [ -f "$incoming" ] || { warn "找不到 $incoming，沿用目前的 compose.yaml"; return 0; }
+  [ -f "$incoming" ] || { warn "找不到 ${incoming}，沿用目前的 compose.yaml"; return 0; }
   if cmp -s "$incoming" compose.yaml; then info 'compose.yaml 沒有變更'; return 0; fi
   warn '這個版本的 compose.yaml 與主機上的不同：'
   diff -u compose.yaml "$incoming" >&2 || true
@@ -166,7 +166,7 @@ on_failure() {
   warn '新版本沒有正常啟動，最近的後端日誌：'
   sudo docker compose logs --tail=30 backend >&2 || true
   if [ -n "$(image_id "$BACKEND:prod-rb")" ] && confirm '要立即回滾到上一版（prod-rb）嗎？' Y; then
-    if [ -n "$COMPOSE_BACKUP" ]; then cp "$COMPOSE_BACKUP" compose.yaml; info "已還原舊的 compose.yaml（$COMPOSE_BACKUP）"; fi
+    if [ -n "$COMPOSE_BACKUP" ]; then cp "$COMPOSE_BACKUP" compose.yaml; info "已還原舊的 compose.yaml（${COMPOSE_BACKUP}）"; fi
     retag_pair prod-rb latest
     compose_up && info "已回滾到 $(image_version "$BACKEND:latest")" || warn '回滾後仍無法啟動，請登入主機排查'
   fi
@@ -181,7 +181,7 @@ cmd_deploy() {
   [ -n "$target_backend" ] && [ -n "$target_web" ] || die "主機上沒有 $tag 的 image，請先執行 ./deploy/hd push $tag"
   current_backend="$(running_id helpdesk-backend-1)"; current_web="$(running_id helpdesk-web-1)"
   if [ "$current_backend" = "$target_backend" ] && [ "$current_web" = "$target_web" ] && [ "$force" != 1 ]; then
-    info "目前執行中的已經是 $tag，不需要部署（要強制重建請加 --force）"; exit 10
+    info "目前執行中的已經是 ${tag}，不需要部署（要強制重建請加 --force）"; exit 10
   fi
   previous="$(image_version "$BACKEND:latest")"
 
@@ -189,9 +189,9 @@ cmd_deploy() {
   check_env_keys ".hd/releases/$tag/.env.example"
   sync_compose ".hd/releases/$tag/compose.yaml" "$tag"
 
-  step "部署 $tag（目前版本：$previous）"
-  confirm "確定要把正式站換成 $tag？網站會中斷約十幾秒" Y || die '已取消部署'
-  if [ -n "$(image_id "$BACKEND:latest")" ]; then retag_pair latest prod-rb; info "目前版本已保留為 prod-rb（$previous），可用 ./deploy/hd rollback 換回"; fi
+  step "部署 ${tag}（目前版本：${previous}）"
+  confirm "確定要把正式站換成 ${tag}？網站會中斷約十幾秒" Y || die '已取消部署'
+  if [ -n "$(image_id "$BACKEND:latest")" ]; then retag_pair latest prod-rb; info "目前版本已保留為 prod-rb（${previous}），可用 ./deploy/hd rollback 換回"; fi
   retag_pair "$tag" latest
   since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   compose_up || on_failure

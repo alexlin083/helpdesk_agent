@@ -63,7 +63,7 @@ load_config() {
   [[ "$HD_REMOTE_DIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "HD_REMOTE_DIR 格式不正確：$HD_REMOTE_DIR"
   [[ "$HD_KEEP_VERSIONS" =~ ^[1-9][0-9]*$ ]] || die "HD_KEEP_VERSIONS 必須是正整數"
   local mode; mode="$(stat -f '%Lp' "$HD_SSH_KEY" 2>/dev/null || stat -c '%a' "$HD_SSH_KEY")"
-  [ "$mode" = 600 ] || [ "$mode" = 400 ] || die "SSH 私鑰權限是 $mode，請先執行：chmod 600 \"$HD_SSH_KEY\""
+  [ "$mode" = 600 ] || [ "$mode" = 400 ] || die "SSH 私鑰權限是 ${mode}，請先執行：chmod 600 \"$HD_SSH_KEY\""
   SSH_OPTS=(-i "$HD_SSH_KEY" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
   TARGET="$HD_USER@$HD_HOST"
 }
@@ -119,7 +119,7 @@ ensure_node22() {
     nvm use 22 >/dev/null 2>&1 || true
     major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo none)"
   fi
-  [ "$major" = 22 ] || die "測試需要 Node.js 22（目前：$major）。請先執行 nvm use 22，或加上 --skip-tests 略過測試（不建議）"
+  [ "$major" = 22 ] || die "測試需要 Node.js 22（目前：${major}）。請先執行 nvm use 22，或加上 --skip-tests 略過測試（不建議）"
   info "Node.js $(node -v)"
 }
 
@@ -129,11 +129,11 @@ run_tests() {
   log="$(mktemp -t hd-test)"
   [ -d "$ROOT/$dir/node_modules" ] || [ ! -f "$ROOT/$dir/package-lock.json" ] || (cd "$ROOT/$dir" && npm ci --silent)
   if (cd "$ROOT/$dir" && npm test >"$log" 2>&1); then
-    info "$name：$(grep -E '^# pass' "$log" | tail -1 | sed 's/# //')／$(grep -E '^# tests' "$log" | tail -1 | sed 's/# //') ✅"
+    info "${name}：$(grep -E '^# pass' "$log" | tail -1 | sed 's/# //')／$(grep -E '^# tests' "$log" | tail -1 | sed 's/# //') ✅"
   else
     warn "$name 測試失敗，重跑一次確認是否為偶發失敗：$(grep -E '^not ok' "$log" | head -3 | tr '\n' ' ')"
     if (cd "$ROOT/$dir" && npm test >"$log" 2>&1); then
-      info "$name：重跑通過 ✅（第一次的失敗為偶發）"
+      info "${name}：重跑通過 ✅（第一次的失敗為偶發）"
     else
       grep -E '^not ok' "$log" | head -10 >&2
       die "$name 測試失敗，完整輸出：$log"
@@ -194,7 +194,7 @@ cmd_build() {
   [ "$branch" != HEAD ] || die '目前不在任何分支上（detached HEAD），請先切換到要部署的分支'
   info "分支：$branch"
   git fetch -q origin --tags || die '無法連線到 GitHub（git fetch 失敗）'
-  git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null || die "GitHub 上沒有 origin/$branch，請先 git push -u origin $branch"
+  git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null || die "GitHub 上沒有 origin/${branch}，請先 git push -u origin $branch"
   [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ] || die "本機 $branch 與 origin/$branch 不同步，請先 git pull 或 git push"
   commit="$(git rev-parse HEAD)"
   info "commit：${commit:0:7} $(git log -1 --format=%s)"
@@ -204,7 +204,7 @@ cmd_build() {
   slug="$(branch_slug "$branch")"
   resolve_tag "$slug"
   tag="$TAG"
-  if [ "$REUSED_TAG" = 1 ]; then info "這個 commit 已經有版本 $tag，將重新建置同一個版本"
+  if [ "$REUSED_TAG" = 1 ]; then info "這個 commit 已經有版本 ${tag}，將重新建置同一個版本"
   else info "新版本：$tag"; fi
   confirm "以 $tag 建置前後端 image？" Y || die '已取消'
 
@@ -229,7 +229,7 @@ cmd_build() {
 
   if [ "$REUSED_TAG" = 0 ]; then
     step '建立並推送 git tag'
-    git tag -a "$tag" -m "helpdesk_agent 部署版本 $tag（${commit:0:7}）"
+    git tag -a "$tag" -m "helpdesk_agent 部署版本 ${tag}（${commit:0:7}）"
     git push -q origin "$tag" || die "git tag $tag 已建立，但推送到 GitHub 失敗；請稍後執行 git push origin $tag"
     info "已推送 git tag $tag"
   fi
@@ -248,7 +248,7 @@ cmd_push() {
   step "確認本機的 $tag image"
   local name backend_id web_id
   for name in "$BACKEND" "$WEB"; do
-    [ -n "$(image_id "$name:$tag")" ] || die "本機沒有 $name:$tag，請先執行 $ME build"
+    [ -n "$(image_id "$name:$tag")" ] || die "本機沒有 $name:${tag}，請先執行 $ME build"
     [ "$(docker image inspect "$name:$tag" --format '{{.Architecture}}')" = amd64 ] || die "$name:$tag 不是 amd64 架構"
     [ "$(image_label "$name:$tag" GIT_TAG)" = "$tag" ] || die "$name:$tag 不是用 $ME build 建置的（缺少版本標籤）"
   done
@@ -346,7 +346,7 @@ main() {
       -y|--yes) ASSUME_YES=1 ;;
       --skip-tests) SKIP_TESTS=1 ;;
       --force) FORCE=1 ;;
-      -*) die "不認得的選項：$arg（執行 $ME help 查看用法）" ;;
+      -*) die "不認得的選項：${arg}（執行 $ME help 查看用法）" ;;
       *) args+=("$arg") ;;
     esac
   done
