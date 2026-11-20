@@ -3,14 +3,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeDocument, createFakeWindow, fakeAuth, pageIds } from './helpers/fakeDom.js';
 import { initAdminMonitoring } from '../src/components/admin/adminMonitoring.js';
-import { renderAdminMetrics, metricsBytes } from '../src/components/admin/adminMetrics.js';
+import { renderAdminMetrics, metricsBytes, formatAppVersion } from '../src/components/admin/adminMetrics.js';
 import { loadAdminMetrics, AdminServiceError, isValidMetrics } from '../src/services/adminService.js';
 
 /** 建立包含動態數值、來源保護摘要與帳號的假快照。@returns {object} 與 API 契約一致的測試資料。 */
 function fixture() {
   return {
     observedAt: '2026-10-28T00:00:00Z', pollSeconds: 5,
-    runtime: { startedAt: '2026-10-27T23:00:00Z', uptimeSeconds: 3600, environment: 'production', storage: 'memory', maintaining: false, stopping: false, pending: 1 },
+    runtime: { startedAt: '2026-10-27T23:00:00Z', uptimeSeconds: 3600, environment: 'production', storage: 'memory', maintaining: false, stopping: false, pending: 1,
+      version: { tag: 'main-2026.11.20.1', commit: '5379ed0a1b2c3d4e5f60718293a4b5c6d7e8f901', branch: 'main' } },
     ticketStore: { engine: 'sqlite', available: true, schemaVersion: 1, total: 12, pending: 3, approved: 6, rejected: 2, cancelled: 1, fileBytes: 49152, walBytes: 0 },
     ai: { day: '2026-10-28', resetAt: '2026-10-28T16:00:00Z', used: 4, remaining: 76, dailyLimit: 80, userDailyLimit: 20, active: 1, concurrencyLimit: 2, userConcurrencyLimit: 1, cooldownSeconds: 15 },
     draft: { used: 37, remaining: 263, dailyLimit: 300, userDailyLimit: 60, active: 1 },
@@ -27,7 +28,7 @@ function setup() {
   const doc = createFakeDocument();
   const win = createFakeWindow();
   const nodes = {};
-  const ids = ['admin-monitoring', 'metrics-status', 'metrics-refresh', 'metrics-toggle', 'metrics-cards', 'metrics-updated', 'metrics-runtime', 'metrics-policy', 'metrics-monitor-policy', 'metrics-quota-progress', 'metrics-users', 'metrics-http', 'metrics-login', 'metrics-login-capacity', 'metrics-ticket-store', 'metrics-tickets'];
+  const ids = ['admin-monitoring', 'app-version', 'metrics-status', 'metrics-refresh', 'metrics-toggle', 'metrics-cards', 'metrics-updated', 'metrics-runtime', 'metrics-policy', 'metrics-monitor-policy', 'metrics-quota-progress', 'metrics-users', 'metrics-http', 'metrics-login', 'metrics-login-capacity', 'metrics-ticket-store', 'metrics-tickets'];
   for (const id of ids) {
     const node = doc.createElement(id === 'metrics-quota-progress' ? 'progress' : 'div');
     node.setAttribute('id', id);
@@ -66,6 +67,7 @@ function rendering() {
   assert.equal(nodes['metrics-quota-progress'].max, 300, '進度條顯示自動生成額度');
   assert.equal(nodes['metrics-quota-progress'].value, 37);
   assert.match(nodes['metrics-users'].textContent, /<script>fake<\/script>/);
+  assert.match(nodes['app-version'].textContent, /^版本：main-2026\.11\.20\.1 · commit 5379ed0/, '頂端顯示部署版本與 commit 前 7 碼');
   /** 取出帳號列的儲存格文字。@param {HTMLElement} cell 儲存格。@returns {string} 文字。 */
   function userCell(cell) { return cell.textContent; }
   assert.deepEqual(nodes['metrics-users'].children[0].children.map(userCell), ['<script>fake</script>', '測試部門', '12 / 60', '48', '4 / 20', '自動生成中', '8 秒']);
@@ -247,3 +249,25 @@ async function serviceContract() {
   } finally { globalThis.fetch = original; }
 }
 test('監測 service 授權、快取、格式驗證與限流資訊', serviceContract);
+
+/**
+ * 驗證版本文字：後端版本與 commit 前 7 碼；本機開發顯示未標記；前後端版本不同時提示；
+ * 舊版後端沒有 runtime.version 仍可通過格式檢查，欄位型別錯誤則視為格式異常。
+ * @returns {void}
+ */
+function versionDisplay() {
+  const commit = '5379ed0a1b2c3d4e5f60718293a4b5c6d7e8f901';
+  const same = { tag: 'main-2026.11.20.1' };
+  assert.equal(formatAppVersion({ tag: 'main-2026.11.20.1', commit, branch: 'main' }, same), '版本：main-2026.11.20.1 · commit 5379ed0');
+  assert.equal(formatAppVersion({ tag: null, commit: null, branch: null }, { tag: null }), '版本：未標記（本機開發）');
+  assert.equal(formatAppVersion(undefined, { tag: null }), '版本：未標記（本機開發）', '舊版後端沒有 runtime.version');
+  assert.match(formatAppVersion({ tag: 'main-2026.11.20.2', commit, branch: 'main' }, same), /前端版本 main-2026\.11\.20\.1 與後端不同/);
+  assert.match(formatAppVersion({ tag: 'main-2026.11.20.1', commit, branch: 'main' }, { tag: null }), /前端版本 未標記 與後端不同/);
+  const legacy = fixture();
+  delete legacy.runtime.version;
+  assert.equal(isValidMetrics(legacy), true, '舊版後端沒有 runtime.version 仍有效');
+  const broken = fixture();
+  broken.runtime.version = { tag: 1, commit: null, branch: null };
+  assert.equal(isValidMetrics(broken), false);
+}
+test('管理頁顯示部署版本與 commit', versionDisplay);

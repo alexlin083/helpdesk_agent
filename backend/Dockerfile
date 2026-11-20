@@ -23,6 +23,14 @@ COPY docker-healthcheck.js ./
 # 建置時確認原生 SQLite 驅動可在此映像載入，避免部署後才在第一次存取時失敗。
 RUN node -e "const D=require('better-sqlite3');new D(':memory:').close()"
 
+# 部署版本資訊：由 deploy/hd build 傳入（--build-arg GIT_TAG／GIT_COMMIT／GIT_BRANCH），寫成執行期環境參數，
+# 供啟動日誌 server.started 與管理頁顯示；放在最後，版本不同時不會讓前面的 npm 安裝快取失效。沒有傳入時為空字串，程式視為未標記版本。
+ARG GIT_TAG=""
+ARG GIT_COMMIT=""
+ARG GIT_BRANCH=""
+LABEL GIT_TAG="${GIT_TAG}" GIT_COMMIT="${GIT_COMMIT}" GIT_BRANCH="${GIT_BRANCH}"
+ENV HELPDESK_VERSION="${GIT_TAG}" HELPDESK_COMMIT="${GIT_COMMIT}" HELPDESK_BRANCH="${GIT_BRANCH}"
+
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

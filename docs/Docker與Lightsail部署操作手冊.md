@@ -690,6 +690,14 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 
 狀態：本機 `npm test` 通過（新增後端自動生成用量、跨午夜與租約到期的檢查，前端卡片、帳號表與格式檢查）；尚未以管理員帳號在瀏覽器實際查看，也尚未在 Lightsail 執行。
 
+### 5.15 改用 deploy/hd 一鍵部署（2026-11-20）
+
+日常更新改用 `./deploy/hd build`、`./deploy/hd push <版本>`、`./deploy/hd deploy <版本>` 三個指令，取代第 5.2 節的手動建置、匯出、scp、load 與 up；版本號格式為 `<分支>-<yyyy>.<mm>.<dd>.<當天第幾次 build>`（例如 `main-2026.11.20.1`），同時是 git tag 與兩個 image 的 tag；上線前的版本保留為 `prod-rb`，以 `./deploy/hd rollback` 換回；推送與部署前會自動檢查 SSH 防火牆（換網路後 IP 改變的處理方式也在手冊內）；設定、各步驟細節與常見問題見[一鍵部署操作手冊](一鍵部署操作手冊.md)。
+
+這一版的 image 會寫入版本資訊（後端環境參數 `HELPDESK_VERSION`、`HELPDESK_COMMIT`、`HELPDESK_BRANCH`，前端 `src/version.js`），管理頁標題下方顯示版本號與 commit，`server.started` 日誌也包含 `version`、`commit`；API 只在 `GET /api/admin/metrics` 的 `runtime` 新增選填的 `version`，`.env`、Compose 與資料庫結構都不變。第一次改用時，主機上原本沒有版本標籤的 image 會成為 `prod-rb`（顯示「未標記」），一樣可以回滾；以前手動加的 `pre-*` 標籤與 `helpdesk-images*.tar` 不會被自動清理。
+
+狀態：本機以模擬的 docker／ssh 環境跑過 build、push（含 SSH 連不上的防火牆提示）、deploy（含 `.env` 缺少設定、compose.yaml 變更、啟動失敗自動回滾並還原 compose.yaml、已是該版本時不重建）、rollback（prod-rb 來回切換與指定版本）、status 與舊版本清理；前後端測試通過；尚未以真實的 Docker 建置與 Lightsail 主機實際執行。
+
 ## 6. 工作單清除、備份與還原
 
 ### 6.1 清除方式

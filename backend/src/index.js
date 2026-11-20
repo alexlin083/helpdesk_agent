@@ -7,6 +7,7 @@ import { holidaySync } from './services/holidays/index.js';
 import { installShutdown, listenServer } from './utils/shutdown.js';
 import { app } from './server.js';
 import { env } from './config/env.js';
+import { buildInfo } from './config/buildInfo.js';
 import { logger, diagnoseError } from './utils/logger.js';
 
 // 舊版 tickets.json 匯入結果需要提醒操作者的情況；這些狀態不會讓服務啟動失敗。
@@ -67,11 +68,12 @@ logger('info', 'holidays.ready', { syncedYears: holidaySync.load() });
 const server = listenServer(app, env.port, { onListening, onError: onServerError });
 
 /**
- * 監聽成功（'listening' 事件）後記錄可公開的啟動設定（含主要與備援 AI 供應商、模型、自動生成的 HTTP 與每日額度）；主要供應商的金鑰只顯示是否設定，不測試外部連線。監聽失敗時不會被呼叫。
+ * 監聽成功（'listening' 事件）後記錄可公開的啟動設定（含部署版本 version、commit、branch，主要與備援 AI 供應商、模型、自動生成的 HTTP 與每日額度）；
+ * deploy/hd deploy 以 server.started 的 version 確認新版本已啟動；本機開發沒有版本資訊時三者為 null。主要供應商的金鑰只顯示是否設定，不測試外部連線。監聽失敗時不會被呼叫。
  * @returns {void}
  */
 function onListening() {
-  logger('info', 'server.started', { port: env.port, nodeEnv: env.nodeEnv, nodeVersion: process.version,
+  logger('info', 'server.started', { version: buildInfo.tag, commit: buildInfo.commit, branch: buildInfo.branch, port: env.port, nodeEnv: env.nodeEnv, nodeVersion: process.version,
     corsOrigin: env.corsOrigin, aiProvider: env.aiProvider, model: env.aiModel, aiFallbackProvider: env.aiFallbackProvider,
     credentialsConfigured: Boolean(env.aiApiKey), logLevel: env.logLevel,
     localUrl: `http://localhost:${env.port}/api` });

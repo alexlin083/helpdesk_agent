@@ -52,6 +52,7 @@ function isValidTicketStore(store, count) {
 /**
  * 檢查監測回應的必要欄位與數值，避免破損資料被誤顯示為零或仍在即時更新。
  * runtime.storage 描述限流計數（固定 memory），需求單資料庫另由 ticketStore 檢查。
+ * runtime.version（部署版本）為選填：舊版後端沒有這個欄位時仍視為有效；有的話 tag、commit、branch 必須是字串或 null。
  * 自動生成用量（draft 與每個帳號的 users[].draft）為必要欄位：缺少時視為格式異常並保留上次數據，
  * 因此 web 與 backend image 必須一起更新（2026-11-14 起）。
  * @param {unknown} data 後端快照。
@@ -67,6 +68,10 @@ export function isValidMetrics(data) {
   if (!runtime || !date(runtime.startedAt) || !count(runtime.uptimeSeconds) || !count(runtime.pending)
     || !['local', 'production'].includes(runtime.environment) || runtime.storage !== 'memory'
     || typeof runtime.maintaining !== 'boolean' || typeof runtime.stopping !== 'boolean') return false;
+  if (runtime.version !== undefined) {
+    if (!runtime.version || typeof runtime.version !== 'object') return false;
+    for (const key of ['tag', 'commit', 'branch']) if (runtime.version[key] !== null && typeof runtime.version[key] !== 'string') return false;
+  }
   if (!isValidTicketStore(data.ticketStore, count)) return false;
   if (!ai || !date(ai.resetAt) || typeof ai.day !== 'string') return false;
   for (const key of ['used', 'remaining', 'dailyLimit', 'userDailyLimit', 'active', 'concurrencyLimit', 'userConcurrencyLimit', 'cooldownSeconds']) if (!count(ai[key])) return false;

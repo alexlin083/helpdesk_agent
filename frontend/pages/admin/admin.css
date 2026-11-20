@@ -14,6 +14,8 @@
 .admin-main { display: grid; gap: 20px; min-width: 0; }
 .admin-head h1 { margin: 0 0 6px; font-size: 1.8rem; }
 .admin-intro { color: var(--ink-soft); }
+/* 部署版本與 commit：放在標題下方，長的提示文字可換行 */
+.admin-version { margin: 0 0 6px; font-size: 0.9rem; overflow-wrap: anywhere; }
 
 /* 卡片與卡片標題列 */
 .admin-card { min-width: 0; padding: 24px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
