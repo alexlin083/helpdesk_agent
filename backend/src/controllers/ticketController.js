@@ -374,12 +374,15 @@ export function createCompletedTicketsHandler(store = dataStore) {
     const conditions = parseCompletedQuery(req.query);
     const department = req.user.department;
     /**
-     * 依簽核時間由新到舊排序。
-     * @param {object} left 左側需求單。
-     * @param {object} right 右側需求單。
+     * 依簽核時間由新到舊排序；簽核時間相同（同一毫秒內連續簽核）時，較晚建立的需求單在前。
+     * 儲存的讀取順序是建立順序（seq 遞增），所以同時間時以讀取位置由大到小排列，結果不受排序演算法影響。
+     * @param {{ticket: object, index: number}} left 左側需求單與讀取位置。
+     * @param {{ticket: object, index: number}} right 右側需求單與讀取位置。
      * @returns {number} 排序比較值。
      */
-    function newestFirst(left, right) { return (right.decision?.at ?? right.updated_at).localeCompare(left.decision?.at ?? left.updated_at); }
+    function newestFirst(left, right) {
+      return (right.ticket.decision?.at ?? right.ticket.updated_at).localeCompare(left.ticket.decision?.at ?? left.ticket.updated_at) || right.index - left.index;
+    }
     /**
      * 是否在查詢範圍內：department 為送達部門是本人所屬部門，mine 為提單人是本人，省略時兩者皆可。
      * @param {object} ticket 需求單。
@@ -390,7 +393,8 @@ export function createCompletedTicketsHandler(store = dataStore) {
       const mine = ticket.requester?.user_id === req.user.userID;
       return conditions.scope === 'department' ? ours : conditions.scope === 'mine' ? mine : ours || mine;
     }
-    const matched = (await store.all()).filter((ticket) => visible(ticket) && matchesCompleted(ticket, conditions)).sort(newestFirst);
+    const matched = (await store.all()).map(/** 保留讀取位置。@param {object} ticket 需求單。@param {number} index 位置。@returns {object} 需求單與位置。 */ (ticket, index) => ({ ticket, index }))
+      .filter(({ ticket }) => visible(ticket) && matchesCompleted(ticket, conditions)).sort(newestFirst).map(({ ticket }) => ticket);
     res.set('Cache-Control', 'no-store');
     res.json({ department: { id: department.id, name: department.name }, total: matched.length, limit: conditions.limit, tickets: matched.slice(0, conditions.limit) });
   };

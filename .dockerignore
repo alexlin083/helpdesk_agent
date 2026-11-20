@@ -17,6 +17,7 @@
 **/*.log
 backend/storage
 backups
+deploy/hd.env
 *.tar
 *.tar.gz
 .DS_Store

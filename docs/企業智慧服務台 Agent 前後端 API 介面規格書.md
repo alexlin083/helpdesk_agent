@@ -491,7 +491,7 @@ AI 判斷錯誤或指定錯處理人時，送達部門的成員可把「待簽�
 
 ### 3.11 `GET /api/tickets/completed`
 
-回傳與憑證身分有關且已結案的需求單：提單人是本人的，加上送達部門是本人所屬部門的，狀態為已簽核、已退回或已取消，依簽核（或取消）時間由新到舊，預設最新 100 筆。查詢參數：
+回傳與憑證身分有關且已結案的需求單：提單人是本人的，加上送達部門是本人所屬部門的，狀態為已簽核、已退回或已取消，依簽核（或取消）時間由新到舊（時間相同時較晚建立的在前，2026-11-20 補上這條規則，修正同一毫秒內連續簽核時順序不固定），預設最新 100 筆。查詢參數：
 
 | 參數 | 規則 |
 | --- | --- |
@@ -591,7 +591,7 @@ Docker 部署的資料庫與舊版 `tickets.json` 位於同一個 tickets volume
 | --- | --- | --- |
 | observedAt | string | 取樣時間 UTC ISO 8601；前端以台北時間顯示 |
 | pollSeconds | number | 5；每次請求完成後等待五秒再更新，不是逐筆推播 |
-| runtime | object | startedAt、uptimeSeconds、environment（local／production）、storage（固定 memory，指限流計數儲存，不是需求單的 SQLite 儲存）、maintaining、stopping、pending（業務及維護工作數，不等於 AI 並行數） |
+| runtime | object | startedAt、uptimeSeconds、environment（local／production）、storage（固定 memory，指限流計數儲存，不是需求單的 SQLite 儲存）、maintaining、stopping、pending（業務及維護工作數，不等於 AI 並行數）；version（2026-11-20 新增，本機已實作）：`{ tag, commit, branch }`，由 `deploy/hd build` 寫入 image 的版本號（例如 `main-2026.11.20.1`）、完整 commit SHA 與分支，本機開發或非 `deploy/hd` 建置的 image 各欄為 null；前端把 version 視為選填（舊版後端沒有這個欄位仍有效），有值時三欄必須是字串或 null，管理頁標題下方的 `#app-version` 顯示「版本：<tag> · commit <前 7 碼>」，前端 image 的版本（`src/version.js`）與後端不同時另外提示 |
 | ticketStore | object | 需求單資料庫摘要：engine（固定 `sqlite`）、available（boolean）、schemaVersion、total、pending、approved、rejected、cancelled（各狀態筆數）、fileBytes、walBytes（位元組；記憶體資料庫為 null，`-wal` 檔不存在時 walBytes 為 0）。資料庫無法讀取時 available=false，其餘數值欄位全為 null，整份監測仍回 200 |
 | ai | object | day（台北日期）、resetAt、used、remaining、dailyLimit、userDailyLimit、active（有效 AI 租約數，含自動生成的 `draft:` 租約）、concurrencyLimit、userConcurrencyLimit、cooldownSeconds；used／remaining 只計需求單 AI 判斷部門（API 送單未指定部門時才使用，提出需求單頁不會用到），不含自動生成額度 |
 | draft | object | 2026-11-14 新增：自動生成（第 3.16 節）的全站每日用量：used、remaining、dailyLimit（`DRAFT_GLOBAL_DAILY_LIMIT`）、userDailyLimit（`DRAFT_USER_DAILY_LIMIT`）、active（有效的 `draft:` 租約數，也計入 ai.active）；以回合計，一回合內切換備援供應商只計一次；跨台北午夜投影為 0 |

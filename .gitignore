@@ -29,3 +29,6 @@ coverage/
 # Docker 備份含工作單原文；image 匯出檔不進 Git
 backups/
 helpdesk-images*.tar
+
+# deploy/hd 的個人連線設定（主機 IP、私鑰路徑）；範本是 deploy/hd.env.example
+deploy/hd.env

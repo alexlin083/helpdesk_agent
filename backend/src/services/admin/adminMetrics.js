@@ -5,6 +5,7 @@ import { taskTracker } from '../taskTracker.js';
 import { dataStore } from '../storage/dataStore.js';
 import { taipeiDay } from '../usageService.js';
 import { snapshotHttpLimits } from '../../middleware/rateLimiter.js';
+import { buildInfo } from '../../config/buildInfo.js';
 
 // 監測採獨立固定視窗，避免輪詢消耗一般業務或管理重置的額度。
 export const MONITOR_POLICY = Object.freeze({ pollSeconds: 5, windowSeconds: 60, ipLimit: 120, userLimit: 60 });
@@ -38,14 +39,15 @@ async function ticketStoreSummary(tickets) {
  * @param {Function} [options.rates=snapshotHttpLimits] 取得一般 HTTP 視窗彙整。
  * @param {object} [options.config=env] 啟動時驗證的限制設定，不將整份設定輸出。
  * @param {Function} [options.clock=Date.now] epoch 毫秒時間來源。
+ * @param {{tag: string|null, commit: string|null, branch: string|null}} [options.build=buildInfo] 部署版本資訊（runtime.version），未標記時各欄為 null。
  * @returns {Function} 取得限制設定、AI 判斷部門與自動生成用量、帳號狀態、需求單資料庫與匿名登入／HTTP 摘要的非同步函式。
  */
-export function createAdminMetrics({ store = limitStore, accounts = accountService, tasks = taskTracker, tickets = dataStore, rates = snapshotHttpLimits, config = env, clock = Date.now } = {}) {
+export function createAdminMetrics({ store = limitStore, accounts = accountService, tasks = taskTracker, tickets = dataStore, rates = snapshotHttpLimits, config = env, clock = Date.now, build = buildInfo } = {}) {
   const startedAt = clock();
   /**
    * 取得目前程序的監測快照，只回傳明確白名單欄位；不輸出秘密、IP、雜湊、token、租約 ID 或需求單內容。
    * 跨台北午夜忽略舊日配額，跨午夜的有效冷卻與租約仍保留。runtime.storage 描述限流計數的儲存（記憶體），
-   * 需求單資料庫另以回應欄位 ticketStore 回報。自動生成的租約鍵為 `draft:<userID>`，ai.active 含這類租約，draft.active 只計這類租約。
+   * 需求單資料庫另以回應欄位 ticketStore 回報。runtime.version 是 deploy/hd build 寫入 image 的版本 tag、commit 與分支（本機開發為 null）。自動生成的租約鍵為 `draft:<userID>`，ai.active 含這類租約，draft.active 只計這類租約。
    * @returns {Promise<object>} observedAt、pollSeconds、runtime、ticketStore、ai、draft、users（含 draft）、login 與 http。
    */
   return async function metrics() {
@@ -94,7 +96,8 @@ export function createAdminMetrics({ store = limitStore, accounts = accountServi
     return {
       observedAt: new Date(now).toISOString(), pollSeconds: MONITOR_POLICY.pollSeconds,
       runtime: { startedAt: new Date(startedAt).toISOString(), uptimeSeconds: Math.max(0, Math.floor((now - startedAt) / 1000)),
-        environment: config.nodeEnv, storage: 'memory', maintaining: status.maintaining, stopping: status.stopping, pending: status.pending },
+        environment: config.nodeEnv, storage: 'memory', maintaining: status.maintaining, stopping: status.stopping, pending: status.pending,
+        version: { tag: build.tag, commit: build.commit, branch: build.branch } },
       ticketStore: ticketSummary,
       ai: { day, resetAt: new Date(resetAt).toISOString(), used, remaining: Math.max(0, config.globalDailyLimit - used),
         dailyLimit: config.globalDailyLimit, userDailyLimit: config.userDailyLimit, active, concurrencyLimit: config.globalConcurrency,

@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# 不加 `# syntax=docker/dockerfile:1`：那一行每次建置都要先連 Docker Hub 下載語法模組，網路不穩（例如手機熱點）時會以 EOF 失敗；
+# 這份 Dockerfile 只用到 Docker 內建語法，基底 image 已在本機時不需要連 Docker Hub（2026-11-20 起）。
 # 釘選 Node patch 版本：better-sqlite3 13 需要 Node-API 10（Node 22.14 以上），與 .nvmrc 一致。
 FROM node:22.23.4-bookworm-slim
 
@@ -22,6 +23,14 @@ COPY data/requestTypes ./data/requestTypes
 COPY docker-healthcheck.js ./
 # 建置時確認原生 SQLite 驅動可在此映像載入，避免部署後才在第一次存取時失敗。
 RUN node -e "const D=require('better-sqlite3');new D(':memory:').close()"
+
+# 部署版本資訊：由 deploy/hd build 傳入（--build-arg GIT_TAG／GIT_COMMIT／GIT_BRANCH），寫成執行期環境參數，
+# 供啟動日誌 server.started 與管理頁顯示；放在最後，版本不同時不會讓前面的 npm 安裝快取失效。沒有傳入時為空字串，程式視為未標記版本。
+ARG GIT_TAG=""
+ARG GIT_COMMIT=""
+ARG GIT_BRANCH=""
+LABEL GIT_TAG="${GIT_TAG}" GIT_COMMIT="${GIT_COMMIT}" GIT_BRANCH="${GIT_BRANCH}"
+ENV HELPDESK_VERSION="${GIT_TAG}" HELPDESK_COMMIT="${GIT_COMMIT}" HELPDESK_BRANCH="${GIT_BRANCH}"
 
 USER node
 EXPOSE 3000

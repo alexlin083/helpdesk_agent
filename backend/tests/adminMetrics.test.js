@@ -36,8 +36,10 @@ async function projectedMetrics() {
   const tickets = createSqliteDataStore({ file: ':memory:' });
   await tickets.insert({ ticket_id: 'TK-metrics-1', status: 'PENDING', subject: 'private-subject', content: 'private-content' });
   await tickets.insert({ ticket_id: 'TK-metrics-2', status: 'APPROVED', subject: 'private-subject', content: 'private-content' });
-  const get = createAdminMetrics({ store, accounts, rates, tasks, tickets, clock, config: { ...env, nodeEnv: 'production' } });
+  const build = { tag: 'main-2026.11.20.1', commit: '5379ed0a1b2c3d4e5f60718293a4b5c6d7e8f901', branch: 'main' };
+  const get = createAdminMetrics({ store, accounts, rates, tasks, tickets, clock, build, config: { ...env, nodeEnv: 'production' } });
   const current = await get();
+  assert.deepEqual(current.runtime.version, build, 'runtime.version 回報部署版本');
   assert.deepEqual(current.ticketStore, { engine: 'sqlite', available: true, schemaVersion: 8, total: 2, pending: 1, approved: 1, rejected: 0, cancelled: 0, fileBytes: null, walBytes: null });
   assert.equal(current.runtime.storage, 'memory', 'runtime.storage 仍描述限流計數');
   assert.equal(current.ai.used, 3);
@@ -87,7 +89,8 @@ async function unavailableTicketStore() {
     /** 模擬資料庫故障。@returns {Promise<never>} 永遠失敗。@throws {Error} 503。 */
     async stats() { throw Object.assign(new Error('unavailable'), { status: 503 }); },
   };
-  const snapshot = await createAdminMetrics({ store: createMemoryLimitStore(), tasks: createTaskTracker(), tickets: broken })();
+  const snapshot = await createAdminMetrics({ store: createMemoryLimitStore(), tasks: createTaskTracker(), tickets: broken, build: { tag: null, commit: null, branch: null } })();
+  assert.deepEqual(snapshot.runtime.version, { tag: null, commit: null, branch: null }, '未標記版本時各欄為 null');
   assert.deepEqual(snapshot.ticketStore, { engine: 'sqlite', available: false, schemaVersion: null, total: null, pending: null, approved: null, rejected: null, cancelled: null, fileBytes: null, walBytes: null });
   assert.ok(snapshot.ai, '其他監測資料照常回傳');
 }

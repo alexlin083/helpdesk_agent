@@ -1,4 +1,22 @@
+import { WEB_VERSION } from '../../version.js';
+
 const HTTP_NAMES = { api: '一般 API 入口', login: '登入總請求', ticket: '提單／簽核／轉單／取消', departments: '部門名單', query: '工作單查詢', draft: '自動生成對話' };
+
+/**
+ * 組出管理頁頂端的版本文字：以後端回報的部署版本（runtime.version）為準，例如「版本：main-2026.11.20.1 · commit 5379ed0」；
+ * commit 只顯示前 7 碼。後端沒有版本（本機開發或手動 docker build）時顯示「未標記（本機開發）」。
+ * 前端 image 的版本（src/version.js，由 web.Dockerfile 寫入）與後端不同時另外提示，代表兩個 image 不是同一次 build 部署的。
+ * @param {{tag: string|null, commit: string|null}|undefined} version 後端 runtime.version；舊版後端沒有這個欄位時為 undefined。
+ * @param {{tag: string|null}} [web=WEB_VERSION] 前端版本，測試可注入。
+ * @returns {string} 顯示用的版本文字。
+ */
+export function formatAppVersion(version, web = WEB_VERSION) {
+  const tag = version?.tag ?? null;
+  let text = tag ? `版本：${tag}` : '版本：未標記（本機開發）';
+  if (tag && version.commit) text += ` · commit ${version.commit.slice(0, 7)}`;
+  if ((web?.tag ?? null) !== tag) text += ` · 前端版本 ${web?.tag ?? '未標記'} 與後端不同，請確認兩個 image 是否一起部署`;
+  return text;
+}
 
 /**
  * 以台北時區顯示取樣、重置與程序啟動時間，不依使用者電腦時區。
@@ -50,6 +68,7 @@ export function metricsBytes(bytes) {
  * AI 用量分兩種顯示：主要的「自動生成」（提出需求單頁的 AI 對話，data.draft 與 users[].draft）作為卡片與進度條，
  * 「AI 判斷部門」（data.ai 與 users[].used，只有 API 送單未指定部門時使用，提出需求單頁不會用到）另列一張卡片與帳號表欄位，
  * 避免把幾乎不會變動的判斷部門計數誤認為整體 AI 用量。
+ * 頁面頂端的 #app-version 顯示部署版本與 commit（見 formatAppVersion）。
  * @param {Document} doc 頁面文件，可注入測試替身。
  * @param {object} data 經 adminService 驗證的快照。
  * @returns {void} 更新指標、設定、需求單資料庫、帳號與 HTTP／登入摘要。
@@ -80,6 +99,7 @@ export function renderAdminMetrics(doc, data) {
   const progress = doc.querySelector('#metrics-quota-progress');
   progress.max = Math.max(1, draft.dailyLimit);
   progress.value = Math.min(draft.used, draft.dailyLimit);
+  write('app-version', formatAppVersion(runtime.version));
   write('metrics-updated', `最後成功取樣：${metricsTime(data.observedAt)}（台北時間）`);
   write('metrics-runtime', `${runtime.environment} · 限流計數存於單程序記憶體 · 啟動於 ${metricsTime(runtime.startedAt)} · 已運行 ${metricsUptime(runtime.uptimeSeconds)}`);
   const ticketRows = doc.querySelector('#metrics-tickets');

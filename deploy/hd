@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# hd：helpdesk_agent 的本機部署工具（build → push → deploy），參考公司 docker.build／ecs-utils 的流程。
+# 完整說明見 docs/一鍵部署操作手冊.md；執行 ./deploy/hd help 可看指令摘要。
+#
+#   ./deploy/hd build            在 Mac 跑測試、建置前後端 image、建立並推送 git tag（版本號）
+#   ./deploy/hd push <tag>       檢查 SSH 防火牆，把該版本的 image 上傳到 Lightsail 並載入（尚未上線）
+#   ./deploy/hd deploy <tag>     把正式站換成該版本，上一版保留為 prod-rb
+#   ./deploy/hd rollback [tag]   換回 prod-rb（或指定版本）
+#   ./deploy/hd status           查看正式站目前的版本與主機上可用的版本
+#
+# 連線設定放在 deploy/hd.env（不進 Git，從 deploy/hd.env.example 複製）；也可以用同名環境參數覆寫。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ME="./deploy/hd"
+BACKEND=helpdesk-backend
+WEB=helpdesk-web
+TAG_PATTERN='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+ASSUME_YES=0
+SKIP_TESTS=0
+FORCE=0
+
+# ---------- 共用輸出與檢查 ----------
+
+# info 一般步驟、step 段落標題、warn 需要注意、die 中止並以指定結束碼（預設 1）結束。
+info() { printf '  %s\n' "$*"; }
+step() { printf '\n▶ %s\n' "$*"; }
+warn() { printf '  ⚠️  %s\n' "$*" >&2; }
+die() { printf '\n❌ %s\n' "$1" >&2; exit "${2:-1}"; }
+
+# 詢問是否繼續；加了 -y 時直接同意。第二個參數是直接按 Enter 時的答案（Y 或 N）。
+confirm() {
+  local question="$1" default="${2:-N}" answer
+  if [ "$ASSUME_YES" = 1 ]; then return 0; fi
+  if [ "$default" = Y ]; then read -r -p "  $question (Y/n) " answer || true; [ -z "$answer" ] || [[ "$answer" == [Yy]* ]]
+  else read -r -p "  $question (y/N) " answer || true; [[ "$answer" == [Yy]* ]]; fi
+}
+
+# 檢查版本 tag 的格式，避免任意字串進入 docker、git 與 SSH 指令。
+valid_tag() { [[ "$1" =~ $TAG_PATTERN ]] || die "版本 tag 格式不正確：$1（例如 main-2026.11.20.1）"; }
+
+# 取得本機 image 的完整 ID；不存在時回空字串。
+image_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || true; }
+
+# 讀取本機 image 的標籤值；不存在時回空字串。
+image_label() { local v; v="$(docker image inspect "$1" --format "{{index .Config.Labels \"$2\"}}" 2>/dev/null || true)"; [ "$v" = '<no value>' ] && v=''; echo "$v"; }
+
+# ---------- 連線設定與 SSH ----------
+
+# 載入 deploy/hd.env，檢查必要設定與私鑰權限；環境參數優先於設定檔。
+load_config() {
+  local preset_key="${HD_SSH_KEY:-}" preset_host="${HD_HOST:-}" preset_user="${HD_USER:-}" preset_dir="${HD_REMOTE_DIR:-}" preset_keep="${HD_KEEP_VERSIONS:-}"
+  if [ -f "$ROOT/deploy/hd.env" ]; then
+    # shellcheck disable=SC1091
+    . "$ROOT/deploy/hd.env"
+  fi
+  HD_SSH_KEY="${preset_key:-${HD_SSH_KEY:-}}"; HD_HOST="${preset_host:-${HD_HOST:-}}"
+  HD_USER="${preset_user:-${HD_USER:-ubuntu}}"; HD_REMOTE_DIR="${preset_dir:-${HD_REMOTE_DIR:-helpdesk_agent}}"
+  HD_KEEP_VERSIONS="${preset_keep:-${HD_KEEP_VERSIONS:-5}}"
+  HD_SSH_KEY="${HD_SSH_KEY/#\~/$HOME}"
+  [ -n "$HD_HOST" ] && [ -n "$HD_SSH_KEY" ] || die "缺少連線設定：請執行 cp deploy/hd.env.example deploy/hd.env，並填入 HD_HOST 與 HD_SSH_KEY"
+  [ -f "$HD_SSH_KEY" ] || die "找不到 SSH 私鑰：$HD_SSH_KEY"
+  [[ "$HD_REMOTE_DIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "HD_REMOTE_DIR 格式不正確：$HD_REMOTE_DIR"
+  [[ "$HD_KEEP_VERSIONS" =~ ^[1-9][0-9]*$ ]] || die "HD_KEEP_VERSIONS 必須是正整數"
+  local mode; mode="$(stat -f '%Lp' "$HD_SSH_KEY" 2>/dev/null || stat -c '%a' "$HD_SSH_KEY")"
+  [ "$mode" = 600 ] || [ "$mode" = 400 ] || die "SSH 私鑰權限是 ${mode}，請先執行：chmod 600 \"$HD_SSH_KEY\""
+  SSH_OPTS=(-i "$HD_SSH_KEY" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+  TARGET="$HD_USER@$HD_HOST"
+}
+
+# 推送與部署前的防火牆檢查：顯示筆電目前的對外 IP，並實際試連 SSH（6 秒逾時）。
+# 連不上時提示到 Lightsail 改 SSH 規則，並以結束碼 3 結束；常換網路（家裡、學校、手機熱點）時最常遇到這個情況。
+check_firewall() {
+  step "檢查 Lightsail 防火牆（SSH 22 只允許你目前的 IP）"
+  local ip
+  ip="$(curl -4 -s -m 5 https://checkip.amazonaws.com | tr -d '[:space:]' || true)"
+  info "筆電目前的對外 IP：${ip:-無法取得}"
+  info "提醒：換過網路（家裡、學校、手機熱點）時，Lightsail 的 SSH 規則要改成這個 IP。"
+  if ssh "${SSH_OPTS[@]}" -o ConnectTimeout=6 -o BatchMode=yes "$TARGET" true 2>/dev/null; then
+    info "SSH 連線正常 ✅"
+    return 0
+  fi
+  cat >&2 <<EOF
+
+❌ 連不上 Lightsail 的 SSH（$HD_HOST:22）。最常見的原因是筆電換了網路、對外 IP 變了。
+
+  請到 Lightsail 主控台 → 你的 instance → Networking → IPv4 Firewall：
+    1. 點 SSH（TCP 22）那一列的鉛筆圖示
+    2. 把來源 IP 改成 ${ip:-（上面查到的 IP）}/32，保留「Lightsail browser SSH」的勾選
+    3. 按 Save，等幾秒後重新執行：$ME ${CURRENT_COMMAND:-push} ${CURRENT_ARGS:-}
+
+  不要改成 0.0.0.0/0；HTTP／HTTPS 規則不用動。
+  如果 IP 沒變還是連不上，確認 HD_HOST、HD_SSH_KEY 是否正確，或主機是否在運作。
+EOF
+  exit 3
+}
+
+# 上傳主機端輔助腳本（每次都覆蓋，確保與本機版本一致）。
+upload_remote_helper() {
+  ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p \"\$HOME/$HD_REMOTE_DIR/.hd/releases\""
+  scp -q "${SSH_OPTS[@]}" "$ROOT/deploy/hd-remote.sh" "$TARGET:$HD_REMOTE_DIR/.hd/hd-remote.sh"
+}
+
+# 在主機上執行 hd-remote.sh；需要互動確認時配置終端機（-t）。
+remote() {
+  local tty=()
+  [ -t 0 ] && tty=(-t)
+  ssh "${SSH_OPTS[@]}" ${tty[@]+"${tty[@]}"} "$TARGET" "HD_KEEP_VERSIONS=$HD_KEEP_VERSIONS bash \"\$HOME/$HD_REMOTE_DIR/.hd/hd-remote.sh\" $HD_REMOTE_DIR $*"
+}
+
+# ---------- build ----------
+
+# 確認使用 Node.js 22（測試需要）；目前不是 22 時嘗試以 nvm 切換。
+ensure_node22() {
+  local major; major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo none)"
+  if [ "$major" != 22 ] && [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    . "${NVM_DIR:-$HOME/.nvm}/nvm.sh" >/dev/null 2>&1 || true
+    nvm use 22 >/dev/null 2>&1 || true
+    major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo none)"
+  fi
+  [ "$major" = 22 ] || die "測試需要 Node.js 22（目前：${major}）。請先執行 nvm use 22，或加上 --skip-tests 略過測試（不建議）"
+  info "Node.js $(node -v)"
+}
+
+# 執行一組測試；失敗時自動重跑一次（後端有一項已知會偶發失敗的排序測試），兩次都失敗才中止。
+run_tests() {
+  local name="$1" dir="$2" log
+  log="$(mktemp -t hd-test)"
+  [ -d "$ROOT/$dir/node_modules" ] || [ ! -f "$ROOT/$dir/package-lock.json" ] || (cd "$ROOT/$dir" && npm ci --silent)
+  if (cd "$ROOT/$dir" && npm test >"$log" 2>&1); then
+    info "${name}：$(grep -E '^# pass' "$log" | tail -1 | sed 's/# //')／$(grep -E '^# tests' "$log" | tail -1 | sed 's/# //') ✅"
+  else
+    warn "$name 測試失敗，重跑一次確認是否為偶發失敗：$(grep -E '^not ok' "$log" | head -3 | tr '\n' ' ')"
+    if (cd "$ROOT/$dir" && npm test >"$log" 2>&1); then
+      info "${name}：重跑通過 ✅（第一次的失敗為偶發）"
+    else
+      grep -E '^not ok' "$log" | head -10 >&2
+      die "$name 測試失敗，完整輸出：$log"
+    fi
+  fi
+  rm -f "$log"
+}
+
+# 建置一個 image（linux/amd64），寫入版本標籤與 build-arg；遇到 Docker Hub EOF 時提示重新啟動 Docker Desktop。
+build_image() {
+  local name="$1" tag="$2" commit="$3" branch="$4" log; shift 4
+  log="$(mktemp -t hd-build)"
+  step "建置 $name:$tag"
+  if ! docker buildx build --platform linux/amd64 --load \
+      --build-arg GIT_TAG="$tag" --build-arg GIT_COMMIT="$commit" --build-arg GIT_BRANCH="$branch" \
+      -t "$name:$tag" -t "$name:latest" "$@" 2>&1 | tee "$log"; then
+    if grep -qE 'registry-1\.docker\.io|EOF|failed to resolve source metadata' "$log"; then
+      cat >&2 <<EOF
+
+❌ Docker 連不上 Docker Hub（EOF）。這通常是 Docker Desktop 內部的網路代理卡住（常發生在換網路或睡眠喚醒之後）。
+  請從選單列的鯨魚圖示 Quit Docker Desktop，重新開啟並等到 Engine running，再執行一次：$ME build
+EOF
+      exit 1
+    fi
+    die "$name 建置失敗，完整輸出：$log"
+  fi
+  rm -f "$log"
+}
+
+# 將分支名稱轉成可用於 git／docker tag 的前綴（/ 等字元換成 -）。
+branch_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -e 's/^[-.]*//'; }
+
+# 決定版本 tag，結果寫入全域變數 TAG 與 REUSED_TAG（不用命令替換，避免在子 shell 設定變數）：
+# HEAD 已有本分支的版本 tag 時沿用（REUSED_TAG=1，重新建置同一版），否則以台北日期產生 <分支>-<yyyy>.<mm>.<dd>.<當天第幾次>。
+resolve_tag() {
+  local slug="$1" existing prefix n
+  existing="$(git tag --points-at HEAD | grep -E "^${slug}-[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$" | tail -1 || true)"
+  if [ -n "$existing" ]; then REUSED_TAG=1; TAG="$existing"; return; fi
+  REUSED_TAG=0
+  prefix="${slug}-$(TZ=Asia/Taipei date +%Y.%m.%d)"
+  n=1
+  while git rev-parse -q --verify "refs/tags/$prefix.$n" >/dev/null; do n=$((n + 1)); done
+  TAG="$prefix.$n"
+}
+
+# build：檢查程式碼狀態 → 跑測試 → 建置前後端 image → 建立並推送 git tag。
+cmd_build() {
+  cd "$ROOT"
+  step '檢查程式碼狀態'
+  [ -z "$(git status --porcelain --untracked-files=no)" ] || die '有尚未 commit 的修改。請先 commit（或 stash），讓 image 與版本 tag 對應同一個 commit'
+  local untracked; untracked="$(git status --porcelain -- backend frontend deploy | grep '^??' || true)"
+  if [ -n "$untracked" ]; then
+    warn '以下未追蹤的檔案位於建置範圍內，可能被打包進 image：'; printf '%s\n' "$untracked" >&2
+    confirm '仍要繼續？' N || die '已取消'
+  fi
+  local branch commit slug tag
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  [ "$branch" != HEAD ] || die '目前不在任何分支上（detached HEAD），請先切換到要部署的分支'
+  info "分支：$branch"
+  git fetch -q origin --tags || die '無法連線到 GitHub（git fetch 失敗）'
+  git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null || die "GitHub 上沒有 origin/${branch}，請先 git push -u origin $branch"
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ] || die "本機 $branch 與 origin/$branch 不同步，請先 git pull 或 git push"
+  commit="$(git rev-parse HEAD)"
+  info "commit：${commit:0:7} $(git log -1 --format=%s)"
+  [ "$branch" = main ] || warn "目前不是 main 分支；正式站通常只部署 main"
+  docker info >/dev/null 2>&1 || die 'Docker 沒有在執行，請先開啟 Docker Desktop'
+
+  slug="$(branch_slug "$branch")"
+  resolve_tag "$slug"
+  tag="$TAG"
+  if [ "$REUSED_TAG" = 1 ]; then info "這個 commit 已經有版本 ${tag}，將重新建置同一個版本"
+  else info "新版本：$tag"; fi
+  confirm "以 $tag 建置前後端 image？" Y || die '已取消'
+
+  if [ "$SKIP_TESTS" = 1 ]; then warn '已略過測試（--skip-tests）'
+  else
+    step '執行測試'
+    ensure_node22
+    run_tests 後端 backend
+    run_tests 前端 frontend
+  fi
+
+  build_image "$BACKEND" "$tag" "$commit" "$branch" ./backend
+  build_image "$WEB" "$tag" "$commit" "$branch" -f deploy/web.Dockerfile .
+
+  step '確認 image'
+  local name
+  for name in "$BACKEND" "$WEB"; do
+    [ "$(docker image inspect "$name:$tag" --format '{{.Architecture}}')" = amd64 ] || die "$name:$tag 不是 amd64 架構"
+    [ "$(image_label "$name:$tag" GIT_TAG)" = "$tag" ] || die "$name:$tag 的版本標籤不正確"
+    info "$name:$tag  ID $(image_id "$name:$tag" | cut -c8-19)  linux/amd64"
+  done
+
+  if [ "$REUSED_TAG" = 0 ]; then
+    step '建立並推送 git tag'
+    git tag -a "$tag" -m "helpdesk_agent 部署版本 ${tag}（${commit:0:7}）"
+    git push -q origin "$tag" || die "git tag $tag 已建立，但推送到 GitHub 失敗；請稍後執行 git push origin $tag"
+    info "已推送 git tag $tag"
+  fi
+  printf '\n✅ 建置完成：%s\n\n下一步（上傳到 Lightsail，尚未上線）：\n  %s push %s\n' "$tag" "$ME" "$tag"
+}
+
+# ---------- push ----------
+
+# push：確認本機 image → 檢查防火牆 → 上傳主機腳本、compose.yaml、.env.example 與 image → 在主機載入並核對 ID。
+cmd_push() {
+  local tag="${1:-}"
+  [ -n "$tag" ] || die "請指定版本：$ME push <tag>（由 $ME build 產生，例如 main-2026.11.20.1）"
+  valid_tag "$tag"
+  load_config
+  cd "$ROOT"
+  step "確認本機的 $tag image"
+  local name backend_id web_id
+  for name in "$BACKEND" "$WEB"; do
+    [ -n "$(image_id "$name:$tag")" ] || die "本機沒有 $name:${tag}，請先執行 $ME build"
+    [ "$(docker image inspect "$name:$tag" --format '{{.Architecture}}')" = amd64 ] || die "$name:$tag 不是 amd64 架構"
+    [ "$(image_label "$name:$tag" GIT_TAG)" = "$tag" ] || die "$name:$tag 不是用 $ME build 建置的（缺少版本標籤）"
+  done
+  git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "找不到 git tag $tag"
+  backend_id="$(image_id "$BACKEND:$tag")"; web_id="$(image_id "$WEB:$tag")"
+  info "backend ${backend_id:7:12}、web ${web_id:7:12}"
+
+  check_firewall
+
+  step '上傳到 Lightsail'
+  upload_remote_helper
+  local release="$HD_REMOTE_DIR/.hd/releases/$tag" tmp
+  ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p \"\$HOME/$release\""
+  tmp="$(mktemp -d -t hd-push)"
+  git show "$tag:compose.yaml" > "$tmp/compose.yaml"
+  git show "$tag:.env.example" > "$tmp/.env.example"
+  info '打包 image（約 1 分鐘）…'
+  docker save "$BACKEND:$tag" "$WEB:$tag" | gzip -1 > "$tmp/images.tar.gz"
+  info "壓縮後大小：$(du -h "$tmp/images.tar.gz" | cut -f1)"
+  scp "${SSH_OPTS[@]}" "$tmp/compose.yaml" "$tmp/.env.example" "$tmp/images.tar.gz" "$TARGET:$release/"
+  rm -rf "$tmp"
+
+  remote load "$tag" "$backend_id" "$web_id"
+  printf '\n✅ %s 已上傳並載入 Lightsail（尚未上線）\n\n下一步（正式上線）：\n  %s deploy %s\n' "$tag" "$ME" "$tag"
+}
+
+# ---------- deploy／rollback／status ----------
+
+# deploy：檢查防火牆後，在主機上切換版本並確認啟動日誌；主機端會再確認一次才實際換版。
+cmd_deploy() {
+  local tag="${1:-}" flags=()
+  [ -n "$tag" ] || die "請指定版本：$ME deploy <tag>"
+  valid_tag "$tag"
+  load_config
+  check_firewall
+  upload_remote_helper
+  [ "$ASSUME_YES" = 1 ] && flags+=(--yes)
+  [ "$FORCE" = 1 ] && flags+=(--force)
+  local status=0
+  remote deploy "$tag" "${flags[@]+"${flags[@]}"}" || status=$?
+  [ "$status" = 10 ] && return 0
+  [ "$status" = 0 ] || exit "$status"
+  printf '\n接著請開管理頁（/helpdesk/pages/admin/admin.html），確認頂端顯示「版本：%s」，並實際操作一次「自動生成」。\n' "$tag"
+}
+
+# rollback：換回 prod-rb 或指定版本。
+cmd_rollback() {
+  local tag="${1:-}" flags=()
+  [ -z "$tag" ] || valid_tag "$tag"
+  load_config
+  check_firewall
+  upload_remote_helper
+  [ "$ASSUME_YES" = 1 ] && flags+=(--yes)
+  remote rollback ${tag:+"$tag"} "${flags[@]+"${flags[@]}"}"
+}
+
+# status：查看正式站目前的版本、回滾版本與主機上可用的版本。
+cmd_status() {
+  load_config
+  check_firewall
+  upload_remote_helper
+  remote status
+}
+
+# 顯示指令摘要。
+usage() {
+  cat <<EOF
+用法：$ME <指令> [參數] [選項]
+
+部署三步驟：
+  build                 跑前後端測試、建置兩個 image（linux/amd64），建立並推送 git tag
+                        版本格式：<分支>-<yyyy>.<mm>.<dd>.<當天第幾次 build>，例如 main-2026.11.20.1
+  push <tag>            檢查 SSH 防火牆，上傳該版本到 Lightsail 並載入（尚未上線）
+  deploy <tag>          正式上線該版本；上一版保留為 prod-rb
+
+其他：
+  rollback [tag]        沒給 tag 時換回 prod-rb（再執行一次可換回來）；給 tag 時換成該版本
+  status                查看正式站版本、回滾版本與主機上可用的版本
+  help                  顯示這段說明
+
+選項：
+  -y, --yes             略過確認問題（自動同意）
+  --skip-tests          build 時略過測試（不建議）
+  --force               deploy 時即使已是該版本也重建容器
+
+設定：deploy/hd.env（從 deploy/hd.env.example 複製）。完整說明：docs/一鍵部署操作手冊.md
+EOF
+}
+
+main() {
+  local command="${1:-help}" args=() arg
+  [ $# -gt 0 ] && shift
+  for arg in "$@"; do
+    case "$arg" in
+      -y|--yes) ASSUME_YES=1 ;;
+      --skip-tests) SKIP_TESTS=1 ;;
+      --force) FORCE=1 ;;
+      -*) die "不認得的選項：${arg}（執行 $ME help 查看用法）" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  CURRENT_COMMAND="$command"; CURRENT_ARGS="${args[*]+"${args[*]}"}"
+  case "$command" in
+    build) cmd_build ;;
+    push) cmd_push "${args[0]:-}" ;;
+    deploy) cmd_deploy "${args[0]:-}" ;;
+    rollback) cmd_rollback "${args[0]:-}" ;;
+    status) cmd_status ;;
+    help|-h|--help) usage ;;
+    *) usage; die "不認得的指令：$command" ;;
+  esac
+}
+
+main "$@"
