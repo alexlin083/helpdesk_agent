@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# 不加 `# syntax=docker/dockerfile:1`：那一行每次建置都要先連 Docker Hub 下載語法模組，網路不穩（例如手機熱點）時會以 EOF 失敗；
+# 這份 Dockerfile 只用到 Docker 內建語法，基底 image 已在本機時不需要連 Docker Hub（2026-11-20 起）。
 # 釘選 Node patch 版本：better-sqlite3 13 需要 Node-API 10（Node 22.14 以上），與 .nvmrc 一致。
 FROM node:22.23.4-bookworm-slim
 
